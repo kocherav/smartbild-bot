@@ -37,6 +37,7 @@ import creation_attachment
 import human_intents
 import statement_document_context
 import periodic_schedule
+import qa_schedule
 import legacy_report_ui
 import closing_runtime
 import product_matching_runtime
@@ -3597,6 +3598,61 @@ def prepare_contract_preview(token, chat_id, deal_id):
     send_message(token, chat_id, format_contract_preview(preview) + "\n\nПроверьте данные перед формированием.", keyboard)
 
 
+OPERATION_TITLES = {'run_create_megaplan_deal':'Создание сделки','run_payer_card_apply':'Привязка плательщика',
+    'run_supplier_invoice_apply':'Учёт счёта поставщика','run_sync_deal_kp':'Обновление позиций сделки',
+    'run_contract_invoice':'Клиентский счёт','run_installation_workflow':'Монтаж',
+    'run_installer_settlements':'Взаиморасчёты с монтажником','run_megaplan_finance':'Финансовая операция',
+    'run_procurement_workflow':'Закупка','run_bank_statement':'Разнесение выписки',
+    'run_deal_browser':'Изменение сделки','run_apply_work_statement':'Монтажная ведомость'}
+
+
+def _readback_payer_link(store, operation):
+    """An interrupted payer link is idempotent and readable: settle it by read-back."""
+    spec = ((operation.get('payload') or {}).get('args') or [{}])[0] or {}
+    if not spec.get('payer_id') or not spec.get('deal_id'):
+        return None
+    check = run_payer_card_apply({'action': 'list_deal_payers', 'deal_id': str(spec['deal_id'])})
+    if not check.get('ok'):
+        return None
+    selected = next((p for p in check.get('payers') or [] if p.get('selected')), None)
+    applied = str((selected or {}).get('id')) == str(spec['payer_id'])
+    store.reconcile(operation['id'], operation['revision'], 'bridge-readback',
+                    'succeeded' if applied else 'failed',
+                    f"обратное чтение плательщиков сделки №{spec['deal_id']} после перезапуска",
+                    {'ok': True, 'readback': selected} if applied else None)
+    return applied, spec, selected
+
+
+def report_interrupted_operations(token, operation_ids):
+    """After a restart every interrupted write is announced with its next step.
+
+    Nothing is replayed.  A payer link is settled by read-back; any other write
+    stays blocked until its result is checked, and the person is told so.
+    """
+    store = WorkflowStore(WORKFLOW_DB_FILE)
+    for operation_id in operation_ids or []:
+        try:
+            operation = store.get(operation_id)
+            scenario = str(operation.get('scenario') or '')
+            target = operation.get('target') or {}
+            deal = f" по сделке №{target['deal_id']}" if target.get('deal_id') else ''
+            title = OPERATION_TITLES.get(scenario.split(':', 1)[0], 'Операция')
+            settled = _readback_payer_link(store, operation) if scenario.startswith('run_payer_card_apply') else None
+            if settled:
+                applied, spec, selected = settled
+                text = (f"♻️ Бот перезапускался во время смены плательщика{deal}. Проверил Мегаплан: "
+                        + (f"плательщик «{(selected or {}).get('name')}» записан. Повторять не нужно."
+                           if applied else "запись не прошла, данные не изменены. Повторите смену плательщика."))
+            else:
+                text = (f"⚠️ Бот перезапускался во время записи «{title}»{deal}. Результат неизвестен, "
+                        f"поэтому повтор этой записи заблокирован — так её не сделать дважды. Проверьте в "
+                        f"Мегаплане, появилась ли запись, и передайте разработчику код {operation_id} для сверки. "
+                        "Остальная работа с ботом доступна.")
+            send_message(token, str(operation.get('actor') or MANAGER_CHAT_ID), text)
+        except Exception as exc:
+            print(f"{LOG_PREFIX} interrupted operation report failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def handle_status_query(token,chat_id,text):
     value=str(text or '').strip().casefold().rstrip('?! .')
     if value not in ('/status','статус обработки','что сейчас делает бот'):
@@ -3610,12 +3666,7 @@ def handle_status_query(token,chat_id,text):
         print(f'{LOG_PREFIX} status read failed: {type(exc).__name__}',file=sys.stderr)
         send_message(token,chat_id,'Не удалось прочитать журнал задач. Не считайте это подтверждением, что обработка завершена; повторную финансовую запись пока не запускайте.')
         return True
-    titles={'run_create_megaplan_deal':'Создание сделки','run_payer_card_apply':'Привязка плательщика',
-        'run_supplier_invoice_apply':'Учёт счёта поставщика','run_sync_deal_kp':'Обновление позиций сделки',
-        'run_contract_invoice':'Клиентский счёт','run_installation_workflow':'Монтаж',
-        'run_installer_settlements':'Взаиморасчёты с монтажником','run_megaplan_finance':'Финансовая операция',
-        'run_procurement_workflow':'Закупка','run_bank_statement':'Разнесение выписки',
-        'run_deal_browser':'Изменение сделки','run_apply_work_statement':'Монтажная ведомость'}
+    titles=OPERATION_TITLES
     lines=['Текущий статус зарегистрированных задач:']
     for operation in operations[-10:]:
         status='выполняется' if operation['status']=='running' else 'нужна сверка результата; повтор записи заблокирован'
@@ -8589,19 +8640,31 @@ def run_qa_autopilot(token, chat_id, profile='human'):
 
 
 def nightly_qa_window(moment=None):
-    """00:00–07:00 Moscow time, independent of the host timezone."""
+    """Night window of the approved schedule (default 00:00–07:00 Moscow)."""
     moment = moment or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         raise ValueError('Night QA requires a timezone-aware moment')
-    moscow = moment.astimezone(timezone.utc) + timedelta(hours=3)
-    return 0 <= moscow.hour < 7
+    return qa_schedule.in_night_window(moment)
+
+
+def qa_night_plan(schedule=None):
+    """Owner-readable plan for the coming night (the night after today's digest)."""
+    try:
+        import human_qa_explorer
+        missions = human_qa_explorer.load_missions()
+    except Exception as exc:
+        print(f"{LOG_PREFIX} explorer missions unavailable: {type(exc).__name__}", file=sys.stderr)
+        missions = ()
+    tonight = qa_schedule.moscow().date() + timedelta(days=1)
+    return qa_schedule.plan_text(tonight, schedule, missions)
 
 
 def run_nightly_qa(token, chat_id):
     """Run broad profiles serially so repairs never race each other."""
     completed = []
-    # «explore» is the AI tester playing a manager; its findings wait for the owner.
-    for profile in ('full', 'browser', 'human', 'explore'):
+    # Order comes from QA_SCHEDULE.json; «explore» is the AI tester playing a
+    # manager, and its findings wait for the owner.
+    for profile in qa_schedule.night_sequence():
         completed.append(profile)
         run_qa_autopilot(token, chat_id, profile)
         if safe_reload.pending_reviewed(RELOAD_REQUEST_FILE, __file__):
@@ -8822,6 +8885,10 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
     if target:
         needle=' '.join(str(target).casefold().replace('ё','е').split())
         matches=[item for item in payers if needle in ' '.join(str(item.get('name') or '').casefold().replace('ё','е').split())]
+        if len(matches)==1 and matches[0].get('selected'):
+            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+            send_message(token,chat_id,f"В сделке №{deal_id} плательщик уже «{matches[0]['name']}». Менять нечего, ничего не записано.",DEAL_ACTIONS_KEYBOARD)
+            return True
         if len(matches)==1:
             item=matches[0]
             update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item})
@@ -8954,6 +9021,11 @@ def handle_human_workflow(token,chat_id,text):
         if not item:send_message(token,chat_id,'Выберите плательщика из списка.');return True
         deal_id=(state.get('human_intent') or {}).get('deal_id');update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':deal_id,'payer':item},human_choices=None)
         send_message(token,chat_id,f"Сделка №{deal_id}. Новый плательщик: {item['name']} (ID {item['id']}).\nДанные ещё не записаны.",HUMAN_PAYER_CONFIRM_KEYBOARD);return True
+    if pending in ('human_payer_confirm','human_executor_confirm') and not value.startswith('✅') and human_intents.classify(value):
+        # A new request in words replaces an unconfirmed preview (also one left
+        # behind by a restart); nothing was written for the old one.
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        state=current_deal_ui_state(chat_id);pending=''
     if pending=='human_payer_confirm':
         if value!='✅ Сменить плательщика':send_message(token,chat_id,'Нажмите кнопку под предпросмотром или отмените.');return True
         intent=state.get('human_intent') or {};payer=intent.get('payer') or {};result=run_payer_card_apply({'deal_id':intent.get('deal_id'),'payer_id':payer.get('id')})
@@ -9036,7 +9108,7 @@ def main():
     global MANAGER_CHAT_ID, INSTALLER_NOTIFY_CHAT_ID, RUNTIME_ACTIVE, UI_CONTEXT
     RUNTIME_ACTIVE = True
     runtime_guards.install(globals())
-    WorkflowStore(WORKFLOW_DB_FILE).recover()
+    interrupted_operations = WorkflowStore(WORKFLOW_DB_FILE).recover()
     env = load_env()
     token = env["TELEGRAM_BOT_TOKEN"]
     authorized_chat_id = str(env["TELEGRAM_CHAT_ID"])
@@ -9059,6 +9131,7 @@ def main():
     configure_bot_commands(token)
 
     print(f"{LOG_PREFIX} started, session_id={session_id}, offset={offset}")
+    report_interrupted_operations(token, interrupted_operations)
 
     for job in recover_interrupted_document_jobs():
         send_message(
@@ -10483,24 +10556,27 @@ def main():
             show_qa_findings(token, authorized_chat_id, only_unnotified=True)
             next_qa_check = time.time() + 60
         if not draining_reload and time.time() >= next_qa_autopilot_check:
+            qa_plan = qa_schedule.load()
+            # One night cycle per night: the explorer spends model calls.
             if (nightly_qa_window()
                     and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'),
-                                                'qa-night-autopilot', 3600)):
+                                                'qa-night-autopilot', 20 * 3600)):
                 run_singleton_background_job(
                     'qa-night-autopilot',
                     lambda: run_nightly_qa(token, authorized_chat_id),
                     token, authorized_chat_id,
                 )
-            if periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-human-autopilot', 4 * 3600):
+            if periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-human-autopilot',
+                                       qa_schedule.human_interval_seconds(qa_plan)):
                 run_singleton_background_job('qa-human-autopilot', lambda: run_qa_autopilot(token, authorized_chat_id, 'human'), token, authorized_chat_id)
             # Full offline gate once a day; it is isolated and never writes business data.
-            if periodic_schedule.claim_daily(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-full-autopilot', 1):
+            if periodic_schedule.claim_daily(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-full-autopilot',
+                                             qa_schedule.full_daily_utc_hour(qa_plan)):
                 run_singleton_background_job('qa-full-autopilot', lambda: run_qa_autopilot(token, authorized_chat_id, 'full'), token, authorized_chat_id)
-            # One concise owner digest per Moscow day, after 17:30 local time.
-            moscow = datetime.now(timezone.utc) + timedelta(hours=3)
-            digest_due = moscow.hour > 17 or (moscow.hour == 17 and moscow.minute >= 30)
-            if digest_due and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-owner-digest', 20 * 3600):
-                send_message(token, authorized_chat_id, qa_autopilot.digest(), MAIN_KEYBOARD)
+            # One concise owner digest per Moscow day, with the coming night's plan.
+            if (qa_schedule.digest_due(datetime.now(timezone.utc), qa_plan)
+                    and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-owner-digest', 20 * 3600)):
+                send_message(token, authorized_chat_id, qa_autopilot.digest() + "\n\n" + qa_night_plan(qa_plan), MAIN_KEYBOARD)
             next_qa_autopilot_check = time.time() + 60
         if not draining_reload and time.time() >= next_procurement_check:
             run_singleton_background_job(

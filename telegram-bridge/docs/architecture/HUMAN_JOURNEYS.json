@@ -66,17 +66,23 @@
     {
       "id": "HUMAN-CONTRACT",
       "title": "Подготовить договор по сделке",
-      "automated": false,
+      "automated": true,
       "stand_cases": [
         "test_human_journeys_documents.ContractJourneys"
+      ],
+      "test_cases": [
+        "human_live_journeys.LiveSnapshotJourneys.test_prepare_contract"
       ]
     },
     {
       "id": "HUMAN-PROPOSAL",
       "title": "Сформировать КП по сделке",
-      "automated": false,
+      "automated": true,
       "stand_cases": [
         "test_human_journeys_documents.ProposalJourneys"
+      ],
+      "test_cases": [
+        "human_live_journeys.LiveSnapshotJourneys.test_proposal"
       ]
     },
     {
@@ -92,7 +98,14 @@
     {
       "id": "HUMAN-RECOVERY",
       "title": "Восстановление после сбоя CRM/ИИ и перезапуска",
-      "automated": false
+      "automated": true,
+      "test_cases": [
+        "human_live_journeys.LiveSnapshotJourneys.test_restart_during_payer_change"
+      ],
+      "stand_cases": [
+        "test_human_recovery.RestartJourneys",
+        "test_human_journeys_edge.InvoiceEdgeCases"
+      ]
     },
     {
       "id": "HUMAN-DASHBOARD",

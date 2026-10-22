@@ -257,6 +257,24 @@ class HumanProfileTests(unittest.TestCase):
             self.assertEqual('waiting_input', repeated['task']['status'])
             self.assertNotIn('developer_assignment', repeated['task'])
 
+    def test_shared_snapshot_record_counts_for_every_automated_journey(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / 'journeys.json'
+            path.write_text(json.dumps({'journeys': [{'id': 'READ', 'automated': True, 'test_cases': ['h.read']}]}))
+            (root / 'human-fixtures').mkdir()
+            snapshot = root / 'human-fixtures' / 'crm.json'
+            snapshot.write_text('{}')
+            (root / 'human-fixtures' / 'provenance.json').write_text(json.dumps({
+                'source': 'crm-readonly', 'captured_at': 'x', 'evidence': 'human-fixtures/crm.json',
+                'sha256': hashlib.sha256(snapshot.read_bytes()).hexdigest()}))
+            good = {'id': 'h.read', 'status': 'passed', 'transcript': [{'actor': 'tester'}, {'actor': 'bot'}],
+                    'observations': [{'verdict': 'passed'}]}
+            self.assertEqual([], qa_agent.human_coverage_failures(path, {'cases': [good]}))
+            snapshot.write_text('{"changed": true}')
+            self.assertEqual('coverage:READ:evidence-hash-mismatch',
+                             qa_agent.human_coverage_failures(path, {'cases': [good]})[0]['id'])
+
     def test_repository_registry_is_consistent(self):
         registry = json.loads(qa_agent.HUMAN_JOURNEYS.read_text(encoding='utf-8'))
         ids = [item['id'] for item in registry['journeys']]

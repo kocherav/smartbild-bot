@@ -45,9 +45,10 @@ class HumanFixtureTests(unittest.TestCase):
                                                          {'id': 'HUMAN-Y', 'automated': False}]}))
             snapshot, digest = human_fixtures.capture(['887'], root / 'fixtures' / 'crm.json', runner=fake_crm)
             human_fixtures.register(registry, root / 'fixtures' / 'crm.json', digest, snapshot['captured_at'])
-            stored = json.loads(registry.read_text())
-            self.assertEqual('crm-readonly', stored['journeys'][0]['fixture_provenance']['source'])
-            self.assertNotIn('fixture_provenance', stored['journeys'][1])
+            self.assertEqual(json.loads(registry.read_text())['journeys'][0], {'id': 'HUMAN-X', 'automated': True},
+                             'версионируемый реестр не меняется при снимке')
+            record = json.loads((root / 'human-fixtures' / 'provenance.json').read_text())
+            self.assertEqual(('crm-readonly', digest), (record['source'], record['sha256']))
             loaded, problem = human_fixtures.verified_snapshot(registry)
             self.assertIsNone(problem)
             crm = human_fixtures.load(FakeMegaplan(root), loaded)
@@ -72,7 +73,7 @@ class HumanFixtureTests(unittest.TestCase):
                 suite.run(result)
             problems = [str(case) + '\n' + text[-1500:] for case, text in result.failures + result.errors]
             self.assertEqual([], problems)
-            self.assertEqual(6, result.testsRun)
+            self.assertEqual(9, result.testsRun)
 
 
 if __name__ == '__main__':

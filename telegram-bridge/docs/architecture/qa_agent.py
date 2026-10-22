@@ -30,7 +30,8 @@ HUMAN_JOURNEYS = next((path for path in (
 HUMAN_FIXTURES = ROOT / 'human-fixtures'
 # A person operating the real bridge: stand suites plus the real-CRM snapshot suite.
 HUMAN_MODULES = ['test_human_operator_journey', 'test_human_journeys', 'test_human_journeys_edge',
-                 'test_human_journeys_documents', 'test_human_phrasings', 'human_live_journeys']
+                 'test_human_journeys_documents', 'test_human_phrasings', 'test_human_recovery',
+                 'human_live_journeys']
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
 CRITICAL_WORDS = {
@@ -117,7 +118,7 @@ def human_coverage_failures(path=HUMAN_JOURNEYS, report=None):
         if not item.get('automated'):
             failures.append(_coverage_failure(journey_id))
             continue
-        provenance = item.get('fixture_provenance') or {}
+        provenance = shared_provenance(path, item)
         required = {'source', 'captured_at', 'evidence', 'sha256'}
         if provenance.get('source') != 'crm-readonly' or not required.issubset(provenance):
             failures.append(_coverage_failure(journey_id, 'unverified-fixture'))
@@ -161,6 +162,13 @@ def is_external(failure):
 def task_kind(task):
     failures = task.get('failures') or []
     return 'external' if failures and all(is_external(f) for f in failures) else 'technical'
+
+
+def shared_provenance(registry_path, journey):
+    import sys
+    sys.path.insert(0, str(BRIDGE))
+    import human_fixtures
+    return human_fixtures.current_provenance(registry_path, journey)
 
 
 def severity(failures):

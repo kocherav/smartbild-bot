@@ -70,6 +70,10 @@ class JourneyStop(BaseException):
     """Ends bridge.main() when the scripted person has nothing more to do."""
 
 
+class SimulatedCrash(BaseException):
+    """The bot process dies right after an external write (power loss, OOM, kill)."""
+
+
 class ForkedChildDone(BaseException):
     """Raised instead of os._exit() in a branch that would run in a child."""
 
@@ -124,6 +128,10 @@ class FakeTelegram:
             return {'ok': True, 'result': self.driver.next_updates()}
         if method == 'answerCallbackQuery':
             self.callback_answers.append(params.get('text'))
+            # Telegram shows this text as a pop-up over the chat: the person sees it.
+            if params.get('text') and params.get('text') != 'Принято':
+                self._bot_event({'actor': 'bot', 'kind': 'toast', 'chat': self.owner_chat,
+                                 'text': '[всплывающее] ' + params['text'], 'buttons': []})
             return {'ok': True, 'result': True}
         return {'ok': True, 'result': {}}
 
@@ -175,6 +183,8 @@ class FakeMegaplan:
         self.writes = []
         self.failures = {}     # (script, action) -> error text
         self.reachable = True
+        self.crash_after_write = set()   # (script, action): the process dies after this write
+        self.pending_crash = False
         self.next_deal = 990100
         self.next_invoice = 5000
         self.next_payer = 7000
@@ -248,6 +258,7 @@ class FakeMegaplan:
 
     def _write(self, script, action, spec):
         self.writes.append({'script': script, 'action': action, 'spec': copy.deepcopy(spec)})
+        self.pending_crash = (script, action) in self.crash_after_write
 
     # -- CLI dispatch -------------------------------------------------------
     CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api',
@@ -267,9 +278,14 @@ class FakeMegaplan:
         if handler is None:
             return None
         try:
-            return handler(action, spec or {})
+            result = handler(action, spec or {})
         except ValueError as exc:
             return {'ok': False, 'error': str(exc)}
+        if self.pending_crash:
+            self.pending_crash = False
+            self.crash_after_write.discard((script, action))
+            raise SimulatedCrash(f'{script} {action}')
+        return result
 
     def cli_deal_browser(self, action, spec):
         if action in ('get', 'get_cached'):
@@ -803,7 +819,14 @@ class Stand:
         import invoice_tasks
         import decision_channel
         import statement_document_context
-        self.uploads = {}
+        self.uploads = getattr(self, 'uploads', {})
+        self.finished = False
+        self.runs = getattr(self, 'runs', 0) + 1
+        if self.runs > 1:
+            # Same storage, fresh process: what a service restart looks like to a person.
+            self.telegram.events.append({'actor': 'system', 'kind': 'restart', 'text': '— бот перезапущен —',
+                                         'chat': self.owner_chat})
+            self.telegram.screen = []
         # The owner has used the bot before: Telegram keeps its persistent menu.
         if not self.telegram.bottom:
             self.telegram.bottom = _labels(bridge.MAIN_KEYBOARD)
@@ -861,11 +884,17 @@ class Stand:
             if not isinstance(path, (str, bytes)):
                 return
             write = isinstance(flags, int) and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+            resolved = os.path.realpath(os.fsdecode(path))
+            if resolved.startswith(allowed_prefixes) or '__pycache__' in resolved:
+                return
             if write:
-                resolved = os.path.realpath(os.fsdecode(path))
-                if not resolved.startswith(allowed_prefixes) and '__pycache__' not in resolved:
-                    self.blocked_writes.append(resolved)
-                    raise PermissionError('QA-стенд: запись вне песочницы запрещена: ' + resolved)
+                self.blocked_writes.append(resolved)
+                raise PermissionError('QA-стенд: запись вне песочницы запрещена: ' + resolved)
+            if production_store(resolved):
+                # Reading production state makes a journey depend on live data
+                # and can leak it into evidence: the stand must see only its own.
+                self.blocked_writes.append('read:' + resolved)
+                raise PermissionError('QA-стенд: чтение рабочего хранилища запрещено: ' + resolved)
         _install_audit(audit)
 
         patches = [
@@ -911,6 +940,10 @@ class Stand:
             bridge.main()
         except JourneyStop:
             pass
+        except SimulatedCrash:
+            # The person did nothing wrong; the next part of the journey starts
+            # after the restart and sees whatever the bot recovered.
+            self.finished = True
         except AssertionError as exc:
             self.failure = self.failure or exc
         finally:
@@ -922,7 +955,8 @@ class Stand:
     def receipt(self):
         tester = [e for e in self.telegram.events if e['actor'] == 'tester']
         return {'transcript': [{'actor': e['actor'], 'kind': e['kind'], 'text': e.get('text') or e.get('filename') or ''}
-                               for e in self.telegram.events if e['actor'] == 'tester' or e.get('chat') == self.owner_chat],
+                               for e in self.telegram.events
+                               if e['actor'] in ('tester', 'system') or e.get('chat') == self.owner_chat],
                 'observations': self.operator.observations, 'actions': len(tester),
                 'crm_writes': self.crm.writes, 'unexpected_external': self.unexpected,
                 'blocked_writes': self.blocked_writes, 'model_prompts': len(self.model.prompts),
@@ -940,6 +974,20 @@ class _Connection:
         return False
 
 
+# Server-local runtime state and business stores (see .gitignore).  Code,
+# templates and versioned configuration stay readable.
+PRODUCTION_STORE_RE = re.compile(
+    r'(?:\.sqlite3?|\.sqlite-\w+|_state\.json|_registry\.json|_cache\.json|\.jsonl|/\.env'
+    r'|/(?:model_failures|invoice_tasks|watcher_schedule|document_jobs|deal_ui_state|pending_deal_transitions'
+    r'|procurement_status_watch|installer_settlements|installer_approved_reports|user_rules|token)\.json'
+    r'|/offset\.txt|/session_id[^/]*\.txt|/developer_session_id\.txt)$'
+    r'|/(?:incoming|inbox|archive|output|reports|human-fixtures|qa-agent-evidence)/')
+
+
+def production_store(path):
+    return bool(PRODUCTION_STORE_RE.search(path))
+
+
 _AUDIT = []
 
 
@@ -954,11 +1002,15 @@ class HumanJourneyCase:
     """Mixin for unittest cases: exposes transcript/observations to offline_tests."""
 
     def play(self, journey, model_rules=(), setup=None, timeout=60):
+        """``journey`` may be a list: the bot is restarted between its parts."""
         stand = Stand(model_rules)
         self.addCleanup(stand.close)
         if setup:
             setup(stand.crm)
-        stand.run(journey, timeout=timeout)
+        for part in (journey if isinstance(journey, (list, tuple)) else [journey]):
+            stand.run(part, timeout=timeout)
+            if stand.failure or not stand.finished:
+                break
         receipt = stand.receipt()
         self.qa_transcript = receipt['transcript']
         self.qa_observations = receipt['observations']
@@ -968,7 +1020,7 @@ class HumanJourneyCase:
                                  + ('\n\nВнешние вызовы без двойника: ' + '; '.join(stand.unexpected)
                                     if stand.unexpected else ''))
         if stand.blocked_writes:
-            raise AssertionError('Бот пытался писать вне песочницы: ' + ', '.join(stand.blocked_writes[:5]))
+            raise AssertionError('Бот обращался к рабочим хранилищам вне песочницы: ' + ', '.join(stand.blocked_writes[:5]))
         if not stand.finished:
             raise AssertionError('Бот завершил работу раньше, чем человек закончил сценарий.\n\n' + render_transcript(receipt))
         return stand
@@ -977,6 +1029,9 @@ class HumanJourneyCase:
 def render_transcript(receipt):
     lines = []
     for event in receipt['transcript']:
+        if event['actor'] == 'system':
+            lines.append(event['text'])
+            continue
         who = 'Человек' if event['actor'] == 'tester' else 'Бот'
         verb = {'button': 'нажал', 'file': 'прислал файл', 'document': 'прислал файл'}.get(event['kind'], 'написал')
         lines.append(f"{who} {verb}: {event['text'][:400]}")

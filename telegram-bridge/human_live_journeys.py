@@ -12,7 +12,7 @@ from pathlib import Path
 import unittest
 
 import human_fixtures
-from human_qa_harness import HumanJourneyCase, press, say
+from human_qa_harness import HumanJourneyCase, press, press_old, say
 
 
 REGISTRY = Path(os.environ.get('QA_HUMAN_REGISTRY') or
@@ -127,6 +127,65 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=self.setup, model_rules=[('Монтаж сплит-системы 1 шт', block)])
         created = [w for w in stand.crm.writes if w['script'] == 'megaplan_api']
         self.assertEqual(str(item['client_id']), str(created[0]['spec'].get('client_id')))
+
+
+    def test_prepare_contract(self):
+        item = self.pick(lambda x: x['ledger'] and any(p.get('selected') for p in x['payers']),
+                         'выбран плательщик и есть позиции')
+        deal_id = item['deal']['id']
+        total = sum(float(r.get('qty') or 0) * float(r.get('sell_price') or 0) for r in item['ledger'])
+        answers = (('ФИО подписанта', say('Иванов Иван Иванович')), ('должность', say('Генеральный директор')),
+                   ('адрес объекта', say('Москва, ул. Тестовая, 1')), ('дату договора', say('23.10.2026')))
+        def journey(person):
+            yield say(f'Покажи сделку {deal_id}')
+            yield press('📄 Документы сделки')
+            yield press('📑 Работа с договором')
+            yield press('👁 Проверить данные договора')
+            for _ in range(6):
+                screen = person.screen_text()
+                if 'Договор №' in screen:
+                    break
+                if 'Устав' in person.visible_buttons():
+                    yield press('Устав')
+                    continue
+                answer = next((action for prompt, action in answers if prompt in screen), None)
+                person.check('Бот задаёт понятный вопрос о данных договора', screen, answer)
+                yield answer
+            person.sees('Договор №', money(total), expected='Предпросмотр договора с суммой сделки')
+            yield press('✅ Сформировать договор')
+            person.got_document('.docx')
+            person.got_document('.pdf')
+            yield press('✅ Загрузить договоры в сделку')
+            person.sees('загружены')
+        stand = self.play(journey, setup=self.setup)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'upload_contracts']))
+
+    def test_proposal(self):
+        item = self.pick(lambda x: x['ledger'], 'есть позиции')
+        def journey(person):
+            yield say(f"Сделай КП по сделке {item['deal']['id']}")
+            person.sees('Кому адресовать')
+            yield say('Алексей')
+            person.got_document('КП')
+            person.sees(f"{len(item['ledger'])} позиций", expected='КП содержит все позиции сделки')
+        self.play(journey, setup=self.setup)
+
+    def test_restart_during_payer_change(self):
+        item = self.pick(lambda x: len(x['payers']) >= 2, 'у клиента два плательщика или больше')
+        target = next(p for p in item['payers'] if not p.get('selected'))
+        deal_id = item['deal']['id']
+        def setup(crm):
+            self.setup(crm)
+            crm.crash_after_write.add(('payer_manager', 'link'))
+        def before(person):
+            yield say(f"Поменяй плательщика в сделке {deal_id} на {target['name']}")
+            yield press('✅ Сменить плательщика')
+        def after(person):
+            person.sees('Проверил Мегаплан', 'Повторять не нужно', expected='После сбоя бот сам сверил запись')
+            yield press_old('✅ Сменить плательщика')
+            person.sees('устарела', expected='Повтор записи невозможен')
+        stand = self.play([before, after], setup=setup)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['script'] == 'payer_manager']))
 
 
 if __name__ == '__main__':

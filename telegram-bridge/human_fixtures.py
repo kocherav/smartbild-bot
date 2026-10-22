@@ -69,33 +69,60 @@ def capture(deal_ids, target, runner=subprocess.run):
     return snapshot, hashlib.sha256(payload).hexdigest()
 
 
+PROVENANCE = Path('human-fixtures') / 'provenance.json'
+
+
+def provenance_path(registry_path):
+    """Server-local record of the current snapshot, next to the versioned registry."""
+    return Path(registry_path).parent / PROVENANCE
+
+
 def register(registry_path, snapshot_path, digest, captured_at):
-    """Point every automated journey at the fresh snapshot (atomic rewrite)."""
+    """Record the fresh snapshot for every automated journey.
+
+    The journey registry is versioned in Git; the snapshot record is server
+    state and lives in the git-ignored human-fixtures folder, so a deployment
+    never conflicts with, or erases, the last capture.
+    """
     registry_path = Path(registry_path)
-    registry = json.loads(registry_path.read_text(encoding='utf-8'))
     try:
         evidence = os.path.relpath(snapshot_path, registry_path.parent)
     except ValueError:
         evidence = str(snapshot_path)
-    for journey in registry.get('journeys') or []:
-        if journey.get('automated'):
-            journey['fixture_provenance'] = {'source': 'crm-readonly', 'captured_at': captured_at,
-                                             'evidence': evidence, 'sha256': digest}
-    temporary = registry_path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    os.replace(temporary, registry_path)
-    return registry
+    record = {'source': 'crm-readonly', 'captured_at': captured_at, 'evidence': evidence, 'sha256': digest}
+    target = provenance_path(registry_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix('.tmp')
+    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return record
+
+
+def current_provenance(registry_path, journey=None):
+    """The shared snapshot record; a legacy per-journey record is still honoured."""
+    try:
+        record = json.loads(provenance_path(registry_path).read_text(encoding='utf-8'))
+        if isinstance(record, dict) and record.get('source') == 'crm-readonly':
+            return record
+    except (OSError, ValueError):
+        pass
+    if journey is not None:
+        return journey.get('fixture_provenance') or {}
+    try:
+        registry = json.loads(Path(registry_path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return next((j.get('fixture_provenance') for j in registry.get('journeys') or []
+                 if (j.get('fixture_provenance') or {}).get('source') == 'crm-readonly'), {})
 
 
 def verified_snapshot(registry_path):
-    """The snapshot named by the registry, only if its hash still matches."""
+    """The registered snapshot, only if its hash still matches."""
     registry_path = Path(registry_path)
-    try:
-        registry = json.loads(registry_path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+    if not registry_path.exists():
         return None, 'реестр HUMAN_JOURNEYS.json не прочитан'
-    provenance = next((j.get('fixture_provenance') for j in registry.get('journeys') or []
-                       if (j.get('fixture_provenance') or {}).get('source') == 'crm-readonly'), None)
+    provenance = current_provenance(registry_path)
     if not provenance:
         return None, 'снимок CRM ещё не снят: qa_agent.py capture --deal <номер>'
     path = Path(provenance['evidence'])

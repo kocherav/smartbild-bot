@@ -29,6 +29,7 @@ import subprocess
 import sys
 
 import human_fixtures
+import qa_schedule
 from human_qa_harness import Stand, codex_jsonl, press, say, render_transcript, _REAL_RUN
 from test_human_journeys import office
 
@@ -232,16 +233,25 @@ def live_model_stand(stand):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='AI-исследователь бота SmartBild')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--missions', type=int, default=int(os.environ.get('QA_EXPLORE_MISSIONS', '4')))
-    parser.add_argument('--seed', default=dt.date.today().isoformat())
+    parser.add_argument('--missions', type=int, default=None, help='сколько миссий (иначе по QA_SCHEDULE.json)')
+    parser.add_argument('--seed', default=qa_schedule.moscow().date().isoformat())
     parser.add_argument('--mission', action='append', help='только указанные миссии')
     parser.add_argument('--scripted-bot', action='store_true', help='не вызывать реальную модель бота')
     parser.add_argument('--registry', default=os.environ.get('QA_HUMAN_REGISTRY'))
     args = parser.parse_args(argv)
+    if args.missions is None and os.environ.get('QA_EXPLORE_MISSIONS'):
+        args.missions = int(os.environ['QA_EXPLORE_MISSIONS'])
+    args.missions_explicit = args.missions is not None
     command = os.environ.get('QA_EXPLORER_BRAIN_CMD')
     brain = CommandBrain(command) if command else CodexBrain()
     missions = load_missions()
-    selected = [m for m in missions if m['id'] in args.mission] if args.mission else choose(missions, args.missions, args.seed)
+    if args.mission:
+        selected = [m for m in missions if m['id'] in args.mission]
+    elif args.missions_explicit:
+        selected = choose(missions, args.missions, args.seed)
+    else:
+        # The approved weekly plan picks tonight's theme (QA_SCHEDULE.json).
+        selected = qa_schedule.missions_for(dt.date.fromisoformat(args.seed), missions)
     setup = fixture_from(args.registry)
     cases = []
     started = dt.datetime.now(dt.timezone.utc)
@@ -270,7 +280,8 @@ def main(argv=None):
     report = {'ran_at': started.isoformat(), 'profile': 'explore', 'tests': len(cases),
               'successful': all(c['status'] == 'passed' for c in cases) and bool(cases),
               'cases': cases, 'brain_calls': getattr(brain, 'calls', None),
-              'missions': [m['id'] for m in selected]}
+              'missions': [m['id'] for m in selected],
+              'theme': qa_schedule.focus(dt.date.fromisoformat(args.seed)).get('theme')}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'LAST_TEST_RUN.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({k: report[k] for k in ('ran_at', 'tests', 'successful', 'missions')}, ensure_ascii=False))
