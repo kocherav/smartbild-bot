@@ -13,6 +13,7 @@ CHANGE_PAYER = "change_payer"
 CHANGE_INSTALLER = "change_installer"
 ASSIGN_EXECUTOR = "assign_executor"
 CHECK_PAYMENT = "check_payment"
+MOVE_STATUS = "move_status"
 ISSUE_INVOICE = "issue_invoice"
 GET_INVOICE = "get_invoice"
 
@@ -50,22 +51,45 @@ _DEAL_REF = r"(?:в|по)\s+(?:\d+\S*\s+)?сделк\w*(?:\s*(?:№|номер)?
 
 
 def _strip_deal_ref(value):
-    """«ООО Ромашка в сделке №900» -> «ООО Ромашка»."""
+    """«ООО Ромашка в сделке №900» / «в 900 на Ромашка» / «900 ромашка» -> «Ромашка»."""
     if not value:
         return value
-    value = re.sub(r"(?i)\s+" + _DEAL_REF + r"\s*$", "", value).strip(" .,:;!?«»\"—-")
+    value = re.sub(r"(?i)\s+" + _DEAL_REF + r"\s*$", "", value)
+    value = re.sub(r"(?i)^(?:(?:в|по)\s+)?(?:сделк\w*\s*)?(?:№|номер)?\s*\d{2,}\S*\s+(?:(?:на|теперь|будет)\s+)?", "", value)
+    value = value.strip(" .,:;!?«»\"—-")
     return value or None
 
 
 def _invoice_intent(folded, deal_id):
+    # «счёт на оплату» names the document; any other «оплат…» asks about money received.
+    folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
     if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
         return None
     missing = () if deal_id else ("deal",)
-    if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ)\w*\b", folded):
+    if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):
         return Intent(ISSUE_INVOICE, deal_id, missing=missing)
-    if re.search(r"\b(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди)\b", folded):
+    if re.search(r"\b(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди|где)\b", folded):
         return Intent(GET_INVOICE, deal_id, missing=missing)
     return None
+
+
+def _status_intent(original, folded, deal_id):
+    asks = (re.search(r"\bстатус", folded) and re.search(r"\b(?:перевед|переведи|перевест|поменя|смени|измени|постав|сдела)\w*|\bсделк", folded)) \
+        or (re.search(r"\b(?:перевед|переведи|перевест)\w*\b", folded) and re.search(r"\bсделк", folded))
+    if not asks:
+        return None
+    target = _tail(original, (
+        r"статус\w*\s+(?:у\s+)?сделк\w*\s*(?:№|номер)?\s*\d+\S*\s+(?:на|в)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
+        r"статус\w*\s+(?:на|в)?\s*[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
+        r"\bв\s+статус\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
+        r"\d+\S*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
+        r"\bсделк\w*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
+    ))
+    if target and re.match(r"(?i)^(?:сделк|статус)", target):
+        target = None
+    target = _strip_deal_ref(target)
+    missing = tuple(x for x, value in (("deal", deal_id), ("status", target)) if not value)
+    return Intent(MOVE_STATUS, deal_id, target, missing=missing)
 
 
 _NAME_ENDINGS = ("ого", "его", "ому", "ему", "ыми", "ими", "ой", "ей", "ым", "им", "ом", "ем",
@@ -115,8 +139,11 @@ def classify(text):
                       fields={"source_document_expected": bool(re.search(r"сч[её]т|файл|спецификац", text, re.I))},
                       missing=(() if client else ("client",)))
 
-    if "плательщик" in folded and re.search(r"\b(?:поменя|замени|смени|выбери|назнач|сдела|друг)\w*\b", folded):
+    payer_word = "плательщик" in folded or re.search(r"\bплатить\s+будет\b", folded)
+    if payer_word and re.search(r"\b(?:поменя|замени|смени|выбери|назнач|сдела|друг|теперь|будет)\w*\b", folded):
         target = _tail(original, (
+            r"платить\s+будет\s+(.+?)(?=[.;\n]|$)",
+            r"плательщик\w*\s+(?:по|в)\s+(?:сделк\w*\s*)?(?:№|номер)?\s*\d+\S*\s+(?:теперь|будет)\s+(.+?)(?=[.;\n]|$)",
             r"плательщик\w*\s+" + _DEAL_REF + r"\s+на\s+(.+?)(?=[.;\n]|$)",
             r"" + _DEAL_REF + r"\s+.*?плательщик\w*\s+на\s+(.+?)(?=[.;\n]|$)",
             r"плательщик\w*\s+на\s+(.+?)(?=[.;\n]|$)",
@@ -155,12 +182,16 @@ def classify(text):
         missing = tuple(x for x, value in (("deal", deal_id), ("executor", target)) if not value)
         return Intent(ASSIGN_EXECUTOR, deal_id, target, missing=missing)
 
+    status = _status_intent(original, folded, deal_id)
+    if status:
+        return status
+
     invoice = _invoice_intent(folded, deal_id)
     if invoice:
         return invoice
 
     if (re.search(r"\b(?:оплачен|оплат|поступил|пришл|долг|остаток)\w*", folded)
-            and re.search(r"\bсделк", folded)):
+            and (re.search(r"\bсделк", folded) or (deal_id and len(deal_id) >= 3 and not re.search(r"сч[её]т", folded)))):
         return Intent(CHECK_PAYMENT, deal_id=deal_id,
                       missing=(() if deal_id else ("deal",)))
     return None

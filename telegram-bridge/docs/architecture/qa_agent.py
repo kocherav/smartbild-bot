@@ -30,7 +30,7 @@ HUMAN_JOURNEYS = next((path for path in (
 HUMAN_FIXTURES = ROOT / 'human-fixtures'
 # A person operating the real bridge: stand suites plus the real-CRM snapshot suite.
 HUMAN_MODULES = ['test_human_operator_journey', 'test_human_journeys', 'test_human_journeys_edge',
-                 'test_human_journeys_documents', 'human_live_journeys']
+                 'test_human_journeys_documents', 'test_human_phrasings', 'human_live_journeys']
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
 CRITICAL_WORDS = {

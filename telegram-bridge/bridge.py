@@ -187,9 +187,18 @@ CURRENT_EXECUTION_RE = re.compile(
     re.IGNORECASE,
 )
 DEAL_READ_RE = re.compile(
-    r"(?i)\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*|сколько|как\w{2}|кто|чей|чья|посчита\w*|сверь\w*)\b"
+    r"(?i)(?:\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*|сколько|как\w{2}|кто|чей|чья|посчита\w*|сверь\w*"
+    r"|что|инф\w*|данные|расскажи|напомни)\b"
     r"(?:(?!\b(?:созда\w*|измени\w*|перевед\w*)\b).){0,160}?"
-    r"\bсделк\w*\s*№?\s*(\d+)\b"
+    r"\bсделк\w*\s*(?:№|номер)?\s*(\d+)\b"
+    # «открой 990001», «сделка №990001» — the whole message is a deal reference.
+    r"|^\s*(?:откро\w*|покаж\w*)\s+№?\s*(\d{3,})\s*[?.!]*\s*$"
+    r"|^\s*сделк\w*\s*(?:№|номер)?\s*(\d{3,})\s*[?.!]*\s*$)"
+)
+DEAL_READ_VERB_RE = re.compile(r"(?i)\b(?:покаж|откро|перечита|прочита|проверь)\w*|^\s*сделк")
+DEAL_READ_OTHER_TASK_RE = re.compile(
+    r"(?i)закуп|ведомост|\bкп\b|коммерческ|договор|сч[её]т|монтаж|поставщ|hogart|хогарт|daichi|дайчи|сравн|добав"
+    r"|удал|замен|рассчит|экономик|рентаб|наличи|цен[аыу]\b|скидк|оплат|достав"
 )
 DEAL_COMPARE_RE = re.compile(
     r"(?i)\bсравн\w*\b.{0,80}?\bсделк\w*\s*№?\s*(\d+)"
@@ -3150,7 +3159,11 @@ def handle_explicit_deal_read(token, chat_id, text):
     match = DEAL_READ_RE.search(text or "")
     if not match:
         return False
-    deal_id = match.group(1)
+    # A question word alone («что/какие/сколько … по сделке N») is a card read only
+    # when the question asks for nothing the card cannot answer.
+    if not DEAL_READ_VERB_RE.search(text or "") and DEAL_READ_OTHER_TASK_RE.search(text or ""):
+        return False
+    deal_id = next(group for group in match.groups() if group)
     result = run_deal_browser({"action": "get", "deal_id": deal_id})
     if not result.get("ok"):
         send_message(
@@ -8865,6 +8878,40 @@ def _start_human_invoice(token,chat_id,deal_id,kind):
     return True
 
 
+def _status_stem(value):
+    words = re.findall(r"[а-яёa-z0-9]+", str(value or "").casefold().replace("ё", "е"))
+    return " ".join(word[:5] for word in words)
+
+
+def _start_human_status(token, chat_id, deal_id, target=None):
+    """«Переведи сделку N в закупку»: the same confirmation screen as the status buttons."""
+    result = run_deal_browser({"action": "get_cached", "deal_id": str(deal_id)}, timeout=8)
+    if not result.get("ok"):
+        send_message(token, chat_id, f"Не удалось открыть сделку №{deal_id}: {result.get('error')}", DEALS_KEYBOARD)
+        return True
+    deal = result["deal"]
+    transitions = {f"➡️ {t['name']}": t for t in deal.get("transitions", []) if t.get("enabled")}
+    update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending=None, transitions=transitions,
+                         pending_transition=None)
+    if not transitions:
+        send_message(token, chat_id, f"Для сделки №{deal_id} сейчас нет доступных переходов. Текущий статус: {deal.get('status')}.",
+                     DEAL_ACTIONS_KEYBOARD)
+        return True
+    wanted = _status_stem(target)
+    matches = [label for label, t in transitions.items() if wanted and (
+        _status_stem(t.get("name")) == wanted or _status_stem(t.get("name")).startswith(wanted))]
+    if len(matches) == 1:
+        return handle_deal_ui(token, chat_id, matches[0], _background=True)
+    if wanted and _status_stem(deal.get("status")) == wanted:
+        send_message(token, chat_id, f"Сделка №{deal_id} уже в статусе «{deal.get('status')}».", DEAL_ACTIONS_KEYBOARD)
+        return True
+    note = f"Статус «{target}» для сделки №{deal_id} недоступен. " if target else ""
+    keyboard = [[{"text": label}] for label in transitions] + [[{"text": "❌ Отмена"}]]
+    send_message(token, chat_id, f"{note}Сделка №{deal_id}, текущий статус: {deal.get('status')}. Куда перевести сделку?",
+                 {"keyboard": keyboard, "resize_keyboard": True, "one_time_keyboard": True})
+    return True
+
+
 def _human_payment_summary(deal_id):
     deal_result=run_deal_browser({'action':'get','deal_id':str(deal_id)})
     if not deal_result.get('ok'):return {'ok':False,'error':'не удалось прочитать сделку: '+str(deal_result.get('error'))}
@@ -8940,6 +8987,11 @@ def handle_human_workflow(token,chat_id,text):
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         intent=human_intents.Intent(human_intents.CHECK_PAYMENT,deal_id=match.group())
+    elif pending=='human_status_deal':
+        match=re.search(r'\d{2,}',value)
+        if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
+        saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
+        return _start_human_status(token,chat_id,match.group(),saved.get('target'))
     elif pending=='human_invoice_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
@@ -8952,6 +9004,11 @@ def handle_human_workflow(token,chat_id,text):
         # Every preview below names the deal, so a stale selection is visible before any write.
         intent=human_intents.Intent(intent.name,str(state['current_deal_id']),intent.target,intent.fields,
                                     tuple(x for x in intent.missing if x!='deal'),intent.confidence)
+    if intent.name==human_intents.MOVE_STATUS:
+        if not intent.deal_id:
+            update_deal_ui_state(chat_id,pending='human_status_deal',human_intent={'name':intent.name,'target':intent.target})
+            send_message(token,chat_id,'Какую сделку перевести? Укажите номер.');return True
+        return _start_human_status(token,chat_id,intent.deal_id,intent.target)
     if intent.name in (human_intents.ISSUE_INVOICE,human_intents.GET_INVOICE):
         if not intent.deal_id:
             update_deal_ui_state(chat_id,pending='human_invoice_deal',human_intent={'name':intent.name})
