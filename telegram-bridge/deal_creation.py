@@ -12,6 +12,16 @@ def number(value, label, positive=False):
     return result
 
 
+def rub(value):
+    """Russian money format used across the bot: 104 000,00."""
+    return f'{value:,.2f}'.replace(',', '\u00a0').replace('.', ',').replace('\u00a0', ' ')
+
+
+def qty_text(value):
+    text = format(value.normalize(), 'f')
+    return text.replace('.', ',')
+
+
 def review(spec):
     from document_tax_policy import creation_rate
     expected=creation_rate(spec)
@@ -52,7 +62,7 @@ def review(spec):
         if source_total is not None and abs(number(source_total, f'Строка {index}, итог') - amount) > Decimal('0.01'):
             raise ValueError(f'Строка {index}: количество × итоговая цена не совпадает с суммой строки. Проверьте скидку и цену за единицу.')
         total += amount
-        lines.append(f'{index}. {row["name"]} — {qty:g} × {price:,.2f} = {amount:,.2f} ₽')
+        lines.append(f'{index}. {row["name"]} — {qty_text(qty)} × {rub(price)} = {rub(amount)} ₽')
     client = f'ID {spec["client_id"]}' if spec.get('client_id') else 'НОВАЯ карточка'
     tax = {'none': 'без НДС', '22': 'НДС 22%', '5': 'НДС 5%'}[spec['tax_mode']]
     if spec['tax_mode'] != 'none':
@@ -60,5 +70,5 @@ def review(spec):
         tax = tax_label(total, int(spec['tax_mode'])) + '; НДС включён в цены позиций'
     return (f'Проверьте новую сделку: {spec["description"]}\n'
             f'Клиент: {spec["client_name"]} ({client})\nРежим: {tax}\n\n' +
-            '\n'.join(lines) + f'\n\nИтого по позициям: {total:,.2f} ₽.\n'
+            '\n'.join(lines) + f'\n\nИтого по позициям: {rub(total)} ₽.\n'
             'Данные ещё не записаны. Создание — только кнопкой подтверждения.')

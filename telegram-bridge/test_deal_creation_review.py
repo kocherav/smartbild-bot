@@ -11,13 +11,19 @@ class ReviewTest(unittest.TestCase):
 
     def test_review_includes_identity_and_total(self):
         result = deal_creation.review(self.spec())
-        self.assertIn('ID 42', result); self.assertIn('24.68', result)
+        self.assertIn('ID 42', result); self.assertIn('24,68', result)
+
+    def test_review_uses_russian_number_format(self):
+        spec = self.spec(); spec['items'] = [{'name': 'Split', 'qty': 2.0, 'unit_price': 52000}]
+        result = deal_creation.review(spec)
+        self.assertIn('Split — 2 × 52 000,00 = 104 000,00 ₽', result)
+        self.assertIn('Итого по позициям: 104 000,00 ₽.', result)
 
     def test_discount_cannot_be_silently_ignored_or_applied_twice(self):
         spec=self.spec(); spec['discount_pct']=10
         with self.assertRaises(ValueError): deal_creation.review(spec)
         spec['price_basis']='net'
-        self.assertIn('24.68',deal_creation.review(spec))
+        self.assertIn('24,68',deal_creation.review(spec))
 
     def test_line_total_mismatch_is_not_treated_as_unit_price(self):
         spec=self.spec(); spec['items'][0]['total']=12.34

@@ -187,7 +187,7 @@ CURRENT_EXECUTION_RE = re.compile(
     re.IGNORECASE,
 )
 DEAL_READ_RE = re.compile(
-    r"(?i)\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*)\b"
+    r"(?i)\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*|сколько|как\w{2}|посчита\w*|сверь\w*)\b"
     r"(?:(?!\b(?:созда\w*|измени\w*|перевед\w*)\b).){0,160}?"
     r"\bсделк\w*\s*№?\s*(\d+)\b"
 )
@@ -3424,6 +3424,15 @@ def run_background_job(job, token, chat_id, operation="background", allow_stale=
         pass
 
 
+def run_foreground(job):
+    """Run a routed message in the polling process.
+
+    Production simply calls the job (model turns fork inside it).  The human QA
+    stand replaces this seam to execute forked branches in-process.
+    """
+    job()
+
+
 def run_singleton_background_job(name, job, token, chat_id):
     """Run a periodic watcher without ever blocking Telegram polling.
 
@@ -6036,6 +6045,12 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         except OSError:
             pass
         return True
+    if value == "📥 Получить счёт":
+        if not deal_id:
+            send_message(token, chat_id, "Сначала откройте сделку, затем нажмите «📥 Получить счёт».", DEALS_KEYBOARD)
+        else:
+            send_latest_megaplan_invoice(token, chat_id, deal_id)
+        return True
     if value in ("🛠 Ведомость работ", "📋 Монтажная ведомость", "📄 Позиции сделки") and deal_id:
         ledger = fetch_deal_ledger(deal_id)
         if ledger is None:
@@ -6058,10 +6073,12 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                 deal.get("status"), ledger,
             )
         else:
+            send_message(token, chat_id, format_deal_positions(deal_id, ledger), DEAL_BASIC_KEYBOARD)
             path = build_spec_review_xlsx(deal_client_name(deal_id), ledger)
         if path:
             caption = "Актуальные позиции сделки" if value == "📄 Позиции сделки" else "Монтажная ведомость по текущим позициям сделки"
-            filename = None if value == "📄 Позиции сделки" else f"Монтажная ведомость — сделка {deal_id}.xlsx"
+            filename = (f"Позиции сделки {deal_id}.xlsx" if value == "📄 Позиции сделки"
+                        else f"Монтажная ведомость — сделка {deal_id}.xlsx")
             send_document(token, chat_id, path, caption, filename)
             try:
                 os.remove(path)
@@ -6071,6 +6088,28 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token, chat_id, "Не удалось сформировать Excel.", DEAL_ACTIONS_KEYBOARD)
         return True
     return False
+
+
+def format_deal_positions(deal_id, ledger, limit=40):
+    """Positions as a person reads them in chat; the Excel file carries the economics."""
+    if not ledger:
+        return f"В сделке №{deal_id} нет позиций."
+    lines, total = [f"Позиции сделки №{deal_id}:"], Decimal("0")
+    for index, item in enumerate(ledger, 1):
+        try:
+            qty = Decimal(str(item.get("qty") or 0))
+            price = Decimal(str(item.get("sell_price") if item.get("sell_price") is not None else item.get("unit_price") or 0))
+        except (InvalidOperation, ValueError):
+            qty, price = Decimal("0"), Decimal("0")
+        amount = qty * price
+        total += amount
+        if index <= limit:
+            lines.append(f"{index}. {item.get('name') or 'без названия'} — {qty.normalize():f} {item.get('unit') or 'шт'} × "
+                         f"{bank_money(price)} ₽ = {bank_money(amount)} ₽")
+    if len(ledger) > limit:
+        lines.append(f"… и ещё {len(ledger) - limit} поз. — полный список в Excel.")
+    lines.append(f"Итого: {bank_money(total)} ₽")
+    return "\n".join(lines)
 
 
 def send_document(token, chat_id, path, caption=None, filename=None):
@@ -8728,7 +8767,9 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
             return True
     update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices)
     if choices:
-        send_message(token,chat_id,f"Выберите нового плательщика для сделки №{deal_id}. Текущий отмечен в списке только в предпросмотре.",_human_choice_keyboard(choices,'📎 Новая карточка плательщика'))
+        current=next((x for x in payers if x.get('selected')),None)
+        not_found=f"Плательщик «{target}» у клиента сделки не найден однозначно.\n" if target else ''
+        send_message(token,chat_id,f"{not_found}Сделка №{deal_id}, клиент {result.get('client_name') or 'не указан'}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nВыберите нового плательщика или пришлите новую карточку.",_human_choice_keyboard(choices,'📎 Новая карточка плательщика'))
     else:
         update_deal_ui_state(chat_id,pending='payer_card_file',payer_target_deal_id=str(deal_id),human_intent=None,human_choices=None)
         send_message(token,chat_id,f"У клиента сделки №{deal_id} нет доступных карточек. Пришлите карточку нового плательщика.")
@@ -8750,6 +8791,20 @@ def _start_human_executor(token,chat_id,deal_id,query=None,kind=human_intents.AS
     choices={f"Сотрудник ID {item['id']} — {item['name']}":item for item in employees}
     update_deal_ui_state(chat_id,pending='human_executor_select',human_intent={'name':kind,'deal_id':str(deal_id)},human_choices=choices)
     send_message(token,chat_id,'Выберите сотрудника. Ничего ещё не записано.',_human_choice_keyboard(choices))
+    return True
+
+
+def _start_human_invoice(token,chat_id,deal_id,kind):
+    """«Выстави счёт…» opens the invoice menu of that deal; «пришли счёт…» sends the latest one."""
+    if kind==human_intents.GET_INVOICE:
+        update_deal_ui_state(chat_id,current_deal_id=str(deal_id))
+        send_latest_megaplan_invoice(token,chat_id,deal_id)
+        return True
+    select_deal(token,chat_id,deal_id)
+    if str(current_deal_ui_state(chat_id).get('current_deal_id'))!=str(deal_id):
+        return True
+    update_deal_ui_state(chat_id,pending='invoice_menu',invoice_downloads=None)
+    send_message(token,chat_id,f"Какой счёт выставить по сделке №{deal_id}?\n«📋 Общий счёт по спецификации» — на все позиции сделки; 6.4.1–6.4.3 — счёт на этап оплаты по договору. До подтверждения ничего не записывается.",INVOICE_MENU_KEYBOARD)
     return True
 
 
@@ -8818,8 +8873,23 @@ def handle_human_workflow(token,chat_id,text):
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         intent=human_intents.Intent(human_intents.CHECK_PAYMENT,deal_id=match.group())
+    elif pending=='human_invoice_deal':
+        match=re.search(r'\d{2,}',value)
+        if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
+        saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
+        return _start_human_invoice(token,chat_id,match.group(),saved.get('name') or human_intents.ISSUE_INVOICE)
     else:intent=human_intents.classify(value)
     if not intent:return False
+    if intent.name!=human_intents.CREATE_DEAL and not intent.deal_id and state.get('current_deal_id') and not re.search(r'(?i)друг\w*\s+сделк|не\s+в\s+этой',value):
+        # The person is inside an open deal card: «смени плательщика на …» refers to it.
+        # Every preview below names the deal, so a stale selection is visible before any write.
+        intent=human_intents.Intent(intent.name,str(state['current_deal_id']),intent.target,intent.fields,
+                                    tuple(x for x in intent.missing if x!='deal'),intent.confidence)
+    if intent.name in (human_intents.ISSUE_INVOICE,human_intents.GET_INVOICE):
+        if not intent.deal_id:
+            update_deal_ui_state(chat_id,pending='human_invoice_deal',human_intent={'name':intent.name})
+            send_message(token,chat_id,'По какой сделке? Укажите номер.');return True
+        return _start_human_invoice(token,chat_id,intent.deal_id,intent.name)
     if intent.name==human_intents.CREATE_DEAL:
         update_deal_ui_state(chat_id,**creation_attachment.initial_state(value));invoice_tasks.pause(chat_id)
         if creation_attachment.awaiting_file(value):send_message(token,chat_id,'Задание на новую сделку сохранено. Пришлите счёт или спецификацию; файл будет связан именно с этим поручением.');return True
@@ -9471,7 +9541,13 @@ def main():
             )
         routing_text = msg.get("text") or msg.get("caption") or ""
         routing_state = invoice_tasks.read(chat_id) if is_owner else {}
+        # A specification typed into the «Создать сделку» wizard belongs to that
+        # wizard, even when it names a product (Haier, сплит…) like a catalog query.
+        wizard_state = current_deal_ui_state(chat_id)
+        creation_wizard_text = bool(wizard_state.get("deal_creation_active")
+                                    and str(wizard_state.get("pending") or "").startswith("deal_create_"))
         catalog_task_mode = bool(is_owner and not supplier_invoice_mode and not creation_document_mode
+            and not creation_wizard_text
             and "document" not in msg and catalog_conversation.is_turn(routing_text, routing_state))
         if catalog_task_mode:
             routing_state = catalog_conversation.begin(chat_id, routing_text)
@@ -9653,7 +9729,8 @@ def main():
             if hogart_fired or daichi_fired:
                 continue
             if ((catalog_task_mode or needs_fresh_hogart_search(msg.get("text") or msg.get("caption") or "")) and not catalog_fired_this_message
-                    and not forced_hogart_refresh):
+                    and not forced_hogart_refresh and not creation_wizard_text
+                    and not CREATE_MEGAPLAN_DEAL_RE.search(reply)):
                 forced_hogart_refresh = True
                 print(f"{LOG_PREFIX} forcing fresh hogart search for new user query")
                 reply = ask_current_model((
@@ -10511,7 +10588,7 @@ def main():
                 run_background_job(lambda: process_business_message(msg,chat_id,is_owner,is_installer), token,chat_id,
                                    operation='получение файла/плательщик', allow_stale=True)
             else:
-                process_business_message(msg,chat_id,is_owner,is_installer)
+                run_foreground(lambda: process_business_message(msg,chat_id,is_owner,is_installer))
 
 
 if __name__ == "__main__":
