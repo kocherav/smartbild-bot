@@ -2499,7 +2499,7 @@ def save_installer_fact_registry(session):
 def money(value):
     if value is None:
         return "сумма не указана"
-    return f"{value:,.2f} ₽".replace(",", " ")
+    return f"{bank_money(value)} ₽"
 
 
 def parse_nonnegative_money(value):
@@ -3326,18 +3326,20 @@ def handle_deal_comparison_followup(token, chat_id, text):
     return True
 
 
+def format_profitability(deal_id, result):
+    margin = f"{float(result.get('margin_pct') or 0):.1f}".replace(".", ",")
+    return (f"Экономика сделки №{deal_id}: выручка {bank_money(result.get('total_revenue', 0))} ₽, "
+            f"себестоимость {bank_money(result.get('total_cost', 0))} ₽, "
+            f"прибыль {bank_money(result.get('total_profit', 0))} ₽ ({margin}%).")
+
+
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
     result = build_and_store_profitability(deal_id)
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    send_message(token, chat_id, (
-        f"Экономика сделки №{deal_id}: выручка {result.get('total_revenue', 0):,.2f} ₽, "
-        f"себестоимость {result.get('total_cost', 0):,.2f} ₽, "
-        f"прибыль {result.get('total_profit', 0):,.2f} ₽ "
-        f"({result.get('margin_pct', 0):.1f}%)."
-    ).replace(",", " "), DEAL_ACTIONS_KEYBOARD)
+    send_message(token, chat_id, format_profitability(deal_id, result), DEAL_ACTIONS_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
@@ -3380,7 +3382,7 @@ def run_contract_invoice(spec):
 
 
 def format_contract_preview(preview):
-    money = lambda value: f"{value:,.2f} ₽".replace(",", " ")
+    money = lambda value: f"{bank_money(value)} ₽"
     return (
         f"Договор №{preview.get('number')} от {preview.get('date')}\n"
         f"Поставщик: {preview.get('seller_name') or 'не указан'}\n"
@@ -8878,8 +8880,18 @@ def _human_payment_summary(deal_id):
             'remainder':invoice_total-paid,'invoices':invoice_rows,'operations':operations}
 
 
+# Top-level menu entries: a person pressing one has left whatever they were doing.
+TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделками", "/deals", "🏦 Деньги", "🏦 Банк и платежи",
+                        "🧰 Монтаж", "☰ Ещё", "⬅️ Главное меню", "/menu", "/start", "📊 Пульт сделок",
+                        "/dashboard", "🧪 Ошибки тестировщика"}
+
+
 def handle_human_workflow(token,chat_id,text):
     value=str(text or '').strip();state=current_deal_ui_state(chat_id);pending=state.get('pending') or ''
+    if value in TOP_LEVEL_NAVIGATION:
+        if pending.startswith('human_'):
+            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        return False
     if pending.startswith('human_') and value=='❌ Отмена':
         update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
@@ -9474,12 +9486,7 @@ def main():
                 send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
                 result = build_and_store_profitability(deal_id)
                 if result.get("ok"):
-                    send_message(token, chat_id, (
-                        f"Экономика сделки №{deal_id}: выручка {result.get('total_revenue', 0):,.2f} ₽, "
-                        f"себестоимость {result.get('total_cost', 0):,.2f} ₽, "
-                        f"прибыль {result.get('total_profit', 0):,.2f} ₽ "
-                        f"({result.get('margin_pct', 0):.1f}%)."
-                    ).replace(",", " "), MAIN_KEYBOARD)
+                    send_message(token, chat_id, format_profitability(deal_id, result), MAIN_KEYBOARD)
                     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
                     try:
                         os.remove(result["path"])
@@ -10207,7 +10214,7 @@ def main():
                 currency_plan = ""
                 if str(doc.get("currency") or "RUB").upper() not in ("RUB", "RUR", ""):
                     currency_plan = (
-                        f"Валюта счёта: {doc.get('foreign_total'):,.2f} {doc.get('currency')}\n"
+                        f"Валюта счёта: {bank_money(doc.get('foreign_total'))} {doc.get('currency')}\n"
                         f"Плановый курс: {doc.get('cbr_rate'):,.6f} ₽ (ЦБ РФ на {doc.get('cbr_effective_date')}"
                         f"{(' + ' + str(doc.get('cbr_markup_pct')) + '%') if float(doc.get('cbr_markup_pct') or 0) else ''})\n"
                         f"Плановый эквивалент: {bank_money(doc.get('plan_total_rub'))} ₽\n"
@@ -10263,12 +10270,7 @@ def main():
             profit_result = build_and_store_profitability(profitability_deal_id)
             if profit_result.get("ok"):
                 profitability_xlsx_path = profit_result["path"]
-                reply = (reply + "\n\n" if reply.strip() else "") + (
-                    f"Экономика сделки №{profitability_deal_id}: выручка {profit_result.get('total_revenue', 0):,.2f} ₽, "
-                    f"себестоимость {profit_result.get('total_cost', 0):,.2f} ₽, "
-                    f"прибыль {profit_result.get('total_profit', 0):,.2f} ₽ "
-                    f"({profit_result.get('margin_pct', 0):.1f}%)."
-                ).replace(",", " ")
+                reply = (reply + "\n\n" if reply.strip() else "") + format_profitability(profitability_deal_id, profit_result)
             else:
                 reply = (reply + "\n\n" if reply.strip() else "") + f"Не удалось построить экономику: {profit_result.get('error', 'неизвестная ошибка')}"
 
@@ -10281,7 +10283,7 @@ def main():
             if ws_result.get("ok"):
                 work_statement_xlsx_path = ws_result["path"]
                 total = ws_result.get("total_cost_work", 0)
-                summary = f"Себестоимость работ по сделке {work_statement_deal_id}: {total:,.2f} ₽ ({ws_result.get('position_count', 0)} позиций).".replace(",", " ")
+                summary = f"Себестоимость работ по сделке {work_statement_deal_id}: {bank_money(total)} ₽ ({ws_result.get('position_count', 0)} позиций)."
                 if ws_result.get("missing_count"):
                     summary += f"\n⚠️ Без данных о себестоимости работ: {', '.join(ws_result['missing_names'])}"
                 else:

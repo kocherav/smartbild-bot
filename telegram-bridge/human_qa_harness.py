@@ -250,7 +250,8 @@ class FakeMegaplan:
         self.writes.append({'script': script, 'action': action, 'spec': copy.deepcopy(spec)})
 
     # -- CLI dispatch -------------------------------------------------------
-    CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api'}
+    CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api',
+                   'generate_contract', 'deal_proposal'}
 
     def handle(self, script, args, spec):
         script = script[:-3] if script.endswith('.py') else script
@@ -312,6 +313,16 @@ class FakeMegaplan:
             self._write('deal_browser', action, spec)
             deal['executors'] = [employee['name']]
             return {'ok': True, 'deal': self.summary(deal), 'employee': employee}
+        if action == 'upsert_profitability_file':
+            deal = self._deal(spec)
+            self._write('deal_browser', action, spec)
+            return {'ok': True, 'file': {'name': Path(spec.get('path') or '').name}}
+        if action == 'upload_contracts':
+            deal = self._deal(spec)
+            self._write('deal_browser', action, spec)
+            names = [Path(p).name for p in spec.get('paths') or []]
+            deal['contract'] = next((n for n in names if n.endswith('.pdf')), names[0] if names else None)
+            return {'ok': True, 'files': [{'name': n} for n in names]}
         if action == 'get_contract':
             deal = self._deal(spec)
             if not deal.get('contract'):
@@ -478,6 +489,61 @@ class FakeMegaplan:
             deal = self._deal(spec)
             return {'ok': True, 'deal_id': deal['id'], 'ledger': self.ledger(deal)}
         return None
+
+    def cli_generate_contract(self, action, spec):
+        deal = self._deal(spec)
+        payer = self.payer(deal)
+        if not payer:
+            return {'ok': False, 'error': 'в сделке не выбран плательщик'}
+        signer = {k: str((spec.get('customer_signatory') or {}).get(k) or payer.get('signatory', {}).get(k) or '').strip()
+                  for k in ('name', 'position', 'authority')}
+        missing = [label for key, label in (('name', 'ФИО подписанта'), ('position', 'должность подписанта'),
+                                            ('authority', 'основание полномочий подписанта')) if not signer[key]]
+        if not deal['address']:
+            missing.insert(0, 'адрес объекта')
+        goods = sum(p['qty'] * p['price'] for p in deal['positions'] if p.get('cost_work') is None)
+        works = sum(p['qty'] * p['price'] for p in deal['positions'] if p.get('cost_work') is not None)
+        preview = {'deal_id': deal['id'], 'payer_id': payer['id'], 'number': deal['id'] + '-Д', 'date': '22.10.2026',
+                   'client': self.summary(deal)['client'], 'address': deal['address'], 'subject': deal['description'],
+                   'payer_name': payer['name'], 'equipment': goods, 'materials': 0.0, 'advance': goods,
+                   'works': works, 'total': goods + works, 'tax_text': 'Без НДС', 'positions_count': len(deal['positions']),
+                   'missing': missing, 'positions': [], 'signatory': signer}
+        fingerprint = f"{deal['id']}:{payer['id']}:{self.price(deal)}:{sorted(signer.items())}"
+        if spec.get('action', 'preview') == 'preview':
+            return {'ok': True, 'preview': {**preview, 'fingerprint': fingerprint, 'seller_name': 'ООО «КЛИВЭЛ»'}}
+        if spec.get('expected_fingerprint') and spec['expected_fingerprint'] != fingerprint:
+            return {'ok': False, 'no_effect': True, 'error': 'Данные договора или наша организация изменились после просмотра. Проверьте договор заново.'}
+        if missing:
+            return {'ok': False, 'error': 'не заполнены обязательные данные', 'missing': missing}
+        payer['signatory'] = signer
+        docx, pdf = self.root / f"Договор {deal['id']}-Д.docx", self.root / f"Договор {deal['id']}-Д (подписан).pdf"
+        docx.write_bytes(b'PK docx'); pdf.write_bytes(b'%PDF-1.4 contract')
+        return {'ok': True, 'preview': preview, 'docx_path': str(docx), 'pdf_path': str(pdf)}
+
+    def cli_deal_proposal(self, action, spec):
+        deal = self._deal(spec)
+        if action == 'publish':
+            if not deal['positions']:
+                return {'ok': False, 'error': 'в сделке нет позиций'}
+            self._write('deal_proposal', action, spec)
+            path = self.root / f"КП по сделке {deal['id']}.pdf"
+            path.write_bytes(b'%PDF-1.4 proposal')
+            return {'ok': True, 'path': str(path), 'count': len(deal['positions']), 'total': self.price(deal)}
+        if action == 'ack':
+            return {'ok': True}
+        return None
+
+    def cli_build_profitability_report(self, action, spec):
+        deal = self.deals.get(str(action))
+        if not deal:
+            return {'ok': False, 'error': 'сделка не найдена'}
+        revenue = self.price(deal)
+        cost = sum(p['qty'] * float(p.get('cost_material') or 0) + p['qty'] * float(p.get('cost_work') or 0)
+                   for p in deal['positions'])
+        path = self.root / f"Рентабельность {deal['id']}.xlsx"
+        path.write_bytes(b'PK xlsx')
+        return {'ok': True, 'path': str(path), 'total_revenue': revenue, 'total_cost': cost,
+                'total_profit': revenue - cost, 'margin_pct': (revenue - cost) / revenue * 100 if revenue else 0}
 
     def cli_deal_ledger(self, action, spec):
         if action == 'list-recent':

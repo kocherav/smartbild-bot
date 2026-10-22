@@ -22,6 +22,7 @@ PREFIXES = (
 EXACT = {'invoice_file': 'BUY-INVOICE', 'invoice_menu': 'INVOICE',
          'invoice_download': 'INVOICE', 'invoice_full_confirm': 'INVOICE',
          'menu': 'NAV', 'deal_sync_confirm':'KP-DEAL',
+         'get_number': 'NAV', 'search_client': 'NAV', 'search_address': 'NAV',
          'price_catalog_confirm':'CATALOG', 'work_price_confirm':'MNT-LEGACY'}
 
 def owner(state):

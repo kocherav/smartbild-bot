@@ -22,11 +22,15 @@ DEFAULT_STATE = ROOT / 'qa-agent-state.json'
 DEFAULT_EVIDENCE = ROOT / 'qa-agent-evidence'
 FULL_GATE = [PYTHON, str(ROOT / 'quality_gate.py'), '--run']
 BROWSER_GATE = ['/usr/bin/python3', '/home/kocher.av/hogart-scraper/dashboard/tests/run_browser_checks.py']
-HUMAN_JOURNEYS = ROOT / 'HUMAN_JOURNEYS.json'
+# The isolated runner copies only sources; then the registry is read in place.
+HUMAN_JOURNEYS = next((path for path in (
+    ROOT / 'HUMAN_JOURNEYS.json',
+    Path(os.environ.get('SMARTBILD_HOME', '/home/kocher.av')) / 'telegram-bridge/docs/architecture/HUMAN_JOURNEYS.json',
+) if path.exists()), ROOT / 'HUMAN_JOURNEYS.json')
 HUMAN_FIXTURES = ROOT / 'human-fixtures'
 # A person operating the real bridge: stand suites plus the real-CRM snapshot suite.
 HUMAN_MODULES = ['test_human_operator_journey', 'test_human_journeys', 'test_human_journeys_edge',
-                 'human_live_journeys']
+                 'test_human_journeys_documents', 'human_live_journeys']
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
 CRITICAL_WORDS = {

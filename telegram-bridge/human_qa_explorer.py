@@ -34,7 +34,13 @@ from test_human_journeys import office
 
 
 ROOT = Path(__file__).resolve().parent
-MISSIONS_FILE = ROOT / 'docs' / 'architecture' / 'EXPLORE_MISSIONS.json'
+_MISSIONS_RELATIVE = Path('docs') / 'architecture' / 'EXPLORE_MISSIONS.json'
+# The isolated runner copies only sources; the mission list is then read in place.
+MISSIONS_FILE = next((path for path in (
+    Path(os.environ['QA_EXPLORE_MISSIONS_FILE']) if os.environ.get('QA_EXPLORE_MISSIONS_FILE') else None,
+    ROOT / _MISSIONS_RELATIVE,
+    Path(os.environ.get('SMARTBILD_HOME', '/home/kocher.av')) / 'telegram-bridge' / _MISSIONS_RELATIVE,
+) if path and path.exists()), ROOT / _MISSIONS_RELATIVE)
 CODEX_BIN = os.environ.get('BRIDGE_CODEX_BIN', os.path.expanduser('~/.local/bin/codex'))
 MAX_SCREEN_CHARS = 3500
 
