@@ -38,6 +38,8 @@ Python-окружения.
 ## Тестовые контуры
 
 - `telegram-bridge/test_*.py` — диалоги, маршрутизация, очередь, устойчивость;
+- `telegram-bridge/test_human_*.py` — человекоподобные маршруты через настоящий `bridge.main()` на QA-стенде
+  (`human_qa_harness.py`); регламент AI-тестировщика — `telegram-bridge/docs/architecture/HUMAN_QA.md`;
 - `megaplan-crm/test_*.py` — сделки, документы, деньги, закупки, монтаж;
 - `hogart-scraper/test_*.py` — API, КП и Excel;
 - `daichi-scraper/test_*.py` — кэш каталога;
