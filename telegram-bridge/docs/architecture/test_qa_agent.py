@@ -239,6 +239,24 @@ class HumanProfileTests(unittest.TestCase):
             qa_agent.inspect_receipt('human', receipt, registry)
             self.assertEqual('closed', registry.task(kinds['technical']['id'])['status'])
 
+    def test_external_coverage_waits_for_input_without_developer_assignment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / 'receipt.json'
+            receipt.write_text(json.dumps({'successful': False, 'cases': [
+                {'id': 'coverage:HUMAN-DASHBOARD', 'status': 'missing'}]}))
+            registry = qa_agent.Registry(Path(temporary) / 'state.json')
+            result = qa_agent.inspect_receipt('human', receipt, registry)
+            self.assertEqual('waiting_input', result['task']['status'])
+            self.assertIsNone(result['developer_prompt'])
+            self.assertNotIn('developer_assignment', result['task'])
+            self.assertFalse(list(Path(temporary).glob('developer-assignment*.md')))
+            state = registry.read()
+            state['tasks'][0].update(status='ready', developer_assignment='stale.md')
+            qa_agent.atomic_save(registry.path, state)
+            repeated = qa_agent.inspect_receipt('human', receipt, registry)
+            self.assertEqual('waiting_input', repeated['task']['status'])
+            self.assertNotIn('developer_assignment', repeated['task'])
+
     def test_repository_registry_is_consistent(self):
         registry = json.loads(qa_agent.HUMAN_JOURNEYS.read_text(encoding='utf-8'))
         ids = [item['id'] for item in registry['journeys']]

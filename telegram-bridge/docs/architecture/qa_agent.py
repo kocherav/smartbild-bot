@@ -249,6 +249,9 @@ class Registry:
                 task['last_seen_at'] = run['at']
                 task['evidence'] = str(evidence)
                 if protocol: task['protocol'] = str(protocol)
+                if kind == 'external':
+                    task['status'] = 'waiting_input'
+                    task.pop('developer_assignment', None)
                 # A developer result is never accepted on its own.  The same
                 # failing acceptance route returns the task to the repair queue.
                 if task['status'] == 'awaiting_verification':
@@ -256,7 +259,8 @@ class Registry:
                     task['verification_failures'] = int(task.get('verification_failures') or 0) + 1
                     task['last_verification_run'] = run['id']
             else:
-                task = {'id': 'QA-' + digest.upper(), 'fingerprint': digest, 'status': 'ready',
+                task = {'id': 'QA-' + digest.upper(), 'fingerprint': digest,
+                        'status': 'waiting_input' if kind == 'external' else 'ready',
                         'severity': severity(group), 'profile': profile, 'failures': group,
                         'evidence': str(evidence), 'created_at': run['at'], 'last_seen_at': run['at'],
                         'occurrences': 1, 'protocol': str(protocol) if protocol else None}
@@ -323,6 +327,8 @@ def inspect_receipt(profile, receipt, registry):
     if tasks:
         state = registry.read()
         for task in tasks:
+            if task_kind(task) == 'external':
+                continue
             suffix = '' if task is tasks[0] else '-' + task_kind(task)
             assignment = Path(receipt).with_name(f'developer-assignment{suffix}.md')
             assignment.write_text(developer_prompt(task), encoding='utf-8')
@@ -332,7 +338,7 @@ def inspect_receipt(profile, receipt, registry):
         atomic_save(registry.path, state)
     task = tasks[0] if tasks else None
     return {'run': run, 'task': task, 'tasks': tasks,
-            'developer_prompt': developer_prompt(task) if task else None}
+            'developer_prompt': developer_prompt(task) if task and task_kind(task) == 'technical' else None}
 
 
 def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):

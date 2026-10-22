@@ -802,6 +802,7 @@ class Stand:
         import installer_onboarding
         import invoice_tasks
         import decision_channel
+        import statement_document_context
         self.uploads = {}
         # The owner has used the bot before: Telegram keeps its persistent menu.
         if not self.telegram.bottom:
@@ -809,6 +810,11 @@ class Stand:
         self.journey = journey(self.operator)
         self.journey_started = False
         state = self.root / 'state'
+        finance_state = self.root / 'finance'
+        statement_recent_context = statement_document_context.recent_context
+        statement_deal_candidates = statement_document_context.deal_candidates
+        statement_match_document = statement_document_context.match_document
+        statement_exclude_documents = statement_document_context.exclude_documents
         paths = {name: str(state / Path(value).name) for name, value in vars(bridge).items()
                  if re.fullmatch(r'[A-Z_]+_(FILE|DIR|LOG)', name) and isinstance(value, str)
                  and value.startswith(bridge.BASE_DIR) and name != 'BASE_DIR'}
@@ -884,6 +890,19 @@ class Stand:
             patch.object(installer_onboarding, 'members', return_value=set()),
             patch.object(invoice_tasks, 'STORE', state / 'invoice_tasks.json'),
             patch.object(decision_channel, 'BASE', state),
+            # Default arguments in statement_document_context capture the
+            # production FINANCE path at import time. Route every entry point
+            # explicitly to the stand, including read-only greeting context.
+            patch.object(statement_document_context, 'recent_context',
+                         side_effect=lambda chat_id: statement_recent_context(chat_id, finance_state)),
+            patch.object(statement_document_context, 'deal_candidates',
+                         side_effect=lambda caption: statement_deal_candidates(caption, finance_state)),
+            patch.object(statement_document_context, 'match_document',
+                         side_effect=lambda path, text, chat_id: statement_match_document(
+                             path, text, chat_id, finance_state)),
+            patch.object(statement_document_context, 'exclude_documents',
+                         side_effect=lambda chat_id, hashes: statement_exclude_documents(
+                             chat_id, hashes, finance_state)),
         ]
         for item in patches:
             item.start()
