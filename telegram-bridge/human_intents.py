@@ -68,6 +68,23 @@ def _invoice_intent(folded, deal_id):
     return None
 
 
+_NAME_ENDINGS = ("ого", "его", "ому", "ему", "ыми", "ими", "ой", "ей", "ым", "им", "ом", "ем",
+                 "ую", "юю", "а", "я", "у", "ю", "ы", "и", "е")
+
+
+def name_stems(query):
+    """Stems of person names in any case: «Смирнова» -> «Смирнов», «Сергея» -> «Серге»."""
+    stems = []
+    for word in re.findall(r"[А-Яа-яЁёA-Za-z-]{4,}", str(query or "")):
+        for ending in _NAME_ENDINGS:
+            if word.casefold().endswith(ending) and len(word) - len(ending) >= 4:
+                stem = word[:-len(ending)]
+                if stem not in stems:
+                    stems.append(stem)
+                break
+    return stems
+
+
 def classify(text):
     original = _clean(text)
     folded = original.casefold()

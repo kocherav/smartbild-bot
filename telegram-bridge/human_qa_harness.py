@@ -222,13 +222,19 @@ class FakeMegaplan:
         self.writes.append({'script': script, 'action': action, 'spec': copy.deepcopy(spec)})
 
     # -- CLI dispatch -------------------------------------------------------
+    CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api'}
+
     def handle(self, script, args, spec):
+        script = script[:-3] if script.endswith('.py') else script
         action = (args[0] if args else None) or (spec or {}).get('action') or 'apply'
         self.calls.append({'script': script, 'action': action, 'spec': copy.deepcopy(spec)})
         failure = self.failures.get((script, action))
         if failure:
             return {'ok': False, 'error': failure}
-        handler = getattr(self, 'cli_' + script.replace('.py', '').replace('-', '_'), None)
+        if not self.reachable and script in self.CRM_SCRIPTS:
+            # What the real CLIs print when Megaplan does not answer.
+            return {'ok': False, 'error': 'техническая ошибка Мегаплана: <urlopen error timed out>'}
+        handler = getattr(self, 'cli_' + script.replace('-', '_'), None)
         if handler is None:
             return None
         try:
@@ -508,6 +514,11 @@ def press(label):
     return Action('press', label)
 
 
+def press_old(label):
+    """Press a button on an earlier message: double taps and scrolled-up screens."""
+    return Action('press_old', label)
+
+
 def send_file(path, name=None, caption=''):
     return Action('file', str(path), name=name or os.path.basename(str(path)), caption=caption)
 
@@ -627,6 +638,16 @@ class Stand:
             self.failure = AssertionError(f'Человек не видит кнопку «{label}». На экране: {visible}')
             self.finished = True
             raise JourneyStop()
+        if action.kind == 'press_old':
+            if action.value not in self.telegram.callbacks:
+                self.failure = AssertionError(f'Кнопка «{action.value}» никогда не показывалась')
+                self.finished = True
+                raise JourneyStop()
+            data, message_id = self.telegram.callbacks[action.value]
+            self.telegram.begin_action('button', action.value + ' (старое сообщение)')
+            return self.telegram.next_update({'callback_query': {
+                'id': f'cb-{self.telegram.update_id + 1}', 'from': sender, 'data': data,
+                'message': {'message_id': message_id, 'chat': chat}}})
         if action.kind == 'file':
             self.telegram.begin_action('file', f"{action.extra['name']} {action.extra.get('caption') or ''}".strip())
             file_id = 'file-' + str(len(self.telegram.events))

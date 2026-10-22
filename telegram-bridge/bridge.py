@@ -187,7 +187,7 @@ CURRENT_EXECUTION_RE = re.compile(
     re.IGNORECASE,
 )
 DEAL_READ_RE = re.compile(
-    r"(?i)\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*|сколько|как\w{2}|посчита\w*|сверь\w*)\b"
+    r"(?i)\b(?:покаж\w*|откро\w*|перечита\w*|прочита\w*|проверь\w*|сколько|как\w{2}|кто|чей|чья|посчита\w*|сверь\w*)\b"
     r"(?:(?!\b(?:созда\w*|измени\w*|перевед\w*)\b).){0,160}?"
     r"\bсделк\w*\s*№?\s*(\d+)\b"
 )
@@ -3063,9 +3063,11 @@ def format_deal_card(deal):
     price = deal.get("price")
     price_text = f"{price:,.2f} ₽".replace(",", " ") if isinstance(price, (int, float)) else "не указана"
     url = deal.get("url") or f"https://cclimat.megaplan.ru/deals/{deal['id']}/card/"
+    subject = deal.get("description") or deal.get("name")
     return (
         f"Сделка №{deal['id']}\n"
-        f"Клиент: {deal.get('client') or 'не указан'}\n"
+        + (f"Суть: {deal_essence({'description': subject}, 120)}\n" if subject else "")
+        + f"Клиент: {deal.get('client') or 'не указан'}\n"
         f"Адрес: {address}\n"
         f"Статус: {deal.get('status') or 'не указан'}\n"
         f"Исполнитель: {executors}\n"
@@ -3119,8 +3121,13 @@ def select_deal(token, chat_id, deal_id):
     # Mutating actions below still validate against live Megaplan data.
     result = run_deal_browser({"action": "get_cached", "deal_id": str(deal_id)}, timeout=8)
     if not result.get("ok"):
-        send_message(token, chat_id, f"Не удалось открыть сделку: {result.get('error')}", DEALS_KEYBOARD)
-        return
+        error = str(result.get("error") or "неизвестная ошибка")
+        if "не найден" in error:
+            send_message(token, chat_id, f"Сделка №{deal_id} не найдена. Проверьте номер и введите его ещё раз.",
+                         {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True})
+        else:
+            send_message(token, chat_id, f"Не удалось открыть сделку №{deal_id}: {error}", DEALS_KEYBOARD)
+        return False
     deal = result["deal"]
     old_state = current_deal_ui_state(chat_id)
     previous = old_state.get("current_deal_id")
@@ -3136,6 +3143,7 @@ def select_deal(token, chat_id, deal_id):
         values["installation_deal_id"] = None
     update_deal_ui_state(chat_id, **values)
     send_message(token, chat_id, format_deal_card(deal), DEAL_ACTIONS_KEYBOARD)
+    return True
 
 
 def handle_explicit_deal_read(token, chat_id, text):
@@ -3203,6 +3211,25 @@ def handle_explicit_deal_read(token, chat_id, text):
         answer,
         DEAL_ACTIONS_KEYBOARD,
     )
+    return True
+
+
+DEAL_SEARCH_PHRASE_RE = re.compile(
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой|какие|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+"
+    r"(?:(?P<client>клиента|по\s+клиенту|у\s+клиента|с\s+клиентом|для)|(?P<address>по\s+адресу|на\s+адресе|адрес))\s+"
+    r"(?P<query>[^?!.]{2,80})[?!.]*\s*$"
+)
+
+
+def handle_deal_search_phrase(token, chat_id, text):
+    """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
+    match = DEAL_SEARCH_PHRASE_RE.match(text or "")
+    if not match:
+        return False
+    query = match.group("query").strip(" «»\"")
+    action = "search_address" if match.group("address") else "search_client"
+    update_deal_ui_state(chat_id, pending=None)
+    send_deal_list(token, chat_id, {"action": action, "query": query, "limit": 15})
     return True
 
 
@@ -4902,7 +4929,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if pending == "invoice_menu" and re.fullmatch(r"6\.4\.\d+", value):
         result = run_contract_invoice({"action": "preview", "deal_id": str(deal_id), "clause": value})
         if not result.get("ok"):
-            send_message(token, chat_id, f"Не удалось подготовить счёт: {result.get('error')}", INVOICE_MENU_KEYBOARD)
+            send_message(token, chat_id, f"Не удалось подготовить счёт: {invoice_error_text(result.get('error'))}", INVOICE_MENU_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin="menu")
         send_message(token, chat_id, f"В счёте будет одна строка:\n\n{result['line']}\n\nВыставить счёт?", CONTRACT_INVOICE_CONFIRM_KEYBOARD)
@@ -4927,7 +4954,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             return True
         result = run_contract_invoice({"action": "preview", "deal_id": str(deal_id), "clause": value})
         if not result.get("ok"):
-            send_message(token, chat_id, f"Не удалось подготовить счёт: {result.get('error')}", CONTRACT_INVOICE_CLAUSE_KEYBOARD)
+            send_message(token, chat_id, f"Не удалось подготовить счёт: {invoice_error_text(result.get('error'))}", CONTRACT_INVOICE_CLAUSE_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin=None)
         send_message(
@@ -5022,9 +5049,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if pending == "get_number":
             match = re.search(r"\d+", value)
             if not match:
-                send_message(token, chat_id, "Не вижу номера сделки. Введите только цифры.", DEALS_KEYBOARD)
-            else:
-                select_deal(token, chat_id, match.group(0))
+                update_deal_ui_state(chat_id, pending="get_number")
+                send_message(token, chat_id, "Не вижу номера сделки. Введите только цифры.",
+                             {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True})
+            elif not select_deal(token, chat_id, match.group(0)):
+                update_deal_ui_state(chat_id, pending="get_number")
         else:
             send_deal_list(token, chat_id, {"action": pending, "query": value, "limit": 15})
         return True
@@ -5257,7 +5286,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value == "📋 Общий счёт по спецификации" and deal_id and pending == "invoice_menu":
         preview=run_contract_invoice({'action':'preview_full','deal_id':str(deal_id)})
         if not preview.get('ok'):
-            send_message(token,chat_id,'Счёт не подготовлен: '+str(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
+            send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
         update_deal_ui_state(chat_id, pending="invoice_full_confirm",invoice_full_preview=preview)
         send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
@@ -7966,6 +7995,21 @@ def send_megaplan_invoice_by_id(token, chat_id, invoice_id, keyboard=INVOICE_MEN
     return True
 
 
+def invoice_error_text(error):
+    """CRM refusals with the next step a person can take right here."""
+    error = str(error or "неизвестная ошибка")
+    folded = error.casefold()
+    if "плательщик" in folded:
+        return error + ("\n\nДобавьте плательщика: напишите «Смени плательщика на …» или откройте "
+                        "«📑 Работа с договором» → «🏢 Добавить плательщика» и пришлите карточку реквизитов.")
+    if "договор" in folded:
+        return error + ("\n\nСчёт по пункту 6.4 выставляется по подписанному договору в сделке. "
+                        "Подготовьте договор в «📑 Работа с договором» или выставите «📋 Общий счёт по спецификации».")
+    if "позици" in folded:
+        return error + "\n\nДобавьте позиции в сделку в Мегаплане и повторите."
+    return error
+
+
 def create_and_send_contract_invoice(token, chat_id, deal_id, clause, keyboard=INVOICE_MENU_KEYBOARD):
     result = run_contract_invoice({"action": "create", "deal_id": str(deal_id), "clause": clause})
     if not result.get("ok"):
@@ -7981,7 +8025,7 @@ def create_and_send_full_invoice(token, chat_id, deal_id, keyboard=INVOICE_MENU_
     if str(preview.get('deal_id'))!=str(deal_id):
         preview=run_contract_invoice({'action':'preview_full','deal_id':str(deal_id)})
     if not preview.get('ok'):
-        send_message(token,chat_id,'Счёт не подготовлен: '+str(preview.get('error')),keyboard); return False
+        send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),keyboard); return False
     result = run_contract_invoice({"action": "create_full", "deal_id": str(deal_id),'expected_fingerprint':preview.get('fingerprint')})
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось выставить общий счёт: {result.get('error')}", keyboard)
@@ -8783,6 +8827,12 @@ def _start_human_executor(token,chat_id,deal_id,query=None,kind=human_intents.AS
         return True
     result=run_deal_browser({'action':'search_employees','query':query})
     employees=result.get('employees') or [] if result.get('ok') else []
+    if result.get('ok') and not employees:
+        # «назначь Смирнова», «поставь Деревянко Сергея»: retry with word stems.
+        for stem in human_intents.name_stems(query):
+            retry=run_deal_browser({'action':'search_employees','query':stem})
+            employees=retry.get('employees') or [] if retry.get('ok') else []
+            if employees:break
     if not result.get('ok'):
         send_message(token,chat_id,'Поиск сотрудника не выполнен: '+str(result.get('error')));return True
     if not employees:
@@ -9350,6 +9400,8 @@ def main():
             if is_owner and handle_explicit_deal_comparison(token, chat_id, text):
                 return
             if is_owner and handle_explicit_deal_read(token, chat_id, text):
+                return
+            if is_owner and handle_deal_search_phrase(token, chat_id, text):
                 return
             if handle_current_execution_ui(token, chat_id, text):
                 return
