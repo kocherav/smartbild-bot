@@ -16,11 +16,17 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parent
+BRIDGE = ROOT.parent.parent
+PYTHON = os.environ.get('QA_PYTHON', '/home/kocher.av/.report-venv/bin/python')
 DEFAULT_STATE = ROOT / 'qa-agent-state.json'
 DEFAULT_EVIDENCE = ROOT / 'qa-agent-evidence'
-FULL_GATE = ['/home/kocher.av/.report-venv/bin/python', str(ROOT / 'quality_gate.py'), '--run']
+FULL_GATE = [PYTHON, str(ROOT / 'quality_gate.py'), '--run']
 BROWSER_GATE = ['/usr/bin/python3', '/home/kocher.av/hogart-scraper/dashboard/tests/run_browser_checks.py']
 HUMAN_JOURNEYS = ROOT / 'HUMAN_JOURNEYS.json'
+HUMAN_FIXTURES = ROOT / 'human-fixtures'
+# A person operating the real bridge: stand suites plus the real-CRM snapshot suite.
+HUMAN_MODULES = ['test_human_operator_journey', 'test_human_journeys', 'test_human_journeys_edge',
+                 'human_live_journeys']
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
 CRITICAL_WORDS = {
@@ -74,7 +80,10 @@ def report_failures(report):
     failures = []
     for case in report.get('cases') or []:
         if case.get('status') in {'failed', 'error', 'skipped', 'missing', 'blocked'}:
-            failures.append({'id': str(case.get('id') or 'unknown'), 'status': case.get('status')})
+            failure = {'id': str(case.get('id') or 'unknown'), 'status': case.get('status')}
+            # Explorer findings carry the judge's own wording and priority.
+            failure.update({key: case[key] for key in ('title', 'severity') if case.get(key)})
+            failures.append(failure)
     for event in report.get('blocked_events') or []:
         failures.append({'id': 'isolation:' + str(event.get('event') or 'unknown'), 'status': 'blocked'})
     if not failures and not report.get('successful', False):
@@ -119,23 +128,41 @@ def human_coverage_failures(path=HUMAN_JOURNEYS, report=None):
         if hashlib.sha256(payload).hexdigest() != provenance['sha256']:
             failures.append(_coverage_failure(journey_id, 'evidence-hash-mismatch'))
             continue
-        case_id = str(item.get('test_case') or '')
-        case = cases.get(case_id)
-        if not case or case.get('status') != 'passed':
-            failures.append(_coverage_failure(journey_id, 'case-not-passed'))
-            continue
-        transcript = case.get('transcript') or []
-        actors = {event.get('actor') for event in transcript}
-        if not {'tester', 'bot'}.issubset(actors):
-            failures.append(_coverage_failure(journey_id, 'dialogue-missing'))
-            continue
-        observations = case.get('observations') or []
-        if not observations or any(x.get('verdict') != 'passed' for x in observations):
-            failures.append(_coverage_failure(journey_id, 'readback-missing'))
+        case_ids = [str(x) for x in item.get('test_cases') or [item.get('test_case') or '']]
+        for case_id in case_ids:
+            case = cases.get(case_id)
+            if not case or case.get('status') != 'passed':
+                failures.append(_coverage_failure(journey_id, 'case-not-passed'))
+                break
+            transcript = case.get('transcript') or []
+            actors = {event.get('actor') for event in transcript}
+            if not {'tester', 'bot'}.issubset(actors):
+                failures.append(_coverage_failure(journey_id, 'dialogue-missing'))
+                break
+            observations = case.get('observations') or []
+            if not observations or any(x.get('verdict') != 'passed' for x in observations):
+                failures.append(_coverage_failure(journey_id, 'readback-missing'))
+                break
     return failures
 
 
+EXTERNAL_PREFIXES = ('decision:', 'coverage:HUMAN-', 'infra:')
+
+
+def is_external(failure):
+    """Owner decisions, missing real-data evidence and infrastructure are not code work."""
+    return str(failure.get('id') or '').startswith(EXTERNAL_PREFIXES)
+
+
+def task_kind(task):
+    failures = task.get('failures') or []
+    return 'external' if failures and all(is_external(f) for f in failures) else 'technical'
+
+
 def severity(failures):
+    stated = sorted(item['severity'] for item in failures if item.get('severity') in ('P1', 'P2', 'P3'))
+    if stated:
+        return stated[0]
     if any(item['status'] == 'missing' for item in failures):
         return 'P1'
     joined = ' '.join(item['id'].casefold() for item in failures)
@@ -181,15 +208,35 @@ class Registry:
         return load_json(self.path, lambda: {'version': 1, 'runs': [], 'tasks': []})
 
     def record(self, profile, evidence, report, protocol=None):
+        """Store a run; technical defects and external prerequisites become separate tasks.
+
+        A missing CRM snapshot or an owner decision must never hold back a real
+        code defect found in the same run, and must never be sent to a developer.
+        """
+        run, tasks = self.record_all(profile, evidence, report, protocol)
+        return run, (tasks[0] if tasks else None)
+
+    def record_all(self, profile, evidence, report, protocol=None):
         state = self.read()
         failures = report_failures(report)
         run = {'id': 'RUN-' + hashlib.sha256((utc_now() + str(evidence)).encode()).hexdigest()[:12],
                'at': utc_now(), 'profile': profile, 'evidence': str(evidence),
                'successful': not failures, 'tests': report.get('tests'), 'failures': failures}
         state['runs'].append(run)
-        task = None
-        if failures:
-            digest = fingerprint(profile, failures)
+        groups = {'technical': [f for f in failures if not is_external(f)],
+                  'external': [f for f in failures if is_external(f)]}
+        tasks = []
+        for kind, group in groups.items():
+            if not group:
+                # A clean group closes only this profile's tasks of the same kind
+                # that were waiting for exactly this verification.
+                for candidate in state['tasks']:
+                    if (candidate.get('profile') == profile and task_kind(candidate) == kind and
+                            candidate.get('status') in {'awaiting_verification', 'waiting_input'}):
+                        candidate.update(status='closed', verified_at=run['at'],
+                                         verification_run=run['id'], verification_evidence=str(evidence))
+                continue
+            digest = fingerprint(profile, group)
             task = next((item for item in state['tasks'] if item['fingerprint'] == digest and
                          item['status'] in {'ready', 'approved', 'dispatched', 'fixing',
                                             'awaiting_verification', 'waiting_input'}), None)
@@ -206,20 +253,13 @@ class Registry:
                     task['last_verification_run'] = run['id']
             else:
                 task = {'id': 'QA-' + digest.upper(), 'fingerprint': digest, 'status': 'ready',
-                        'severity': severity(failures), 'profile': profile, 'failures': failures,
+                        'severity': severity(group), 'profile': profile, 'failures': group,
                         'evidence': str(evidence), 'created_at': run['at'], 'last_seen_at': run['at'],
                         'occurrences': 1, 'protocol': str(protocol) if protocol else None}
                 state['tasks'].append(task)
-        else:
-            # A green rerun closes only tasks for the profile that was actually
-            # exercised.  Other profiles and in-flight developer work remain intact.
-            for candidate in state['tasks']:
-                if (candidate.get('profile') == profile and
-                        candidate.get('status') in {'awaiting_verification', 'waiting_input'}):
-                    candidate.update(status='closed', verified_at=run['at'],
-                                     verification_run=run['id'], verification_evidence=str(evidence))
+            tasks.append(task)
         atomic_save(self.path, state)
-        return run, task
+        return run, tasks
 
     def task(self, task_id):
         return next((item for item in self.read()['tasks'] if item['id'] == task_id), None)
@@ -273,17 +313,22 @@ def write_human_protocol(report, target):
 
 def inspect_receipt(profile, receipt, registry):
     report = load_json(receipt, dict)
-    protocol = write_human_protocol(report, Path(receipt).with_name('conversation-protocol.md')) if profile == 'human' else None
-    run, task = registry.record(profile, receipt, report, protocol=protocol)
-    if task:
-        assignment = Path(receipt).with_name('developer-assignment.md')
-        assignment.write_text(developer_prompt(task), encoding='utf-8')
-        task['developer_assignment'] = str(assignment)
+    protocol = (write_human_protocol(report, Path(receipt).with_name('conversation-protocol.md'))
+                if profile in ('human', 'explore') else None)
+    run, tasks = registry.record_all(profile, receipt, report, protocol=protocol)
+    if tasks:
         state = registry.read()
-        stored = next(item for item in state['tasks'] if item['id'] == task['id'])
-        stored['developer_assignment'] = str(assignment)
+        for task in tasks:
+            suffix = '' if task is tasks[0] else '-' + task_kind(task)
+            assignment = Path(receipt).with_name(f'developer-assignment{suffix}.md')
+            assignment.write_text(developer_prompt(task), encoding='utf-8')
+            task['developer_assignment'] = str(assignment)
+            stored = next(item for item in state['tasks'] if item['id'] == task['id'])
+            stored['developer_assignment'] = str(assignment)
         atomic_save(registry.path, state)
-    return {'run': run, 'task': task, 'developer_prompt': developer_prompt(task) if task else None}
+    task = tasks[0] if tasks else None
+    return {'run': run, 'task': task, 'tasks': tasks,
+            'developer_prompt': developer_prompt(task) if task else None}
 
 
 def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):
@@ -291,20 +336,23 @@ def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):
         command = FULL_GATE
     elif profile == 'browser':
         command = BROWSER_GATE
+    elif profile == 'explore':
+        command = [PYTHON, str(BRIDGE / 'human_qa_explorer.py'), '--output']
     else:
-        command = ['/home/kocher.av/.report-venv/bin/python', str(ROOT / 'offline_tests.py'),
-                   'test_human_operator_journey', '--output']
+        command = [PYTHON, str(ROOT / 'offline_tests.py'), *HUMAN_MODULES, '--output']
     stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     # Human and full profiles are intentionally launched in the same scheduler
     # tick.  A profile/nonce suffix prevents one run from stealing the other's
     # evidence directory and losing a daily execution after it was claimed.
     folder = Path(evidence_root) / f'{stamp}-{profile}-{uuid.uuid4().hex[:8]}'
     folder.mkdir(parents=True, exist_ok=False)
-    if profile == 'human':
+    if profile in ('human', 'explore'):
         command = command + [str(folder)]
     elif profile == 'browser':
         command = command + ['--evidence', str(folder / 'browser-audit.json')]
-    completed = runner(command, cwd=ROOT, capture_output=True, text=True)
+    environment = {**os.environ, 'QA_HUMAN_REGISTRY': str(HUMAN_JOURNEYS)}
+    completed = runner(command, cwd=BRIDGE if profile == 'explore' else ROOT, capture_output=True,
+                       text=True, env=environment)
     execution = {'profile': profile, 'command': command, 'returncode': completed.returncode,
                  'stdout': completed.stdout[-20000:], 'stderr': completed.stderr[-20000:]}
     atomic_save(folder / 'execution.json', execution)
@@ -323,10 +371,23 @@ def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):
         else:
             cases = [{'id': 'dashboard:browser_runner', 'status': 'failed'}]
         report = {'successful': completed.returncode == 0, 'tests': None, 'cases': cases}
+    elif profile == 'explore':
+        report_path = folder / 'LAST_TEST_RUN.json'
+        report = load_json(report_path, dict) if report_path.exists() else {
+            'successful': False, 'cases': [{'id': 'infra:explore-no-receipt', 'status': 'blocked'}]}
     else:
         report_path = folder / 'LAST_TEST_RUN.json'
         report = load_json(report_path, dict) if report_path.exists() else {
             'successful': False, 'cases': [{'id': 'human:no_receipt', 'status': 'error'}]}
+        snapshot_problem = live_snapshot_problem()
+        if snapshot_problem:
+            # Real-data journeys cannot run without a snapshot.  That is an
+            # infrastructure prerequisite for the owner, not a code defect.
+            for case in report.get('cases') or []:
+                if str(case.get('id', '')).startswith('human_live_journeys.') and case.get('status') != 'passed':
+                    case['id'] = 'infra:crm-snapshot:' + case['id'].rsplit('.', 1)[-1]
+                    case['status'] = 'blocked'
+                    case['reason'] = snapshot_problem
         gaps = human_coverage_failures(report=report)
         if gaps:
             report['successful'] = False
@@ -335,12 +396,32 @@ def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):
     return folder / 'receipt.json'
 
 
+def live_snapshot_problem(registry_path=HUMAN_JOURNEYS):
+    import sys
+    sys.path.insert(0, str(BRIDGE))
+    import human_fixtures
+    return human_fixtures.verified_snapshot(registry_path)[1]
+
+
+def capture_fixture(deal_ids, registry_path=HUMAN_JOURNEYS, folder=HUMAN_FIXTURES):
+    """Read-only snapshot of real deals; every automated journey then points at it."""
+    import sys
+    sys.path.insert(0, str(BRIDGE))
+    import human_fixtures
+    stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    target = Path(folder) / f'crm-{stamp}.json'
+    snapshot, digest = human_fixtures.capture(deal_ids, target)
+    human_fixtures.register(registry_path, target, digest, snapshot['captured_at'])
+    return {'snapshot': str(target), 'sha256': digest, 'deals': [d['deal']['id'] for d in snapshot['deals']],
+            'problems': snapshot['problems']}
+
+
 def main():
     parser = argparse.ArgumentParser(description='SmartBild QA agent')
     parser.add_argument('--state', type=Path, default=DEFAULT_STATE)
     sub = parser.add_subparsers(dest='action', required=True)
     run_parser = sub.add_parser('run')
-    run_parser.add_argument('--profile', choices=('full', 'browser', 'human'), default='human')
+    run_parser.add_argument('--profile', choices=('full', 'browser', 'human', 'explore'), default='human')
     inspect_parser = sub.add_parser('inspect')
     inspect_parser.add_argument('receipt', type=Path)
     inspect_parser.add_argument('--profile', default='full')
@@ -349,12 +430,16 @@ def main():
     dispatch_parser = sub.add_parser('dispatch')
     dispatch_parser.add_argument('task_id')
     dispatch_parser.add_argument('command', nargs=argparse.REMAINDER)
+    capture_parser = sub.add_parser('capture', help='снять read-only снимок CRM для human-маршрутов')
+    capture_parser.add_argument('--deal', action='append', required=True, help='номер сделки (можно несколько)')
     sub.add_parser('list')
     args = parser.parse_args()
     registry = Registry(args.state)
     if args.action == 'run':
         receipt = run_profile(args.profile)
         result = inspect_receipt(args.profile, receipt, registry)
+    elif args.action == 'capture':
+        result = capture_fixture(args.deal)
     elif args.action == 'inspect':
         result = inspect_receipt(args.profile, args.receipt, registry)
     elif args.action == 'prompt':

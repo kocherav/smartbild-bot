@@ -183,3 +183,66 @@ class QaAgentTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HumanProfileTests(unittest.TestCase):
+    def test_every_listed_case_of_a_journey_must_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'journeys.json'
+            evidence = Path(temporary) / 'fixture.json'
+            evidence.write_text('{}')
+            provenance = {'source': 'crm-readonly', 'captured_at': 'x', 'evidence': 'fixture.json',
+                          'sha256': hashlib.sha256(evidence.read_bytes()).hexdigest()}
+            path.write_text(json.dumps({'journeys': [{'id': 'INVOICE', 'automated': True,
+                'test_cases': ['h.issue', 'h.get'], 'fixture_provenance': provenance}]}))
+            good = {'status': 'passed', 'transcript': [{'actor': 'tester'}, {'actor': 'bot'}],
+                    'observations': [{'verdict': 'passed'}]}
+            both = {'cases': [{'id': 'h.issue', **good}, {'id': 'h.get', **good}]}
+            self.assertEqual([], qa_agent.human_coverage_failures(path, both))
+            one = {'cases': [{'id': 'h.issue', **good}]}
+            self.assertEqual([{'id': 'coverage:INVOICE:case-not-passed', 'status': 'missing'}],
+                             qa_agent.human_coverage_failures(path, one))
+
+    def test_human_profile_runs_all_human_suites_with_the_registry(self):
+        calls = []
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return Mock(returncode=1, stdout='', stderr='')
+        with tempfile.TemporaryDirectory() as temporary:
+            qa_agent.run_profile('human', evidence_root=temporary, runner=runner)
+        command, kwargs = calls[0]
+        for module in ('test_human_journeys', 'test_human_journeys_edge', 'human_live_journeys'):
+            self.assertIn(module, command)
+        self.assertEqual(str(qa_agent.HUMAN_JOURNEYS), kwargs['env']['QA_HUMAN_REGISTRY'])
+
+    def test_missing_snapshot_does_not_hide_a_code_defect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / 'receipt.json'
+            receipt.write_text(json.dumps({'successful': False, 'cases': [
+                {'id': 'test_human_journeys.InvoiceJourneys.test_get_existing_invoice', 'status': 'failed'},
+                {'id': 'infra:crm-snapshot:test_read_deal', 'status': 'blocked'},
+                {'id': 'coverage:HUMAN-INVOICE:unverified-fixture', 'status': 'missing'}]}))
+            registry = qa_agent.Registry(Path(temporary) / 'state.json')
+            result = qa_agent.inspect_receipt('human', receipt, registry)
+            kinds = {qa_agent.task_kind(task): task for task in result['tasks']}
+            self.assertEqual({'technical', 'external'}, set(kinds))
+            self.assertEqual(['test_human_journeys.InvoiceJourneys.test_get_existing_invoice'],
+                             [f['id'] for f in kinds['technical']['failures']])
+            self.assertEqual(result['task']['id'], kinds['technical']['id'])
+            # Next run: the code defect is fixed, the snapshot is still missing.
+            registry_state = registry.read()
+            next(t for t in registry_state['tasks'] if t['id'] == kinds['technical']['id'])['status'] = 'awaiting_verification'
+            qa_agent.atomic_save(registry.path, registry_state)
+            receipt.write_text(json.dumps({'successful': False, 'cases': [
+                {'id': 'infra:crm-snapshot:test_read_deal', 'status': 'blocked'},
+                {'id': 'coverage:HUMAN-INVOICE:unverified-fixture', 'status': 'missing'}]}))
+            qa_agent.inspect_receipt('human', receipt, registry)
+            self.assertEqual('closed', registry.task(kinds['technical']['id'])['status'])
+
+    def test_repository_registry_is_consistent(self):
+        registry = json.loads(qa_agent.HUMAN_JOURNEYS.read_text(encoding='utf-8'))
+        ids = [item['id'] for item in registry['journeys']]
+        self.assertEqual(len(ids), len(set(ids)))
+        for item in registry['journeys']:
+            if item.get('automated'):
+                self.assertTrue(item.get('test_cases'), item['id'])

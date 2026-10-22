@@ -119,6 +119,23 @@ class QaHandoffTests(unittest.TestCase):
             self.assertFalse(bridge.run_qa_autopilot('token', 'owner', 'human'))
         developer.assert_not_called()
 
+    def test_autopilot_repairs_code_defect_even_when_snapshot_is_missing(self):
+        external = {'id': 'QA-EXT', 'status': 'ready',
+                    'failures': [{'id': 'coverage:HUMAN-INVOICE:unverified-fixture', 'status': 'missing'}]}
+        technical = {'id': 'QA-TECH', 'status': 'ready',
+                     'failures': [{'id': 'test_human_journeys.InvoiceJourneys.test_x', 'status': 'failed'}]}
+        broken = {'ok': True, 'task': technical, 'tasks': [technical, external]}
+        later = {'ok': True, 'task': external, 'tasks': [external]}
+        with patch.object(bridge.qa_autopilot, 'run', side_effect=[broken, later]), \
+             patch.object(bridge.qa_autopilot, 'defer_external') as defer, \
+             patch.object(bridge.qa_autopilot, 'approve_technical', return_value={'id': 'QA-TECH', 'status': 'approved'}), \
+             patch.object(bridge, 'process_qa_developer_task', return_value=True) as developer, \
+             patch.object(bridge.safe_reload, 'pending_reviewed', return_value=False), \
+             patch.object(bridge, 'send_message'):
+            self.assertFalse(bridge.run_qa_autopilot('token', 'owner', 'human'))
+        developer.assert_called_once_with('token', 'owner', 'QA-TECH')
+        self.assertIn(unittest.mock.call(external), defer.call_args_list)
+
     def test_autopilot_does_not_dispatch_missing_human_evidence(self):
         task = {'ok': True, 'task': {'id': 'QA-A1', 'status': 'ready',
                 'failures': [{'id': 'coverage:HUMAN-DEAL-CREATE', 'status': 'failed'}]}}

@@ -56,3 +56,7 @@ reports/
 .DS_Store
 .idea/
 .vscode/
+
+# Human QA: real-CRM snapshots and run evidence contain client data
+telegram-bridge/docs/architecture/human-fixtures/
+telegram-bridge/docs/architecture/qa-agent-evidence/

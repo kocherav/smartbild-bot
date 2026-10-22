@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "description": "Обязательные человеческие маршруты. Маршрут засчитывается, только если его тест прошёл в human-профиле на снимке реального Мегаплана (crm-readonly), снятом командой qa_agent.py capture. Стендовые наборы (stand_cases) проверяют те же маршруты на синтетических данных и граничных случаях; их падение — дефект, их успех — не подтверждение на живых данных.",
+  "journeys": [
+    {
+      "id": "HUMAN-DEAL-READ",
+      "title": "Найти сделку и прочитать из неё информацию",
+      "automated": true,
+      "test_cases": ["human_live_journeys.LiveSnapshotJourneys.test_read_deal"],
+      "stand_cases": ["test_human_journeys.DealInformationJourneys", "test_human_journeys_edge.DealReadingVariants"]
+    },
+    {
+      "id": "HUMAN-PAYER",
+      "title": "Сменить плательщика в сделке",
+      "automated": true,
+      "test_cases": ["human_live_journeys.LiveSnapshotJourneys.test_change_payer"],
+      "stand_cases": ["test_human_journeys.PayerJourneys", "test_human_journeys_edge.PayerEdgeCases"]
+    },
+    {
+      "id": "HUMAN-INVOICE",
+      "title": "Выставить счёт и получить существующий счёт",
+      "automated": true,
+      "test_cases": ["human_live_journeys.LiveSnapshotJourneys.test_issue_full_invoice",
+                     "human_live_journeys.LiveSnapshotJourneys.test_get_invoice"],
+      "stand_cases": ["test_human_journeys.InvoiceJourneys", "test_human_journeys_edge.InvoiceEdgeCases"]
+    },
+    {
+      "id": "HUMAN-DEAL-STATUS",
+      "title": "Перевести сделку в другой статус",
+      "automated": true,
+      "test_cases": ["human_live_journeys.LiveSnapshotJourneys.test_move_status"],
+      "stand_cases": ["test_human_journeys.DealStatusJourneys", "test_human_operator_journey.TelegramPollingMechanicsTests"]
+    },
+    {
+      "id": "HUMAN-DEAL-CREATE",
+      "title": "Создать сделку для существующего клиента",
+      "automated": true,
+      "test_cases": ["human_live_journeys.LiveSnapshotJourneys.test_create_deal_for_real_client"],
+      "stand_cases": ["test_human_journeys.DealCreationJourneys", "test_human_journeys_edge.DealCreationVariants"]
+    },
+    {"id": "HUMAN-CONTRACT", "title": "Подготовить договор по сделке", "automated": false},
+    {"id": "HUMAN-PROPOSAL", "title": "Сформировать КП по сделке", "automated": false},
+    {"id": "HUMAN-PROCUREMENT", "title": "Учесть счёт поставщика", "automated": false},
+    {"id": "HUMAN-INSTALLATION", "title": "Передать монтаж и принять отчёт", "automated": false},
+    {"id": "HUMAN-RECOVERY", "title": "Восстановление после сбоя CRM/ИИ и перезапуска", "automated": false},
+    {"id": "HUMAN-DASHBOARD", "title": "Пульт сделок в браузере", "automated": false}
+  ]
+}

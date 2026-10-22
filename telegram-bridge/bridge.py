@@ -3061,7 +3061,7 @@ def format_deal_card(deal):
     executors = ", ".join(deal.get("executors") or []) or "не назначен"
     address = deal.get("address") or "не указан"
     price = deal.get("price")
-    price_text = f"{price:,.2f} ₽".replace(",", " ") if isinstance(price, (int, float)) else "не указана"
+    price_text = f"{bank_money(price)} ₽" if isinstance(price, (int, float)) else "не указана"
     url = deal.get("url") or f"https://cclimat.megaplan.ru/deals/{deal['id']}/card/"
     subject = deal.get("description") or deal.get("name")
     return (
@@ -3191,7 +3191,7 @@ def handle_explicit_deal_read(token, chat_id, text):
                 line_revenue = quantity * sell_price
                 revenue += line_revenue
                 cost += quantity * unit_cost
-                details.append(f"• {quantity:g} × {sell_price:,.2f} ₽ = {line_revenue:,.2f} ₽")
+                details.append(f"• {quantity:g} × {bank_money(sell_price)} ₽ = {bank_money(line_revenue)} ₽")
             if unknown or len(details) != len(ledger):
                 answer += "\n\nПроверка суммы и себестоимости: НЕ ПРОВЕРЕНО — " + "; ".join(unknown)
             else:
@@ -3199,13 +3199,13 @@ def handle_explicit_deal_read(token, chat_id, text):
                 matches = abs(deal_total - revenue) <= 0.01
                 answer += (
                     "\n\nПроверка суммы по позициям:\n" + "\n".join(details) +
-                    f"\nИтого по позициям: {revenue:,.2f} ₽."
-                    f"\nСумма сделки: {deal_total:,.2f} ₽."
+                    f"\nИтого по позициям: {bank_money(revenue)} ₽."
+                    f"\nСумма сделки: {bank_money(deal_total)} ₽."
                     f"\nСовпадает: {'да' if matches else 'нет'}."
-                    f"\nОбщая себестоимость позиций: {cost:,.2f} ₽."
-                    f"\nРазница продажи и себестоимости: {revenue - cost:,.2f} ₽."
+                    f"\nОбщая себестоимость позиций: {bank_money(cost)} ₽."
+                    f"\nРазница продажи и себестоимости: {bank_money(revenue - cost)} ₽."
                     "\nИсточник расчёта: свежие позиции CRM; внешние расходы вне позиций сюда не включены."
-                ).replace(",", " ")
+                )
     send_message(
         token, chat_id,
         answer,
@@ -3265,7 +3265,7 @@ def handle_explicit_deal_comparison(token, chat_id, text):
             f"Сделка №{deal.get('id')}\n"
             f"Клиент: {deal.get('client') or 'не указан'}\n"
             f"Текущий этап: {deal.get('status') or 'не указан'}\n"
-            f"Сумма: {float(deal['price']):,.2f} ₽\n"
+            f"Сумма: {bank_money(deal['price'])} ₽\n"
             f"Позиций: {deal.get('positions_count') if deal.get('positions_count') is not None else 'не указано'}"
         )
     first_total = float(deals[0]["price"])
@@ -3277,10 +3277,10 @@ def handle_explicit_deal_comparison(token, chat_id, text):
         conclusion = "Суммы сделок равны."
     else:
         larger = deals[0] if first_total > second_total else deals[1]
-        conclusion = f"Сумма сделки №{larger.get('id')} больше на {abs(first_total - second_total):,.2f} ₽."
+        conclusion = f"Сумма сделки №{larger.get('id')} больше на {bank_money(abs(first_total - second_total))} ₽."
     answer = ("Сравнение по свежим карточкам Мегаплана:\n\n" +
               "\n\n".join(lines) + "\n\n" + conclusion +
-              "\nНичего не изменено.").replace(",", " ")
+              "\nНичего не изменено.")
     send_message(token, chat_id, answer, DEALS_KEYBOARD)
     return True
 
@@ -8547,11 +8547,15 @@ def run_qa_autopilot(token, chat_id, profile='human'):
         if not result.get('ok'):
             send_message(token, chat_id, '⚠️ AI-тестировщик не завершил прогон: ' + str(result.get('error')))
             return False
-        task = result.get('task')
-        if not task:
+        tasks = result.get('tasks') or ([result['task']] if result.get('task') else [])
+        if not tasks:
             return True
-        deferred = qa_autopilot.defer_external(task)
-        if deferred:
+        # External prerequisites (missing CRM snapshot, owner decision) leave the
+        # developer queue; a code defect found in the same run is still repaired.
+        for item in tasks:
+            qa_autopilot.defer_external(item)
+        task = next((item for item in tasks if qa_autopilot.technical(item)), None)
+        if not task:
             return False
         approved = qa_autopilot.approve_technical(task)
         if not approved:
@@ -8581,7 +8585,8 @@ def nightly_qa_window(moment=None):
 def run_nightly_qa(token, chat_id):
     """Run broad profiles serially so repairs never race each other."""
     completed = []
-    for profile in ('full', 'browser', 'human'):
+    # «explore» is the AI tester playing a manager; its findings wait for the owner.
+    for profile in ('full', 'browser', 'human', 'explore'):
         completed.append(profile)
         run_qa_autopilot(token, chat_id, profile)
         if safe_reload.pending_reviewed(RELOAD_REQUEST_FILE, __file__):

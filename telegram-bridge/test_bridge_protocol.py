@@ -135,8 +135,8 @@ class ProtocolTest(unittest.TestCase):
         fetch.assert_called_once_with('900', force=True)
         answer = send.call_args.args[2]
         self.assertIn('Совпадает: да', answer)
-        self.assertIn('Общая себестоимость позиций: 716 040.00 ₽', answer)
-        self.assertIn('Разница продажи и себестоимости: 42 120.00 ₽', answer)
+        self.assertIn('Общая себестоимость позиций: 716 040,00 ₽', answer)
+        self.assertIn('Разница продажи и себестоимости: 42 120,00 ₽', answer)
 
     def test_compound_read_reports_unverified_when_live_ledger_is_unavailable(self):
         deal = {'id': '900', 'client': 'JetCar', 'status': 'Подписание договора',
@@ -173,7 +173,7 @@ class ProtocolTest(unittest.TestCase):
         answer = send.call_args.args[2]
         self.assertIn('Сделка №900', answer)
         self.assertIn('Сделка №861', answer)
-        self.assertIn('Сумма сделки №861 больше на 6 891 840.00 ₽', answer)
+        self.assertIn('Сумма сделки №861 больше на 6 891 840,00 ₽', answer)
 
     def test_comparison_does_not_guess_when_one_live_read_fails(self):
         responses = [

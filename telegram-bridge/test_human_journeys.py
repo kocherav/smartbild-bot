@@ -65,7 +65,7 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
             yield say('Покажи сделку 990001')
             person.sees('Сделка №990001', 'Тверская', expected='Сделка открыта обычной фразой')
             yield say('Сколько себестоимость по сделке 990001 и совпадает ли сумма?')
-            person.sees('Совпадает: да', 'Общая себестоимость позиций: 72 000',
+            person.sees('Совпадает: да', 'Общая себестоимость позиций: 72 000,00',
                         expected='Бот посчитал сумму и себестоимость по свежим позициям')
         stand = self.play(journey, setup=office)
         self.assertEqual(0, len(stand.model.prompts), 'Чтение сделки не должно уходить в ИИ')

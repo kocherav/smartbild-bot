@@ -17,9 +17,13 @@ HUMAN_POLICY = ROOT / 'docs' / 'architecture' / 'HUMAN_QA_POLICY.json'
 PYTHON = '/home/kocher.av/.report-venv/bin/python'
 
 
+# The explorer drives a real model step by step; it needs a longer bound.
+TIMEOUTS = {'explore': 3 * 3600}
+
+
 def run(profile='human', runner=subprocess.run):
     completed = runner([PYTHON, str(AGENT), 'run', '--profile', profile],
-                       cwd=ROOT, capture_output=True, text=True, timeout=3600)
+                       cwd=ROOT, capture_output=True, text=True, timeout=TIMEOUTS.get(profile, 3600))
     if completed.returncode:
         return {'ok': False, 'error': (completed.stderr or completed.stdout)[-2000:]}
     try:
@@ -38,8 +42,15 @@ def owner_messages_allowed(path=None):
     return policy.get('owner_messages_readonly') is True
 
 
+def reviewable(task):
+    """AI-explorer findings are a model's judgement: the owner decides on handoff."""
+    return any(str(item.get('id') or '').startswith('explore:') for item in task.get('failures') or [])
+
+
 def technical(task, policy_path=None):
     """Only code/test failures are technical; external prerequisites are not."""
+    if reviewable(task):
+        return False
     failures = task.get('failures') or []
     # Permission to use owner messages defines an allowed evidence source.  It
     # does not turn a conversation that has not happened into a code defect.
@@ -60,7 +71,7 @@ def approve_technical(task):
 
 
 def defer_external(task):
-    if not task or technical(task):
+    if not task or technical(task) or reviewable(task):
         return None
     return qa_handoff.defer_external(
         task['id'],

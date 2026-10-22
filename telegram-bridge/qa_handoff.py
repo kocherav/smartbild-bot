@@ -78,7 +78,8 @@ def ready(path=None, include_notified=True):
 
 def summarize(task):
     failures = task.get('failures') or []
-    names = [str(item.get('id') or '').removeprefix('coverage:') for item in failures[:4]]
+    names = [str(item.get('id') or '').removeprefix('coverage:') +
+             (f" — {item['title']}" if item.get('title') else '') for item in failures[:4]]
     more = len(failures) - len(names)
     scope = ', '.join(names) + (f' и ещё {more}' if more > 0 else '')
     return (f"🧪 QA нашёл проблему [{task['id']}]\n"

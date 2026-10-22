@@ -20,8 +20,9 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parent
-PROJECTS = [Path('/home/kocher.av/telegram-bridge'), Path('/home/kocher.av/megaplan-crm'),
-            Path('/home/kocher.av/hogart-scraper'), Path('/home/kocher.av/daichi-scraper')]
+# SMARTBILD_HOME lets a fresh clone run the same isolated gate; production keeps the default.
+HOME = Path(os.environ.get('SMARTBILD_HOME', '/home/kocher.av'))
+PROJECTS = [HOME / 'telegram-bridge', HOME / 'megaplan-crm', HOME / 'hogart-scraper', HOME / 'daichi-scraper']
 
 def main():
     parser = argparse.ArgumentParser()
@@ -46,7 +47,7 @@ def main():
                     names.append(source.stem)
             paths.append(str(target))
         for relative in ('hogart-scraper/finance','hogart-scraper/dashboard','hogart-scraper/dashboard/tests','telegram-bridge/docs/architecture'):
-            project=Path('/home/kocher.av')/relative;target=sandbox/relative
+            project=HOME/relative;target=sandbox/relative
             target.mkdir(parents=True,exist_ok=True)
             for source in project.glob('*.py'):
                 compile(source.read_bytes(),str(source),'exec')
@@ -55,13 +56,13 @@ def main():
                 if source.name.startswith('test_'):names.append(source.stem)
             paths.append(str(target))
         asset_globs={
-            '/home/kocher.av/megaplan-crm':['tax_policies.json'],
-            '/home/kocher.av/megaplan-crm/templates/closing':['*.png'],
-            '/home/kocher.av/megaplan-crm/templates/closing/kocherzhinsky_ip-smartbild-v1':['*.png','*.pdf','*.docx'],
-            '/home/kocher.av/hogart-scraper/dashboard/static':['*.js','*.html','*.css'],
-            '/home/kocher.av/hogart-scraper/dashboard/tests':['*.cjs'],
-            '/home/kocher.av/hogart-scraper/dashboard/deploy':['*.service','*.timer'],
-            '/home/kocher.av/hogart-scraper/finance/deploy':['*.service','*.timer']}
+            str(HOME/'megaplan-crm'):['tax_policies.json'],
+            str(HOME/'megaplan-crm/templates/closing'):['*.png'],
+            str(HOME/'megaplan-crm/templates/closing/kocherzhinsky_ip-smartbild-v1'):['*.png','*.pdf','*.docx'],
+            str(HOME/'hogart-scraper/dashboard/static'):['*.js','*.html','*.css'],
+            str(HOME/'hogart-scraper/dashboard/tests'):['*.cjs'],
+            str(HOME/'hogart-scraper/dashboard/deploy'):['*.service','*.timer'],
+            str(HOME/'hogart-scraper/finance/deploy'):['*.service','*.timer']}
         for folder,patterns in asset_globs.items():
             for pattern in patterns:
                 for source in Path(folder).glob(pattern):source_hashes[str(source)]=hashlib.sha256(source.read_bytes()).hexdigest()

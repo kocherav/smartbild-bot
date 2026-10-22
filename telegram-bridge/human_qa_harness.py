@@ -38,6 +38,34 @@ LOCAL_GENERATORS = {
 _REAL_RUN = subprocess.run
 
 
+def run_script_in_process(path, stdin_text):
+    """Execute a stdin->stdout CLI script in this process.
+
+    The isolated offline runner forbids child processes, so a local generator is
+    executed with redirected standard streams instead.  Returns (rc, out, err).
+    """
+    import contextlib
+    import io
+    import runpy
+    out, err = io.StringIO(), io.StringIO()
+    saved_stdin, saved_path = sys.stdin, list(sys.path)
+    sys.stdin = io.StringIO(stdin_text)
+    sys.path.insert(0, str(Path(path).parent))
+    code = 0
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            runpy.run_path(str(path), run_name='__main__')
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except Exception as exc:  # the generator's own failure is a result, not a stand crash
+        err.write(f'{type(exc).__name__}: {exc}')
+        code = 1
+    finally:
+        sys.stdin = saved_stdin
+        sys.path[:] = saved_path
+    return code, out.getvalue(), err.getvalue()
+
+
 class JourneyStop(BaseException):
     """Ends bridge.main() when the scripted person has nothing more to do."""
 
@@ -677,10 +705,7 @@ class Stand:
             return done(0, json.dumps({'ok': sent}))
         script = next((Path(a).name for a in argv[1:] if a.endswith('.py')), None)
         if script in LOCAL_GENERATORS:
-            completed = _REAL_RUN([sys.executable, str(LOCAL_GENERATORS[script])], input=input,
-                                  capture_output=True, text=True, timeout=60,
-                                  cwd=str(LOCAL_GENERATORS[script].parent))
-            return done(completed.returncode, completed.stdout, completed.stderr)
+            return done(*run_script_in_process(LOCAL_GENERATORS[script], input or ''))
         if script:
             position = next(i for i, a in enumerate(argv) if a.endswith('.py'))
             extra = [a for a in argv[position + 1:] if not a.startswith('-')]
@@ -712,6 +737,9 @@ class Stand:
         import invoice_tasks
         import decision_channel
         self.uploads = {}
+        # The owner has used the bot before: Telegram keeps its persistent menu.
+        if not self.telegram.bottom:
+            self.telegram.bottom = _labels(bridge.MAIN_KEYBOARD)
         self.journey = journey(self.operator)
         self.journey_started = False
         state = self.root / 'state'
@@ -783,6 +811,8 @@ class Stand:
             # Periodic watchers are out of scope: a person's journey is the input.
             patch.object(bridge, 'run_singleton_background_job'),
             patch.object(bridge, 'show_qa_findings'),
+            patch.object(bridge.periodic_schedule, 'claim', return_value=False),
+            patch.object(bridge.periodic_schedule, 'claim_daily', return_value=False),
             patch.object(bridge.socket, 'create_connection',
                          side_effect=lambda *a, **k: _Connection() if self.crm.reachable else (_ for _ in ()).throw(OSError('down'))),
             patch.object(installer_onboarding, 'members', return_value=set()),

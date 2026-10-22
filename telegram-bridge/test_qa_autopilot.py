@@ -20,14 +20,22 @@ class AutopilotTest(unittest.TestCase):
     def test_night_profiles_are_serial_and_stop_for_reload(self):
         calls=[]
         with patch.object(bridge,'run_qa_autopilot',side_effect=lambda token,chat,profile:calls.append(profile)), \
-             patch.object(bridge.safe_reload,'pending_reviewed',side_effect=[False,False,False]):
-            self.assertEqual(['full','browser','human'],bridge.run_nightly_qa('t','c'))
-        self.assertEqual(['full','browser','human'],calls)
+             patch.object(bridge.safe_reload,'pending_reviewed',side_effect=[False,False,False,False]):
+            self.assertEqual(['full','browser','human','explore'],bridge.run_nightly_qa('t','c'))
+        self.assertEqual(['full','browser','human','explore'],calls)
         calls.clear()
         with patch.object(bridge,'run_qa_autopilot',side_effect=lambda token,chat,profile:calls.append(profile)), \
              patch.object(bridge.safe_reload,'pending_reviewed',return_value=True):
             self.assertEqual(['full'],bridge.run_nightly_qa('t','c'))
         self.assertEqual(['full'],calls)
+
+    def test_explorer_findings_wait_for_owner_review(self):
+        task = {'id': 'QA-E', 'status': 'ready', 'failures': [
+            {'id': 'explore:payer-voice', 'status': 'failed', 'title': 'Бот не понял голосовую фразу', 'severity': 'P2'}]}
+        self.assertFalse(qa_autopilot.technical(task))
+        self.assertIsNone(qa_autopilot.defer_external(task))
+        self.assertIsNone(qa_autopilot.approve_technical(task))
+        self.assertIn('Бот не понял голосовую фразу', qa_autopilot.qa_handoff.summarize(task))
 
     def test_runner_receipt_is_parsed(self):
         runner = Mock(return_value=Mock(returncode=0, stdout=json.dumps({'run': {'id': 'R'}, 'task': None}), stderr=''))
