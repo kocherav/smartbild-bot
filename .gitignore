@@ -60,3 +60,7 @@ reports/
 # Human QA: real-CRM snapshots and run evidence contain client data
 telegram-bridge/docs/architecture/human-fixtures/
 telegram-bridge/docs/architecture/qa-agent-evidence/
+
+# Runtime state is server-local and must never be deployed from Git.
+telegram-bridge/invoice_tasks.json
+telegram-bridge/watcher_schedule.json
