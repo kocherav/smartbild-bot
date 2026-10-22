@@ -1,0 +1,31 @@
+[Unit]
+Description=SmartBild private deal dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=kocher.av
+Group=sudo
+WorkingDirectory=/home/kocher.av/hogart-scraper/dashboard
+ExecStart=/usr/bin/python3 /home/kocher.av/hogart-scraper/dashboard/server.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DASHBOARD_ORIGIN=https://claude.smartbild.su
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/kocher.av/hogart-scraper/incoming /home/kocher.av/hogart-scraper/dashboard /home/kocher.av/telegram-bridge/.env /home/kocher.av/megaplan-crm /home/kocher.av/hogart-scraper/finance
+BindPaths=/home/kocher.av/hogart-scraper/dashboard/data /home/kocher.av/hogart-scraper/finance/data
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

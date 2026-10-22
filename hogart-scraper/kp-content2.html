@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+@page {
+  size: A4;
+  margin: 46mm 20mm 32mm 20mm;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 10pt;
+  line-height: 1.48;
+  color: #1c2126;
+  margin: 0;
+}
+.date { margin-bottom: 10pt; }
+.greeting { font-weight: 700; margin: 4pt 0 10pt 0; }
+p { margin: 5pt 0; text-align: justify; }
+h2 { font-size: 11pt; margin: 16pt 0 6pt 0; color: #0B0F10; }
+table { width: 100%; border-collapse: collapse; margin: 10pt 0 4pt 0; font-size: 9pt; }
+th, td { border: 0.6pt solid #b9c0c6; padding: 5.5pt 6pt; text-align: left; vertical-align: top; }
+th { background: #0B0F10; color: #fff; font-weight: 700; font-size: 8.4pt; }
+td.num { text-align: right; white-space: nowrap; }
+th.num { text-align: right; }
+tr:nth-child(even) td { background: #f4f6f7; }
+.total { margin-top: 8pt; font-size: 10.5pt; }
+.total b { color: #0B0F10; }
+.clause { margin-top: 10pt; font-size: 8.4pt; color: #4b5560; }
+.stock-note { font-size: 8.6pt; color: #4b5560; margin-top: 4pt; }
+.avail-ok { color: #178a58; font-weight: 700; }
+.avail-wait { color: #b5790a; font-weight: 700; }
+.gallery { display: flex; gap: 10pt; margin-top: 8pt; }
+.gallery .item {
+  flex: 1;
+  border: 0.6pt solid #b9c0c6;
+  border-radius: 4pt;
+  padding: 7pt;
+  text-align: center;
+}
+.gallery img { max-width: 100%; max-height: 70pt; }
+.gallery .caption { font-size: 7.6pt; color: #4b5560; margin-top: 3pt; }
+.sign { margin-top: 18pt; }
+.sign .who { font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="date">Дата: 19.08.2026</div>
+
+<div class="greeting">Уважаемая Алёна!</div>
+
+<p>Предлагаю на Ваше рассмотрение коммерческое предложение от компании «SmartBild» на поставку и монтаж климатического оборудования Haier Flexis Super Match.</p>
+
+<table>
+<tr>
+  <th style="width:44%">Наименование товара</th>
+  <th style="width:10%">Ед. изм.</th>
+  <th style="width:10%">Кол-во</th>
+  <th class="num" style="width:18%">Цена</th>
+  <th class="num" style="width:18%">Сумма</th>
+</tr>
+<tr>
+  <td>Кондиционер Haier Flexis Super Match, 2,5 кВт (AS25S2SF.../1U25S2SM4FA)</td>
+  <td>шт.</td>
+  <td>2</td>
+  <td class="num">85 542,75 руб.</td>
+  <td class="num">171 085,50 руб.</td>
+</tr>
+<tr>
+  <td>Кондиционер Haier Flexis Super Match, 3,5 кВт (AS35S2SF.../1U35S2SM4FA)</td>
+  <td>шт.</td>
+  <td>1</td>
+  <td class="num">97 890,66 руб.</td>
+  <td class="num">97 890,66 руб.</td>
+</tr>
+</table>
+
+<div class="total">Общая стоимость составляет: <b>268 976,16 руб.</b> (двести шестьдесят восемь тысяч девятьсот семьдесят шесть) рублей 16 копеек</div>
+
+<div class="clause">В случае изменения курсов доллара США или ЕВРО к Рублю РФ более чем на 1% в большую сторону с даты выставления данного коммерческого предложения, стоимость отдельных позиций подлежит пересмотру.</div>
+
+<h2>Наличие и доступные цвета</h2>
+
+<table>
+<tr>
+  <th style="width:30%">Мощность</th>
+  <th style="width:35%">Цвет / артикул</th>
+  <th style="width:35%">Наличие на складе (актуально на момент подготовки КП)</th>
+</tr>
+<tr>
+  <td rowspan="3">2,5 кВт</td>
+  <td>Чёрный — AS25S2SF3FA-B/1U25S2SM4FA</td>
+  <td><span class="avail-ok">В наличии</span></td>
+</tr>
+<tr>
+  <td>Белый — AS25S2SF3FA-W/1U25S2SM4FA</td>
+  <td><span class="avail-ok">В наличии</span></td>
+</tr>
+<tr>
+  <td>Золото — AS25S2SF4FA-G/1U25S2SM4FA</td>
+  <td><span class="avail-wait">Под заказ</span></td>
+</tr>
+<tr>
+  <td rowspan="3">3,5 кВт</td>
+  <td>Золото — AS35S2SF4FA-G/1U35S2SM4FA</td>
+  <td><span class="avail-ok">В наличии</span></td>
+</tr>
+<tr>
+  <td>Белый — AS35S2SF3FA-W/1U35S2SM4FA</td>
+  <td><span class="avail-ok">В наличии</span></td>
+</tr>
+<tr>
+  <td>Чёрный — AS35S2SF3FA-B/1U35S2SM4FA</td>
+  <td><span class="avail-wait">Под заказ</span></td>
+</tr>
+</table>
+<div class="stock-note">Цена одинакова для всех цветов внутри каждой мощности — итоговая стоимость КП не меняется от выбора цвета.</div>
+
+<div class="gallery">
+  <div class="item">
+    <img src="/tmp/anons-black.webp">
+    <div class="caption">Чёрный (Black)<br>Flexis Super Match</div>
+  </div>
+  <div class="item">
+    <img src="/tmp/w-candidate.webp">
+    <div class="caption">Белый (White)<br>Flexis Super Match</div>
+  </div>
+  <div class="item">
+    <img src="/tmp/g-candidate.webp">
+    <div class="caption">Золото (Gold)<br>Flexis Super Match</div>
+  </div>
+</div>
+
+<div class="sign">
+  <div>С уважением, технический директор</div>
+  <div class="who">Кочержинский Артём</div>
+  <div class="who">Тел.: +7-909-996-72-71</div>
+</div>
+
+</body>
+</html>

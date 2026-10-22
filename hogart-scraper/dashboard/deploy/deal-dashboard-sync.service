@@ -1,0 +1,28 @@
+[Unit]
+Description=Read-only Megaplan sync for deal dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=smartbild-projects
+Group=smartbild-projects
+WorkingDirectory=/home/kocher.av/hogart-scraper/dashboard
+ExecStart=/usr/bin/python3 /home/kocher.av/hogart-scraper/dashboard/sync.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MEGAPLAN_PRIORITY=background
+TimeoutStartSec=480
+UMask=0007
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/kocher.av/hogart-scraper/dashboard
+BindPaths=/home/kocher.av/megaplan-crm /home/kocher.av/hogart-scraper/dashboard/data
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

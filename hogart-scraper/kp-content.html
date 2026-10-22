@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<style>
+@page {
+  size: A4;
+  margin: 46mm 20mm 32mm 20mm;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 10.3pt;
+  line-height: 1.5;
+  color: #1c2126;
+  margin: 0;
+}
+.date { margin-bottom: 10pt; }
+.greeting { font-weight: 700; margin: 4pt 0 10pt 0; }
+p { margin: 5pt 0; text-align: justify; }
+table { width: 100%; border-collapse: collapse; margin: 14pt 0 4pt 0; font-size: 9.3pt; }
+th, td { border: 0.6pt solid #b9c0c6; padding: 6pt 7pt; text-align: left; vertical-align: top; }
+th { background: #0B0F10; color: #fff; font-weight: 700; font-size: 8.8pt; }
+td.num { text-align: right; white-space: nowrap; }
+th.num { text-align: right; }
+tr:nth-child(even) td { background: #f4f6f7; }
+.total {
+  margin-top: 10pt;
+  font-size: 10.8pt;
+}
+.total b { color: #0B0F10; }
+.clause { margin-top: 14pt; font-size: 8.8pt; color: #4b5560; }
+.gallery {
+  display: flex;
+  gap: 14pt;
+  margin-top: 16pt;
+}
+.gallery .item {
+  flex: 1;
+  border: 0.6pt solid #b9c0c6;
+  border-radius: 4pt;
+  padding: 8pt;
+  text-align: center;
+}
+.gallery img { max-width: 100%; max-height: 85pt; }
+.gallery .caption { font-size: 8pt; color: #4b5560; margin-top: 4pt; }
+.sign { margin-top: 26pt; }
+.sign .who { font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="date">Дата: 19.08.2026</div>
+
+<div class="greeting">Уважаемый(ая) [Имя клиента]!</div>
+
+<p>Предлагаю на Ваше рассмотрение коммерческое предложение от компании «SmartBild» на поставку и монтаж климатического оборудования.</p>
+
+<table>
+<tr>
+  <th style="width:44%">Наименование товара</th>
+  <th style="width:10%">Ед. изм.</th>
+  <th style="width:10%">Кол-во</th>
+  <th class="num" style="width:18%">Цена</th>
+  <th class="num" style="width:18%">Сумма</th>
+</tr>
+<tr>
+  <td>Кондиционер Haier Stellar HP -20°C DC-inverter AS25SHP2HRA-C/1U25SHP2FRA</td>
+  <td>шт.</td>
+  <td>2</td>
+  <td class="num">58 490,10 руб.</td>
+  <td class="num">116 980,20 руб.</td>
+</tr>
+<tr>
+  <td>Кондиционер Haier Quantum Inverter AS25HQJ2HRA-W/1U25HQJ2FRA</td>
+  <td>шт.</td>
+  <td>1</td>
+  <td class="num">41 295,42 руб.</td>
+  <td class="num">41 295,42 руб.</td>
+</tr>
+</table>
+
+<div class="total">Общая стоимость составляет: <b>158 275,62 руб.</b> (сто пятьдесят восемь тысяч двести семьдесят пять) рублей 62 копейки</div>
+
+<div class="clause">В случае изменения курсов доллара США или ЕВРО к Рублю РФ более чем на 1% в большую сторону с даты выставления данного коммерческого предложения, стоимость отдельных позиций подлежит пересмотру.</div>
+
+<div class="gallery">
+  <div class="item">
+    <img src="/tmp/stellar.jpg">
+    <div class="caption">Haier Stellar HP -20°C DC-inverter<br>AS25SHP2HRA-C/1U25SHP2FRA · 2,5 кВт</div>
+  </div>
+  <div class="item">
+    <img src="/tmp/quantum.png">
+    <div class="caption">Haier Quantum Inverter<br>AS25HQJ2HRA-W/1U25HQJ2FRA · 2,5 кВт</div>
+  </div>
+</div>
+
+<div class="sign">
+  <div>С уважением, технический директор</div>
+  <div class="who">Кочержинский Артём</div>
+  <div class="who">Тел.: +7-909-996-72-71</div>
+</div>
+
+</body>
+</html>

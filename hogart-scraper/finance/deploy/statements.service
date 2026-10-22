@@ -1,0 +1,9 @@
+[Unit]
+Description=Read bank statements and rebuild cash ledger
+[Service]
+Type=oneshot
+WorkingDirectory=/home/kocher.av/hogart-scraper/finance
+EnvironmentFile=/home/kocher.av/.config/statements/mail.env
+ExecStart=/usr/bin/python3 /home/kocher.av/hogart-scraper/finance/daily.py
+UMask=0077
+TimeoutStartSec=30min

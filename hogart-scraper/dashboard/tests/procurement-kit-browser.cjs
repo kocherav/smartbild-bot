@@ -1,0 +1,9 @@
+const {chromium}=require('playwright'),assert=require('assert/strict');
+(async()=>{const browser=await chromium.launch({headless:true});for(const width of [390,1400]){
+ const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.addInitScript(()=>sessionStorage.setItem('dashboard_session','fixture'));
+ const base='http://127.0.0.1:8098/deal-dashboard/';await page.goto(base+'supplier-allocation?deal_id=887');await page.locator('[data-document="browser-kit"]').click();await page.locator('summary').filter({hasText:'Сопоставить прежние распределения'}).click();await page.locator('[data-split-history="0:0"]').click();
+ const parts=page.locator('.component-line');assert.equal(await parts.count(),2);
+ for(let i=0;i<2;i++){const el=parts.nth(i);await el.locator('[data-component-field="line_no"]').selectOption(String(i+1));await el.locator('[data-component-field="source_qty"]').fill('1');await el.locator('[data-component-field="covered_qty"]').fill(i?'0':'1');await el.locator('[data-component-field="amount"]').fill(i?'40':'60');await el.locator('[data-component-field="reason"]').fill('Один комплект по спецификации');}
+ const response=page.waitForResponse(r=>r.url().endsWith('/supplier-allocation/document')&&r.request().method()==='POST');await page.locator('#repair-usage').click();const r=await response;assert.equal(r.status(),200);const submitted=r.request().postDataJSON();assert.equal(submitted.action,'repair_usage');assert.equal(submitted.mappings['split:0:0'].length,2);assert.equal(submitted.mappings['split:0:0'][1].covered_qty,'0');
+ assert.deepEqual(errors,[]);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.close();console.log(JSON.stringify({width,kitSplitSubmitted:true,quantityOnce:true,productionWrites:false}));
+}await browser.close();})().catch(e=>{console.error(e);process.exit(1)});

@@ -1,0 +1,58 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+auth.json
+token.json
+*token*.json
+*.pem
+*.key
+
+# Python / Node
+__pycache__/
+*.py[cod]
+node_modules/
+.venv/
+venv/
+
+# Runtime state and business data
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.lock
+*.log
+*.pid
+*.bak
+*.before-*
+offset.txt
+session_id*.txt
+developer_session_id.txt
+*_state.json
+*_registry.json
+*_cache.json
+model_failures.json
+slow_operations.jsonl
+
+# Generated/customer artifacts
+output/
+incoming/
+inbox/
+archive/
+archives/
+evidence/
+generated_reports/
+approved_installer_reports/
+contracts/
+deal_backups/
+deal_proposals/
+installation_files/
+ledger/
+report_sources/
+quarantine/
+pending_sender/
+reports/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

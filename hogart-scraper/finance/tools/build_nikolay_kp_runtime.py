@@ -1,0 +1,8 @@
+import os,subprocess,json
+from pathlib import Path
+D=Path('/home/kocher.av/hogart-scraper/finance/evidence/kp_nikolay_20261007')
+spec={'client':'Николай','date':'07.10.2026','discount_pct':0,'include_install':True,'items':[{'sku':'5U105S2SS5FA','source':'hogart','label':'Наружный блок мульти-сплит-системы Haier 5U105S2SS5FA, 10,5 кВт','qty':1,'line_length_m':15},{'sku':'AS35S2SF3FA-W Multi','source':'hogart','label':'Внутренний блок Haier Flexis Super Match, белый, 3,5 кВт','qty':1},{'sku':'AS25S2SF3FA-W Multi','source':'hogart','label':'Внутренний блок Haier Flexis Super Match, белый, 2,5 кВт','qty':2}],'output':'/home/kocher.av/hogart-scraper/output/КП_Николай_Haier_мультисплит_07.10.2026.pdf'}
+(D/'spec.json').write_text(json.dumps(spec,ensure_ascii=False,indent=2))
+pid=subprocess.check_output(['systemctl','show','telegram-bridge','--property=MainPID','--value'],text=True).strip();env=dict(s.split('=',1) for s in Path('/proc/'+pid+'/environ').read_text().split('\0') if '=' in s)
+code='import json,bridge;print(json.dumps(bridge.run_generate_kp(json.loads('+repr(json.dumps(spec,ensure_ascii=False))+'),"289622514"),ensure_ascii=False))'
+cmd=['nsenter','--target',pid,'--mount','--root','--setuid','993','--setgid','980','--wdns=/home/kocher.av/telegram-bridge','--','/usr/bin/python3','-c',code];r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=240);(D/'runtime_stdout.log').write_text(r.stdout);(D/'runtime_stderr.log').write_text(r.stderr);assert r.returncode==0,r.stderr[-1500:];result=json.loads(r.stdout.strip().splitlines()[-1]);(D/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));assert result.get('ok'),result;print('Generated',result['path'],result['economics_xlsx_path'],result['variants'][0]['total'])
