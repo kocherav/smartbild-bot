@@ -226,6 +226,7 @@ class BridgeHandoffTests(unittest.TestCase):
             self.assertTrue(bridge.poll_handoff('token', 'owner'))
             self.assertEqual(1, developer.call_count)
             self.assertIn('Сделай сверку.', developer.call_args.args[0])
+            self.assertEqual({'workdir': '/repo', 'fresh': True}, developer.call_args.kwargs)
             card = next(markup for text, markup in sent if 'TASK-20261023-02' in text and markup)
             self.assertIn('✅ Выполнить TASK-20261023-02', json.dumps(card, ensure_ascii=False))
             state = hw.read_state()
@@ -238,6 +239,7 @@ class BridgeHandoffTests(unittest.TestCase):
             with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()):
                 self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))
             self.assertEqual(2, developer.call_count)
+            self.assertEqual({'workdir': '/repo', 'fresh': True}, developer.call_args.kwargs)
             self.assertEqual('done', hw.read_state()['tasks']['TASK-20261023-02']['status'])
             self.assertTrue(any('TASK-20261023-02: отчёт разработчика НЕ подтверждён' in text for text, _ in sent),
                             'нет отчёта в GitHub — владелец видит предупреждение, а не «готово»')

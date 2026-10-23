@@ -8693,30 +8693,38 @@ DEVELOPER_SYSTEM_PROMPT = """Разрешены только проекты tele
 отчёт и только после этого сам выполнит необходимый перезапуск."""
 
 
-def _run_developer_codex(session_id, prompt):
-    common = ["--json", "--ignore-rules", "--skip-git-repo-check", "-c", 'approval_policy="never"', "-c", 'sandbox_workspace_write.network_access=true', "-c", 'sandbox_workspace_write.writable_roots=["/home/kocher.av/telegram-bridge", "/home/kocher.av/megaplan-crm", "/home/kocher.av/hogart-scraper", "/home/kocher.av/daichi-scraper"]']
+def _run_developer_codex(session_id, prompt, workdir=None):
+    workdir = str(workdir or BASE_DIR)
+    writable = ["/home/kocher.av/telegram-bridge", "/home/kocher.av/megaplan-crm",
+                "/home/kocher.av/hogart-scraper", "/home/kocher.av/daichi-scraper"]
+    if workdir not in writable:
+        writable.append(workdir)
+    common = ["--json", "--ignore-rules", "--skip-git-repo-check", "-c", 'approval_policy="never"',
+              "-c", 'sandbox_workspace_write.network_access=true', "-c",
+              'sandbox_workspace_write.writable_roots=' + json.dumps(writable)]
     if session_id:
         cmd = [CODEX_BIN, "exec", "resume", *common, "--all",
                "-c", 'sandbox_mode="workspace-write"', session_id, "-"]
         model_prompt = "НОВАЯ ЗАДАЧА РАЗРАБОТЧИКУ:\n" + prompt
     else:
         cmd = [CODEX_BIN, "exec", *common, "--sandbox", "workspace-write",
-               "--cd", BASE_DIR, "-"]
+               "--cd", workdir, "-"]
         model_prompt = DEVELOPER_SYSTEM_PROMPT + "\n\nЗАДАЧА ПОЛЬЗОВАТЕЛЯ:\n" + prompt
-    return subprocess.run(cmd, cwd=BASE_DIR, input=model_prompt,
+    return subprocess.run(cmd, cwd=workdir, input=model_prompt,
                           capture_output=True, text=True, timeout=DEVELOPER_TIMEOUT_SEC)
 
 
-def ask_developer(prompt):
-    session_id = open(DEVELOPER_SESSION_FILE).read().strip() if os.path.exists(DEVELOPER_SESSION_FILE) else ""
+def ask_developer(prompt, workdir=None, fresh=False):
+    session_id = (open(DEVELOPER_SESSION_FILE).read().strip()
+                  if not fresh and os.path.exists(DEVELOPER_SESSION_FILE) else "")
     try:
-        result = _run_developer_codex(session_id, prompt)
+        result = _run_developer_codex(session_id, prompt, workdir)
     except subprocess.TimeoutExpired:
         return "Задача не завершилась за 30 минут. Напишите её повторно или разбейте на несколько этапов."
     if result.returncode != 0:
         print(f"{LOG_PREFIX} developer Codex failed, retrying fresh: {(result.stderr or '')[-1500:]}", file=sys.stderr)
         try:
-            result = _run_developer_codex("", prompt)
+            result = _run_developer_codex("", prompt, workdir)
         except subprocess.TimeoutExpired:
             return "Задача не завершилась за 30 минут. Напишите её повторно или разбейте на несколько этапов."
     if result.returncode != 0:
@@ -8805,7 +8813,8 @@ def process_handoff_task(token, chat_id, task_id):
     bridge_mtime_before = os.path.getmtime(__file__)
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
-        result = ask_developer(handoff_watcher.developer_prompt(task))
+        repository = handoff_watcher.repository()
+        result = ask_developer(handoff_watcher.developer_prompt(task), workdir=str(repository), fresh=True)
     ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     handoff_watcher.finish(task_id, result, ok)
     # The developer's own words are a claim; GitHub is the receipt.
