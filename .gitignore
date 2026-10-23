@@ -43,6 +43,8 @@ evidence/
 generated_reports/
 approved_installer_reports/
 contracts/
+!megaplan-crm/templates/contracts/
+!megaplan-crm/templates/contracts/no-vat-v1.docx
 deal_backups/
 deal_proposals/
 installation_files/
