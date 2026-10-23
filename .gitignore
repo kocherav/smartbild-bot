@@ -64,3 +64,8 @@ telegram-bridge/docs/architecture/qa-agent-evidence/
 # Runtime state is server-local and must never be deployed from Git.
 telegram-bridge/invoice_tasks.json
 telegram-bridge/watcher_schedule.json
+
+# Tester → developer task exchange is versioned (the generic inbox/ rule above
+# is for customer files).
+!handoff/inbox/
+!handoff/outbox/
