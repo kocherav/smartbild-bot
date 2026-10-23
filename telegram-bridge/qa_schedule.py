@@ -49,7 +49,18 @@ def validate(value):
         raise ValueError('explore.missions_per_night: 0–20')
     if set(value['explore'].get('weekly_focus') or {}) - set(WEEKDAYS):
         raise ValueError('explore.weekly_focus: дни mon…sun')
+    handoff = value.get('handoff')
+    if handoff is not None:
+        if not 5 <= int(handoff.get('every_minutes', 15)) <= 24 * 60:
+            raise ValueError('handoff.every_minutes: от 5 минут до суток')
+        if 'release' in (handoff.get('auto_kinds') or []):
+            raise ValueError('handoff.auto_kinds: выпуск всегда подтверждает владелец')
     return value
+
+
+def handoff_config(schedule=None):
+    import handoff_watcher
+    return {**handoff_watcher.DEFAULT_CONFIG, **((schedule or load()).get('handoff') or {})}
 
 
 def load(path=None):
