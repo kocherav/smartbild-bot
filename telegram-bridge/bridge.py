@@ -38,6 +38,7 @@ import human_intents
 import statement_document_context
 import periodic_schedule
 import qa_schedule
+import handoff_watcher
 import legacy_report_ui
 import closing_runtime
 import product_matching_runtime
@@ -3711,6 +3712,18 @@ def handle_global_navigation(token, chat_id, text):
             run_background_job(lambda: process_qa_developer_task(token, chat_id, task['id']), token, chat_id,
                                operation='QA→разработчик:' + task['id'], allow_stale=True)
         return True
+    handoff_decision = re.fullmatch(r"(✅ Выполнить|🚫 Отклонить) (TASK-\d{8}-\d{2})", value)
+    if handoff_decision:
+        record = handoff_watcher.decide(handoff_decision.group(2), handoff_decision.group(1).startswith('✅'))
+        if not record:
+            send_message(token, chat_id, "Это задание уже обработано или изменено.", MAIN_KEYBOARD)
+        elif record['status'] == 'rejected':
+            send_message(token, chat_id, f"{handoff_decision.group(2)} отклонено. Разработчику не передано.", MAIN_KEYBOARD)
+        else:
+            send_message(token, chat_id, f"{handoff_decision.group(2)} подтверждено. Передаю разработчику один раз.", MAIN_KEYBOARD)
+            run_background_job(lambda: process_handoff_task(token, chat_id, handoff_decision.group(2)), token, chat_id,
+                               operation='handoff:' + handoff_decision.group(2), allow_stale=True)
+        return True
     if value in ("📊 Пульт сделок", "Пульт сделок", "/dashboard"):
         if str(chat_id) != str(MANAGER_CHAT_ID):
             return False
@@ -3750,7 +3763,26 @@ def qa_task_keyboard(task_id):
             'resize_keyboard': True, 'one_time_keyboard': True}
 
 
+def show_handoff_waiting(token, chat_id):
+    """Re-show a tester task that still waits for the owner (its card may have lost buttons)."""
+    try:
+        waiting = sorted(task_id for task_id, record in handoff_watcher.read_state()['tasks'].items()
+                         if record.get('status') == 'awaiting_owner')
+        if not waiting:
+            return False
+        task = handoff_watcher.load_task(waiting[0], handoff_watcher.repository())
+    except (RuntimeError, ValueError, OSError, KeyError) as exc:
+        print(f"{LOG_PREFIX} handoff card unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+    if not task:
+        return False
+    send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
+    return True
+
+
 def show_qa_findings(token, chat_id, only_unnotified=False):
+    if not only_unnotified and show_handoff_waiting(token, chat_id):
+        return True
     try:
         tasks = qa_handoff.ready(include_notified=not only_unnotified)
     except (ValueError, OSError) as exc:
@@ -8601,6 +8633,59 @@ def process_qa_developer_task(token, chat_id, task_id):
     return not failed
 
 
+def handoff_keyboard(task_id):
+    return {'keyboard': [[{'text': f'✅ Выполнить {task_id}'}], [{'text': f'🚫 Отклонить {task_id}'}]],
+            'resize_keyboard': True, 'one_time_keyboard': True}
+
+
+def poll_handoff(token, chat_id):
+    """Pick up tester tasks from Git (read-only) and hand them to the developer once."""
+    config = qa_schedule.handoff_config()
+    try:
+        repo = handoff_watcher.repository()
+        tasks, problems = handoff_watcher.discover(repo, config)
+        state = handoff_watcher.read_state()
+        dispatch, ask, new_problems = handoff_watcher.plan(tasks, problems, state, config)
+        handoff_watcher.save_state(state)
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        print(f"{LOG_PREFIX} handoff poll failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+    for problem in new_problems:
+        send_message(token, chat_id, f"📨 Файл задания тестировщика не принят: {problem['path']} "
+                     f"({problem['ref']}) — {problem['error']}. Разработчику ничего не передано.")
+    for task in ask:
+        send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
+    for task in dispatch:
+        process_handoff_task(token, chat_id, task['id'])
+    return True
+
+
+def process_handoff_task(token, chat_id, task_id):
+    if not handoff_watcher.start(task_id):
+        return False
+    try:
+        task = handoff_watcher.load_task(task_id, handoff_watcher.repository())
+    except (RuntimeError, ValueError, OSError) as exc:
+        handoff_watcher.finish(task_id, f'Задание не прочитано: {exc}', False)
+        send_message(token, chat_id, f"⚠️ {task_id}: файл задания не прочитан ({exc}). Разработчику не передано.")
+        return False
+    if task is None:
+        handoff_watcher.finish(task_id, 'Файл изменён после решения; будет рассмотрен заново.', False)
+        return False
+    send_message(token, chat_id, f"📨 {task_id} передано разработчику: {task['title']}")
+    bridge_mtime_before = os.path.getmtime(__file__)
+    with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
+        fcntl.flock(model_lock, fcntl.LOCK_EX)
+        result = ask_developer(handoff_watcher.developer_prompt(task))
+    ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
+    handoff_watcher.finish(task_id, result, ok)
+    if os.path.getmtime(__file__) != bridge_mtime_before:
+        safe_reload.request(RELOAD_REQUEST_FILE, __file__)
+        result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
+    send_message(token, chat_id, ('✅' if ok else '⚠️') + f" Разработчик по {task_id}:\n\n{result[-3000:]}", MAIN_KEYBOARD)
+    return ok
+
+
 def run_qa_autopilot(token, chat_id, profile='human'):
     """Run QA, repair a technical failure, and immediately verify the repair.
 
@@ -10573,6 +10658,11 @@ def main():
             if periodic_schedule.claim_daily(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-full-autopilot',
                                              qa_schedule.full_daily_utc_hour(qa_plan)):
                 run_singleton_background_job('qa-full-autopilot', lambda: run_qa_autopilot(token, authorized_chat_id, 'full'), token, authorized_chat_id)
+            # Tester → developer tasks committed to Git (handoff/inbox).
+            handoff_minutes = int(qa_schedule.handoff_config(qa_plan).get('every_minutes') or 15)
+            if periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-handoff', handoff_minutes * 60):
+                run_singleton_background_job('qa-handoff', lambda: poll_handoff(token, authorized_chat_id),
+                                             token, authorized_chat_id)
             # One concise owner digest per Moscow day, with the coming night's plan.
             if (qa_schedule.digest_due(datetime.now(timezone.utc), qa_plan)
                     and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-owner-digest', 20 * 3600)):

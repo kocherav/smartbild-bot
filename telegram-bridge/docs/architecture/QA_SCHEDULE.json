@@ -3,23 +3,90 @@
   "approved_by": "владелец SmartBild",
   "timezone": "Europe/Moscow (UTC+3)",
   "description": "Утверждаемое расписание AI-тестировщика. Бот читает этот файл в каждом цикле опроса; изменение вступает в силу без правки кода. Все прогоны идут на QA-стенде и не выполняют хозяйственных записей.",
-  "human": {"every_hours": 4},
-  "full": {"daily_at_moscow_hour": 4},
-  "night": {
-    "window_moscow_hours": [0, 7],
-    "sequence": ["full", "browser", "human", "explore"]
+  "human": {
+    "every_hours": 4
   },
-  "digest": {"after_moscow": "17:30"},
+  "full": {
+    "daily_at_moscow_hour": 4
+  },
+  "night": {
+    "window_moscow_hours": [
+      0,
+      7
+    ],
+    "sequence": [
+      "full",
+      "browser",
+      "human",
+      "explore"
+    ]
+  },
+  "digest": {
+    "after_moscow": "17:30"
+  },
   "explore": {
     "missions_per_night": 4,
     "weekly_focus": {
-      "mon": {"theme": "Сделки: создание и поиск", "areas": ["deal-create", "deal-read"]},
-      "tue": {"theme": "Плательщики и договор", "areas": ["payer", "contract"]},
-      "wed": {"theme": "Счета: выставление и получение", "areas": ["invoice"]},
-      "thu": {"theme": "Статусы, оплаты, исполнители", "areas": ["status", "payment", "executor"]},
-      "fri": {"theme": "Документы и экономика: КП, позиции, рентабельность", "areas": ["proposal", "economics", "deal-read"]},
-      "sat": {"theme": "Неудобный пользователь: опечатки, голос, прерывания", "areas": ["robustness"]},
-      "sun": {"theme": "Регрессия: все миссии по кругу", "areas": []}
+      "mon": {
+        "theme": "Сделки: создание и поиск",
+        "areas": [
+          "deal-create",
+          "deal-read"
+        ]
+      },
+      "tue": {
+        "theme": "Плательщики и договор",
+        "areas": [
+          "payer",
+          "contract"
+        ]
+      },
+      "wed": {
+        "theme": "Счета: выставление и получение",
+        "areas": [
+          "invoice"
+        ]
+      },
+      "thu": {
+        "theme": "Статусы, оплаты, исполнители",
+        "areas": [
+          "status",
+          "payment",
+          "executor"
+        ]
+      },
+      "fri": {
+        "theme": "Документы и экономика: КП, позиции, рентабельность",
+        "areas": [
+          "proposal",
+          "economics",
+          "deal-read"
+        ]
+      },
+      "sat": {
+        "theme": "Неудобный пользователь: опечатки, голос, прерывания",
+        "areas": [
+          "robustness"
+        ]
+      },
+      "sun": {
+        "theme": "Регрессия: все миссии по кругу",
+        "areas": []
+      }
     }
+  },
+  "handoff": {
+    "every_minutes": 15,
+    "refs": [
+      "main",
+      "claude/*"
+    ],
+    "auto_kinds": [
+      "code",
+      "tests",
+      "docs",
+      "investigation"
+    ],
+    "description": "Обмен заданиями тестировщик → разработчик: handoff/inbox на этих ветках. Выпуск (kind: release) всегда ждёт кнопки владельца."
   }
 }
