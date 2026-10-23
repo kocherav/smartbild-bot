@@ -6,7 +6,7 @@ Each journey asserts both the visible answer and the absence of unintended write
 """
 import unittest
 
-from human_qa_harness import HumanJourneyCase, press, press_old, say
+from human_qa_harness import HumanJourneyCase, press, press_old, say, send_voice
 from test_human_journeys import DEAL, office, open_deal_by_number
 
 
@@ -66,6 +66,17 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
             yield press('⭐ Текущая сделка')
             person.sees('Сделка №990002', expected='«Текущая сделка» вернула последнюю открытую')
         self.play(journey, setup=office)
+
+
+class UnsupportedInputJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_voice_message_gets_an_honest_answer(self):
+        def journey(person):
+            yield send_voice()
+            person.sees('Голосовые сообщения', 'не распознаёт', 'текстом',
+                        expected='На голосовое бот честно ответил, что не понял, и что делать')
+            person.sees_button('🤝 Сделки')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
 
 
 class PayerEdgeCases(HumanJourneyCase, unittest.TestCase):

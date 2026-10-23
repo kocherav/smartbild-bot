@@ -67,6 +67,15 @@ class ExplorerTests(unittest.TestCase):
         self.assertEqual('passed', case['status'])
         self.assertEqual('failed', case['observations'][1]['verdict'])
 
+    def test_improvement_ideas_are_kept_and_never_fail_the_case(self):
+        idea = {'title': 'Кнопка «Сменить плательщика» прямо в карточке сделки',
+                'why': 'менеджер набрал фразу вручную', 'how': 'добавить кнопку', 'value': 'высокая'}
+        _brain, _stand, case = self.run_mission([{'action': 'finish'}], {
+            'achieved': True, 'summary': 'ok', 'defects': [], 'ideas': [idea, {'nonsense': 1}]})
+        self.assertEqual('passed', case['status'])
+        self.assertEqual([{**idea, 'mission': 'payer'}], case['ideas'])
+        self.assertIn('изобретатель', explorer.JUDGE_RULES)
+
     def test_rotation_is_stable_and_covers_all_missions(self):
         missions = explorer.load_missions()
         first = explorer.choose(missions, 4, '2026-10-22')

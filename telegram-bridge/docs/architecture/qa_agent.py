@@ -234,6 +234,8 @@ class Registry:
         run = {'id': 'RUN-' + hashlib.sha256((utc_now() + str(evidence)).encode()).hexdigest()[:12],
                'at': utc_now(), 'profile': profile, 'evidence': str(evidence),
                'successful': not failures, 'tests': report.get('tests'), 'failures': failures}
+        if report.get('ideas'):
+            run['ideas'] = report['ideas'][:12]
         state['runs'].append(run)
         groups = {'technical': [f for f in failures if not is_external(f)],
                   'external': [f for f in failures if is_external(f)]}

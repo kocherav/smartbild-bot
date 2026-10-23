@@ -3473,6 +3473,11 @@ def run_background_job(job, token, chat_id, operation="background", allow_stale=
         pass
 
 
+UNSUPPORTED_MESSAGE_KINDS = (("voice", "Голосовые сообщения"), ("video_note", "Видеосообщения-кружки"),
+                             ("audio", "Аудиофайлы"), ("sticker", "Стикеры"), ("location", "Геопозицию"),
+                             ("contact", "Контакты"))
+
+
 def run_foreground(job):
     """Run a routed message in the polling process.
 
@@ -10955,7 +10960,15 @@ def main():
                        '_workflow_callback': True, '_view_id': control['view_id'], 'date': time.time()}
             else:
                 msg = update.get("message")
-            if not msg or ("text" not in msg and "document" not in msg and "photo" not in msg and "video" not in msg):
+            if msg and not any(key in msg for key in ("text", "document", "photo", "video")):
+                unsupported = next((label for key, label in UNSUPPORTED_MESSAGE_KINDS if key in msg), None)
+                sender_chat = str((msg.get("chat") or {}).get("id") or "")
+                if unsupported and (sender_chat == authorized_chat_id or sender_chat in linked_accounts):
+                    # A dictated request used to vanish without any answer.
+                    send_message(token, sender_chat, f"{unsupported} бот пока не распознаёт, поручение не принято. "
+                                 "Напишите его текстом или выберите действие кнопкой.", home_keyboard(sender_chat))
+                continue
+            if not msg:
                 continue
 
             chat_id = str(msg["chat"]["id"])

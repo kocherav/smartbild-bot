@@ -641,6 +641,11 @@ def press_old(label):
     return Action('press_old', label)
 
 
+def send_voice(seconds=4):
+    """A dictated message: Telegram delivers it as ``voice`` without text."""
+    return Action('voice', seconds)
+
+
 def send_file(path, name=None, caption=''):
     return Action('file', str(path), name=name or os.path.basename(str(path)), caption=caption)
 
@@ -770,6 +775,11 @@ class Stand:
             return self.telegram.next_update({'callback_query': {
                 'id': f'cb-{self.telegram.update_id + 1}', 'from': sender, 'data': data,
                 'message': {'message_id': message_id, 'chat': chat}}})
+        if action.kind == 'voice':
+            self.telegram.begin_action('voice', f'(голосовое, {action.value} с)')
+            return self.telegram.next_update({'message': {
+                'message_id': self.telegram.update_id + 1, 'date': time.time(), 'chat': chat, 'from': sender,
+                'voice': {'file_id': 'voice-1', 'file_unique_id': 'voice-1', 'duration': action.value}}})
         if action.kind == 'file':
             self.telegram.begin_action('file', f"{action.extra['name']} {action.extra.get('caption') or ''}".strip())
             file_id = 'file-' + str(len(self.telegram.events))
