@@ -73,7 +73,7 @@ class HumanFixtureTests(unittest.TestCase):
                 suite.run(result)
             problems = [str(case) + '\n' + text[-1500:] for case, text in result.failures + result.errors]
             self.assertEqual([], problems)
-            self.assertEqual(9, result.testsRun)
+            self.assertEqual(10, result.testsRun)
 
 
 if __name__ == '__main__':

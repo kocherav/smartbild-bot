@@ -61,7 +61,9 @@ JUDGE_RULES = """Ты — строгий QA-инженер. Оцени разг�
 Найди дефекты: цель не достигнута; бот сделал не ту запись или две записи вместо одной;
 бот заявил успех без записи; бот потерял контекст; непонятный или технический текст;
 человек был вынужден угадывать; бот не предложил следующий шаг; неверные суммы/количества/формат денег;
-лишние вопросы; молчание бота. Не считай дефектом то, что требует бизнес-решения владельца.
+лишние вопросы; молчание бота. Не придумывай требования, которых нет в цели и критериях.
+Налоговый режим, рассчитанный по действующей политике продавца и показанный в предпросмотре до
+подтверждения, не является самовольным условием пользователя. Не считай дефектом то, что требует бизнес-решения владельца.
 Ответь ТОЛЬКО JSON: {"achieved": true|false,
  "defects": [{"severity": "P1"|"P2"|"P3", "title": "кратко", "evidence": "цитата/шаг", "expected": "как должно быть"}],
  "summary": "одна-две фразы"}
@@ -82,8 +84,10 @@ class CodexBrain:
 
     def __call__(self, prompt):
         self.calls += 1
-        command = [self.binary, 'exec', '--json', '--ignore-rules', '--skip-git-repo-check',
-                   '--sandbox', 'read-only', '--cd', os.path.expanduser('~'), '-']
+        command = [self.binary, 'exec', '--json', '--ignore-user-config', '--ignore-rules',
+                   '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
+                   '--cd', os.path.expanduser('~'), '-c', 'features.shell_tool=false',
+                   '-c', 'web_search="disabled"', '-']
         completed = _REAL_RUN(command, input=prompt, capture_output=True, text=True, timeout=self.timeout)
         messages = []
         for line in (completed.stdout or '').splitlines():
@@ -178,8 +182,7 @@ def explore(mission, brain, stand, max_steps=16):
 
 def judge(mission, receipt, brain):
     writes = [{'где': w['script'], 'действие': w['action'],
-               'данные': {k: v for k, v in (w.get('spec') or {}).items() if k not in ('items',)} | (
-                   {'позиций': len(w['spec']['items'])} if (w.get('spec') or {}).get('items') else {})}
+               'данные': (w.get('spec') or {})}
               for w in receipt['crm_writes']]
     prompt = (JUDGE_RULES + '\n\nЦЕЛЬ МЕНЕДЖЕРА:\n' + mission['goal'] +
               '\n\nКРИТЕРИИ УСПЕХА:\n' + '\n'.join('- ' + c for c in mission.get('success') or []) +
