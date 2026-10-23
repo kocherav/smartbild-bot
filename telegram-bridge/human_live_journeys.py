@@ -187,6 +187,26 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play([before, after], setup=setup)
         self.assertEqual(1, len([w for w in stand.crm.writes if w['script'] == 'payer_manager']))
 
+    def test_restart_during_invoice_creation(self):
+        item = self.pick(lambda x: x['ledger'] and any(p.get('selected') for p in x['payers']),
+                         'выбран плательщик и есть позиции')
+        deal_id = item['deal']['id']
+        def setup(crm):
+            self.setup(crm)
+            crm.crash_after_write.add(('contract_invoice', 'create_full'))
+        def before(person):
+            yield say(f'Выстави счёт по сделке {deal_id}')
+            yield press('📋 Общий счёт по спецификации')
+            yield press('✅ Выставить общий счёт')
+        def after(person):
+            person.sees('Проверил Мегаплан', 'найден в единственном экземпляре',
+                        expected='На форме реальной сделки прерванный счёт сверяется обратным чтением')
+            person.got_document(expected='После сверки возвращён PDF счёта')
+            yield say('/status')
+            person.sees('нет выполняющихся записей', expected='Сверенная операция закрыта после перезапуска')
+        stand = self.play([before, after], setup=setup)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+
 
 if __name__ == '__main__':
     unittest.main()

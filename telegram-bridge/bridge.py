@@ -1608,14 +1608,19 @@ def persistent_navigation(reply_markup):
 
 def send_message(token, chat_id, text, reply_markup=None):
     if RUNTIME_ACTIVE and reply_markup and 'keyboard' in reply_markup:
+        status_action = bool(reply_markup.get('_status_action', False))
+        if status_action:
+            reply_markup = {key: value for key, value in reply_markup.items() if key != '_status_action'}
         persistent=persistent_navigation(reply_markup)
-        if not persistent and (UI_CONTEXT is None or UI_CONTEXT.actor != str(chat_id)) and (ui_state_store().current(chat_id).get('pending') or ui_state_store().current(chat_id).get('deal_creation_active')):
+        if not status_action and not persistent and (UI_CONTEXT is None or UI_CONTEXT.actor != str(chat_id)) and (ui_state_store().current(chat_id).get('pending') or ui_state_store().current(chat_id).get('deal_creation_active')):
             # Unsolicited notifications must not replace a live screen. The
             # message still names its deal; the user can open it when ready.
             reply_markup = None
         elif UI_CONTEXT is not None and UI_CONTEXT.actor == str(chat_id) and not ui_state_store().fresh(UI_CONTEXT):
             reply_markup = None
             text += '\n\nЭто результат предыдущего действия. Текущий раздел не изменён; для продолжения откройте нужную сделку.'
+        elif status_action:
+            reply_markup = {**reply_markup, 'is_persistent': False, 'one_time_keyboard': True}
         elif persistent:
             reply_markup={**reply_markup,'is_persistent':True,'one_time_keyboard':False}
         else:
@@ -3605,6 +3610,10 @@ OPERATION_TITLES = {'run_create_megaplan_deal':'Создание сделки','
     'run_installer_settlements':'Взаиморасчёты с монтажником','run_megaplan_finance':'Финансовая операция',
     'run_procurement_workflow':'Закупка','run_bank_statement':'Разнесение выписки',
     'run_deal_browser':'Изменение сделки','run_apply_work_statement':'Монтажная ведомость'}
+INVOICE_RECONCILE_LABEL = '🔍 Сверить с Мегапланом'
+INVOICE_RECONCILE_KEYBOARD = {'keyboard': [[{'text': INVOICE_RECONCILE_LABEL}]],
+                              'resize_keyboard': True, 'one_time_keyboard': True,
+                              '_status_action': True}
 
 
 def _readback_payer_link(store, operation):
@@ -3624,6 +3633,92 @@ def _readback_payer_link(store, operation):
     return applied, spec, selected
 
 
+def _normalized_invoice_lines(values):
+    return sorted(' '.join(str(value or '').casefold().replace('ё', 'е').split()) for value in values)
+
+
+def _invoice_time(value):
+    value = str(value or '').strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _readback_interrupted_invoice(store, operation):
+    """Read invoices only; never replay an interrupted create request."""
+    scenario = str(operation.get('scenario') or '')
+    if scenario not in ('run_contract_invoice:create', 'run_contract_invoice:create_full'):
+        return None
+    spec = ((operation.get('payload') or {}).get('args') or [{}])[0] or {}
+    deal_id = str(spec.get('deal_id') or '')
+    expected_total = spec.get('reconcile_total')
+    expected_lines = spec.get('reconcile_lines') or []
+    confirmed_at = _invoice_time(spec.get('reconcile_confirmed_at') or operation.get('created_at'))
+    if not deal_id or expected_total is None or not expected_lines or confirmed_at is None:
+        return {'outcome': 'unavailable', 'deal_id': deal_id,
+                'error': 'в сохранённой операции недостаточно данных для безопасной сверки'}
+    check = run_contract_invoice({'action': 'list', 'deal_id': deal_id})
+    if not check.get('ok'):
+        return {'outcome': 'unavailable', 'deal_id': deal_id,
+                'error': str(check.get('error') or 'Мегаплан не ответил')}
+    try:
+        wanted_total = Decimal(str(expected_total)).quantize(Decimal('0.01'))
+    except InvalidOperation:
+        return {'outcome': 'unavailable', 'deal_id': deal_id, 'error': 'сумма операции повреждена'}
+    wanted_lines = _normalized_invoice_lines(expected_lines)
+    candidates = []
+    for invoice in check.get('invoices') or []:
+        created_at = _invoice_time(invoice.get('created_at'))
+        try:
+            amount = Decimal(str(invoice.get('sum'))).quantize(Decimal('0.01'))
+        except (InvalidOperation, TypeError):
+            continue
+        lines = invoice.get('lines') or ([invoice.get('line')] if invoice.get('line') else [])
+        if created_at and created_at >= confirmed_at and amount == wanted_total and _normalized_invoice_lines(lines) == wanted_lines:
+            candidates.append(invoice)
+    evidence = (f"обратное чтение счетов сделки №{deal_id}: время не ранее {confirmed_at.isoformat()}, "
+                f"сумма {wanted_total}, строки совпадают")
+    if len(candidates) == 1:
+        invoice = candidates[0]
+        receipt = {'ok': True, 'deal_id': deal_id, 'invoice_id': str(invoice['id']),
+                   'invoice_number': invoice.get('number'), 'readback': invoice}
+        store.reconcile(operation['id'], operation['revision'], 'bridge-readback', 'succeeded', evidence, receipt)
+        return {'outcome': 'found', 'deal_id': deal_id, 'invoice': invoice}
+    if not candidates:
+        store.reconcile(operation['id'], operation['revision'], 'bridge-readback', 'failed', evidence)
+        return {'outcome': 'absent', 'deal_id': deal_id}
+    return {'outcome': 'ambiguous', 'deal_id': deal_id, 'candidates': candidates}
+
+
+def _send_invoice_reconciliation(token, actor, result):
+    if result['outcome'] == 'found':
+        invoice = result['invoice']
+        send_message(token, actor,
+                     f"♻️ Проверил Мегаплан: счёт №{invoice.get('number') or invoice['id']} по сделке "
+                     f"№{result['deal_id']} найден в единственном экземпляре. Операция закрыта как выполненная; повторять её не нужно.")
+        send_megaplan_invoice_by_id(token, actor, invoice['id'], DEAL_ACTIONS_KEYBOARD, result['deal_id'])
+    elif result['outcome'] == 'absent':
+        send_message(token, actor,
+                     f"♻️ Проверил Мегаплан: подходящего счёта по сделке №{result['deal_id']} нет. "
+                     "Прерванная операция закрыта как «записи нет». Чтобы выставить счёт, подготовьте новый предпросмотр и подтвердите его.",
+                     DEAL_ACTIONS_KEYBOARD)
+    elif result['outcome'] == 'ambiguous':
+        rows = '\n'.join(f"• №{item.get('number') or item['id']} — {bank_money(item.get('sum'))} ₽"
+                         for item in result['candidates'])
+        send_message(token, actor,
+                     f"⚠️ По сделке №{result['deal_id']} найдено несколько подходящих счетов:\n{rows}\n\n"
+                     "Операция не закрыта: выберите правильный счёт после проверки в Мегаплане.",
+                     INVOICE_RECONCILE_KEYBOARD)
+    else:
+        send_message(token, actor,
+                     f"⚠️ Сверка счёта по сделке №{result.get('deal_id') or '?'} не завершена: {result.get('error')}. "
+                     "Запись не повторялась; операция остаётся заблокированной.", INVOICE_RECONCILE_KEYBOARD)
+
+
 def report_interrupted_operations(token, operation_ids):
     """After a restart every interrupted write is announced with its next step.
 
@@ -3638,8 +3733,12 @@ def report_interrupted_operations(token, operation_ids):
             target = operation.get('target') or {}
             deal = f" по сделке №{target['deal_id']}" if target.get('deal_id') else ''
             title = OPERATION_TITLES.get(scenario.split(':', 1)[0], 'Операция')
+            invoice_readback = _readback_interrupted_invoice(store, operation)
             settled = _readback_payer_link(store, operation) if scenario.startswith('run_payer_card_apply') else None
-            if settled:
+            if invoice_readback is not None:
+                _send_invoice_reconciliation(token, str(operation.get('actor') or MANAGER_CHAT_ID), invoice_readback)
+                continue
+            elif settled:
                 applied, spec, selected = settled
                 text = (f"♻️ Бот перезапускался во время смены плательщика{deal}. Проверил Мегаплан: "
                         + (f"плательщик «{(selected or {}).get('name')}» записан. Повторять не нужно."
@@ -3656,10 +3755,22 @@ def report_interrupted_operations(token, operation_ids):
 
 def handle_status_query(token,chat_id,text):
     value=str(text or '').strip().casefold().rstrip('?! .')
-    if value not in ('/status','статус обработки','что сейчас делает бот'):
+    reconcile_requested = value == INVOICE_RECONCILE_LABEL.casefold()
+    if value not in ('/status','статус обработки','что сейчас делает бот') and not reconcile_requested:
         return False
     try:
         operations=WorkflowStore(WORKFLOW_DB_FILE).unresolved(str(chat_id))
+        if reconcile_requested:
+            invoice_operations = [operation for operation in operations
+                                  if str(operation.get('scenario') or '') in
+                                  ('run_contract_invoice:create', 'run_contract_invoice:create_full')]
+            if not invoice_operations:
+                send_message(token, chat_id, 'Нет прерванных клиентских счетов, ожидающих сверки.', MAIN_KEYBOARD)
+                return True
+            store = WorkflowStore(WORKFLOW_DB_FILE)
+            for operation in invoice_operations:
+                _send_invoice_reconciliation(token, chat_id, _readback_interrupted_invoice(store, operation))
+            return True
         job=latest_processing_document_job(chat_id)
         retry=latest_retryable_document_job(chat_id)
         interrupted=WorkflowStore(WORKFLOW_DB_FILE).interrupted_inputs(str(chat_id))
@@ -3683,7 +3794,10 @@ def handle_status_query(token,chat_id,text):
         lines.append(f'Прерванных входящих запросов: {len(interrupted)}. Исходные сообщения сохранены, автоматически не повторялись. Откройте нужный раздел и сохранённый черновик; подтверждённую запись сначала сверьте по журналу выше.')
     if not operations and not job and not retry and not interrupted:
         lines.append('В журнале нет выполняющихся записей или незавершённого разбора счёта. Это проверка зарегистрированных задач, не внешних сервисов.')
-    send_message(token,chat_id,'\n'.join(lines))
+    invoice_uncertain = any(str(operation.get('scenario') or '') in
+                            ('run_contract_invoice:create', 'run_contract_invoice:create_full')
+                            and operation.get('status') == 'uncertain' for operation in operations)
+    send_message(token,chat_id,'\n'.join(lines), INVOICE_RECONCILE_KEYBOARD if invoice_uncertain else None)
     return True
 
 
@@ -5064,7 +5178,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if pending == "contract_invoice_confirm" and value == "✅ Выставить счёт":
         prepared = state.get("contract_invoice_preview") or {}
         return_keyboard = INVOICE_MENU_KEYBOARD if state.get("invoice_origin") == "menu" else CONTRACT_KEYBOARD
-        result = run_contract_invoice({"action": "create", "deal_id": str(deal_id), "clause": prepared.get("clause"), 'expected_fingerprint':prepared.get('fingerprint')})
+        result = run_contract_invoice({"action": "create", "deal_id": str(deal_id), "clause": prepared.get("clause"),
+            'expected_fingerprint':prepared.get('fingerprint'), 'reconcile_total':prepared.get('amount'),
+            'reconcile_lines':[prepared.get('line')], 'reconcile_confirmed_at':datetime.now(timezone.utc).isoformat()})
         if not result.get("ok"):
             send_message(token, chat_id, f"Не удалось выставить счёт: {result.get('error')}", CONTRACT_INVOICE_CONFIRM_KEYBOARD)
             return True
@@ -8109,7 +8225,13 @@ def invoice_error_text(error):
 
 
 def create_and_send_contract_invoice(token, chat_id, deal_id, clause, keyboard=INVOICE_MENU_KEYBOARD):
-    result = run_contract_invoice({"action": "create", "deal_id": str(deal_id), "clause": clause})
+    preview = run_contract_invoice({"action": "preview", "deal_id": str(deal_id), "clause": clause})
+    if not preview.get('ok'):
+        send_message(token, chat_id, f"Не удалось подготовить счёт: {preview.get('error')}", keyboard)
+        return False
+    result = run_contract_invoice({"action": "create", "deal_id": str(deal_id), "clause": clause,
+        'expected_fingerprint': preview.get('fingerprint'), 'reconcile_total': preview.get('amount'),
+        'reconcile_lines': [preview.get('line')], 'reconcile_confirmed_at': datetime.now(timezone.utc).isoformat()})
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось выставить счёт: {result.get('error')}", keyboard)
         return False
@@ -8124,7 +8246,9 @@ def create_and_send_full_invoice(token, chat_id, deal_id, keyboard=INVOICE_MENU_
         preview=run_contract_invoice({'action':'preview_full','deal_id':str(deal_id)})
     if not preview.get('ok'):
         send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),keyboard); return False
-    result = run_contract_invoice({"action": "create_full", "deal_id": str(deal_id),'expected_fingerprint':preview.get('fingerprint')})
+    result = run_contract_invoice({"action": "create_full", "deal_id": str(deal_id),'expected_fingerprint':preview.get('fingerprint'),
+        'reconcile_total': preview.get('total'), 'reconcile_lines': [row.get('name') for row in preview.get('rows') or []],
+        'reconcile_confirmed_at': datetime.now(timezone.utc).isoformat()})
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось выставить общий счёт: {result.get('error')}", keyboard)
         return False
@@ -9079,6 +9203,13 @@ def _human_payment_summary(deal_id):
             'remainder':invoice_total-paid,'invoices':invoice_rows,'operations':operations}
 
 
+def has_explicit_deal_economics(text):
+    """Return true when a typed spec carries user-owned sale and cost data."""
+    value = str(text or '')
+    amounts = re.findall(r'(?<!\w)\d[\d\s]*(?:[.,]\d+)?\s*(?:₽|руб(?:\.|л(?:ей|я)?)?)', value, re.I)
+    return len(amounts) >= 2 and bool(re.search(r'(?i)\b(?:закуп\w*|себестоим\w*)\b', value))
+
+
 # Top-level menu entries: a person pressing one has left whatever they were doing.
 TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделками", "/deals", "🏦 Деньги", "🏦 Банк и платежи",
                         "🧰 Монтаж", "☰ Ещё", "⬅️ Главное меню", "/menu", "/start", "📊 Пульт сделок",
@@ -9172,6 +9303,9 @@ def handle_human_workflow(token,chat_id,text):
             send_message(token,chat_id,'По какой сделке? Укажите номер.');return True
         return _start_human_invoice(token,chat_id,intent.deal_id,intent.name)
     if intent.name==human_intents.CREATE_DEAL:
+        active = current_deal_ui_state(chat_id)
+        if active.get('deal_creation_active') and active.get('deal_create_spec'):
+            return False
         update_deal_ui_state(chat_id,**creation_attachment.initial_state(value));invoice_tasks.pause(chat_id)
         if creation_attachment.awaiting_file(value):send_message(token,chat_id,'Задание на новую сделку сохранено. Пришлите счёт или спецификацию; файл будет связан именно с этим поручением.');return True
         return False
@@ -9253,6 +9387,11 @@ def main():
         if is_owner and msg.get('text') and handle_human_workflow(token, chat_id, msg.get('text')):
             return
         raw_creation = msg.get("text") or msg.get("caption") or ""
+        active_creation = current_deal_ui_state(chat_id)
+        if (is_owner and active_creation.get("deal_creation_active")
+                and active_creation.get("pending") == "deal_create_items"
+                and has_explicit_deal_economics(raw_creation)):
+            update_deal_ui_state(chat_id, deal_creation_text_spec=raw_creation)
         if is_owner and creation_attachment.explicit(raw_creation):
             update_deal_ui_state(chat_id, **creation_attachment.initial_state(raw_creation))
             invoice_tasks.pause(chat_id)
@@ -9760,6 +9899,20 @@ def main():
         )
         creation_request_snapshot = creation_state.get("deal_creation_request")
         creation_source_snapshot = creation_state.get("deal_creation_source_path")
+        typed_creation_spec = str(creation_state.get("deal_creation_text_spec") or "")
+        if (creation_state.get("deal_creation_active") and typed_creation_spec
+                and has_explicit_deal_economics(typed_creation_spec)):
+            saved_draft = creation_state.get("deal_create_spec") or {}
+            text += (
+                "\n\n[АВТОРИТЕТНЫЙ ТЕКСТОВЫЙ ЧЕРНОВИК НОВОЙ СДЕЛКИ]\n" + typed_creation_spec
+                + "\nКлиент и название из сохранённого черновика уже подтверждены: "
+                + json.dumps({key: saved_draft.get(key) for key in (
+                    "description", "client_id", "client_name", "client_kind"
+                )}, ensure_ascii=False)
+                + "\nПользователь явно указал продажные цены и закупку/себестоимость. "
+                  "Не запускай HOGART_SEARCH или DAICHI_SEARCH, не спрашивай клиента повторно "
+                  "и не заменяй эти числа каталогом. Подготовь CREATE_MEGAPLAN_DEAL по этому тексту."
+            )
         if supplier_invoice_mode:
             if document_job:
                 update_document_job(document_job["id"], stage="разбор счёта ИИ",
@@ -9922,6 +10075,8 @@ def main():
                 reply = (f"Не удалось надёжно сопоставить строки счёта со сделкой "
                          f"№{supplier_invoice_deal_id}. Файл сохранён, данные в Мегаплан не записаны.")
 
+        deal_catalog_bypass = {"used": False}
+
         def run_hogart_search_round(reply_text):
             """Extract+run a HOGART_SEARCH block if present. Returns (new_reply, fired)."""
             reply_text, keywords = extract_hogart_searches(reply_text)
@@ -10001,9 +10156,27 @@ def main():
         forced_hogart_refresh = False
         catalog_fired_this_message = False
         for _ in range(0 if supplier_invoice_mode or creation_document_mode or invoice_task_mode else 5):
-            reply, hogart_fired = run_hogart_search_round(reply)
+            bypass_catalog = (creation_state.get("deal_creation_active") and typed_creation_spec
+                              and has_explicit_deal_economics(typed_creation_spec))
+            if bypass_catalog:
+                reply_without_hogart, hogart_requests = extract_hogart_searches(reply)
+                reply_without_catalog, daichi_requests = extract_daichi_searches(reply_without_hogart)
+                if hogart_requests or daichi_requests:
+                    reply = reply_without_catalog
+                    if not deal_catalog_bypass["used"]:
+                        deal_catalog_bypass["used"] = True
+                        reply = ask_current_model(
+                            "ПОИСК ПО КАТАЛОГАМ НЕ ВЫПОЛНЕН: владелец уже явно задал продажные цены "
+                            "и закупку/себестоимость. Используй сохранённые название, клиента и текст "
+                            "спецификации; верни CREATE_MEGAPLAN_DEAL_BEGIN/END со всеми позициями."
+                        )
+                    hogart_fired, daichi_fired = bool(hogart_requests), bool(daichi_requests)
+                else:
+                    hogart_fired = daichi_fired = False
+            else:
+                reply, hogart_fired = run_hogart_search_round(reply)
+                reply, daichi_fired = run_daichi_search_round(reply)
             hogart_fired_this_message = hogart_fired_this_message or hogart_fired
-            reply, daichi_fired = run_daichi_search_round(reply)
             catalog_fired_this_message = catalog_fired_this_message or hogart_fired or daichi_fired
             if hogart_fired or daichi_fired:
                 continue

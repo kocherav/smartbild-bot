@@ -13,7 +13,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import megaplan_transport
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
@@ -459,16 +459,33 @@ def create_full(spec, api):
 def list_invoices(spec, api):
     deal_id = str(spec["deal_id"])
     refs = api._call("GET", f"/deal/{deal_id}/invoices", params={"limit": 100}).get("data") or []
+    auth_data = v1_call(api, "/BumsCommonApiV01/User/authorize.api", {
+        "Login": api.username, "Password": hashlib.md5(api.password.encode()).hexdigest(),
+    }, auth=False)["data"]
+    auth = (auth_data.get("AccessId") or auth_data["access_id"],
+            auth_data.get("SecretKey") or auth_data["secret_key"])
     result = []
     for ref in refs:
         invoice = api._call("GET", f"/invoice/{ref['id']}", params={"fields": ["rows", "deal", "invoiceTemplate"]})["data"]
         rows = invoice.get("rows") or []
+        created_at = ((ref.get("timeCreated") or {}).get("value")
+                      or (invoice.get("timeCreated") or {}).get("value")
+                      or (invoice.get("createdAt") or {}).get("value")
+                      or invoice.get("createdAt") or "")
+        if not created_at:
+            legacy = v1_call(api, "/BumsInvoiceApiV01/Invoice/card.api", {
+                "Id": str(ref["id"]), "RequestedFields[0]": "TimeCreated",
+            }, auth).get("data", {}).get("invoice", {}).get("TimeCreated")
+            if legacy:
+                # The legacy API returns the account-local Moscow wall clock.
+                created_at = datetime.strptime(legacy, "%Y-%m-%d %H:%M:%S").isoformat() + "+03:00"
         invoice_date = invoice.get("invoiceDate") or {}
         date_text = (f"{invoice_date.get('day', 0):02d}.{invoice_date.get('month', 0) + 1:02d}.{invoice_date.get('year')}"
                      if invoice_date else "")
         result.append({"id": str(invoice["id"]), "number": invoice.get("number"), "date": date_text,
                        "status": invoice.get("status"), "sum": (invoice.get("sum") or {}).get("value"),
                        "rows_count": len(rows), "line": rows[0].get("name") if len(rows) == 1 else None,
+                       "lines": [str(row.get("name") or "") for row in rows], "created_at": created_at,
                        "template": (invoice.get("invoiceTemplate") or {}).get("name")})
     result.sort(key=lambda item: int(item["id"]), reverse=True)
     return {"ok": True, "deal_id": deal_id, "invoices": result}

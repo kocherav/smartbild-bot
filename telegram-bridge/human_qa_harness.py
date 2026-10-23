@@ -15,6 +15,7 @@ as an isolation finding.
 """
 import copy
 import datetime as dt
+import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -184,6 +185,8 @@ class FakeMegaplan:
         self.failures = {}     # (script, action) -> error text
         self.reachable = True
         self.crash_after_write = set()   # (script, action): the process dies after this write
+        self.crash_before_write = set()  # operation was claimed, CRM received no write
+        self.duplicate_after_write = set()
         self.pending_crash = False
         self.next_deal = 990100
         self.next_invoice = 5000
@@ -212,7 +215,8 @@ class FakeMegaplan:
         invoice_id = str(self.next_invoice)
         self.invoices[invoice_id] = {
             'id': invoice_id, 'deal_id': str(deal_id), 'number': number or invoice_id[-3:],
-            'date': '20.10.2026', 'status': status, 'rows': rows,
+            'date': '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'status': status, 'rows': rows,
             'sum': round(sum(r['qty'] * r['price'] for r in rows), 2)}
         return self.invoices[invoice_id]
 
@@ -248,7 +252,8 @@ class FakeMegaplan:
         rows = invoice['rows']
         return {'id': invoice['id'], 'number': invoice['number'], 'date': invoice['date'],
                 'status': invoice['status'], 'sum': invoice['sum'], 'rows_count': len(rows),
-                'line': rows[0]['name'] if len(rows) == 1 else None, 'template': 'Счёт'}
+                'line': rows[0]['name'] if len(rows) == 1 else None,
+                'lines': [row['name'] for row in rows], 'created_at': invoice.get('created_at'), 'template': 'Счёт'}
 
     def _deal(self, spec):
         deal = self.deals.get(str(spec.get('deal_id') or spec.get('dealId') or ''))
@@ -274,6 +279,9 @@ class FakeMegaplan:
         if not self.reachable and script in self.CRM_SCRIPTS:
             # What the real CLIs print when Megaplan does not answer.
             return {'ok': False, 'error': 'техническая ошибка Мегаплана: <urlopen error timed out>'}
+        if (script, action) in self.crash_before_write:
+            self.crash_before_write.discard((script, action))
+            raise SimulatedCrash(f'{script} {action} before write')
         handler = getattr(self, 'cli_' + script.replace('-', '_'), None)
         if handler is None:
             return None
@@ -423,6 +431,8 @@ class FakeMegaplan:
                         'error': 'Спецификация, плательщик или наша организация изменены. Подготовьте счёт заново.'}
             self._write('contract_invoice', action, spec)
             invoice = self.add_invoice(deal['id'], [{'name': r['name'], 'qty': r['quantity'], 'price': r['price']} for r in rows])
+            if ('contract_invoice', action) in self.duplicate_after_write:
+                self.add_invoice(deal['id'], copy.deepcopy(invoice['rows']))
             return {'ok': True, 'deal_id': deal['id'], 'invoice_id': invoice['id'], 'invoice_number': invoice['number'],
                     'invoice_status': 'drawn', 'rows_count': len(rows), 'basis': data['basis'],
                     'public_download_link': None}
@@ -449,6 +459,8 @@ class FakeMegaplan:
                         'error': 'Договор, плательщик или наша организация изменены. Подготовьте счёт заново.'}
             self._write('contract_invoice', action, spec)
             invoice = self.add_invoice(deal['id'], [{'name': line, 'qty': 1, 'price': amount}])
+            if ('contract_invoice', action) in self.duplicate_after_write:
+                self.add_invoice(deal['id'], copy.deepcopy(invoice['rows']))
             return {**data, 'invoice_id': invoice['id'], 'invoice_number': invoice['number'],
                     'invoice_status': 'drawn', 'public_download_link': None}
         if action == 'delete':
