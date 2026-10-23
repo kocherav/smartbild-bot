@@ -2816,6 +2816,53 @@ def run_deal_browser(spec, timeout=45):
         return {"ok": False, "error": "техническая ошибка поиска сделок"}
 
 
+def run_morning_brief(spec, timeout=90):
+    try:
+        result = subprocess.run(
+            [REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "morning_brief.py")],
+            cwd=MEGAPLAN_DIR, input=json.dumps(spec, ensure_ascii=False),
+            capture_output=True, text=True, timeout=timeout,
+        )
+        lines = (result.stdout or "").strip().splitlines()
+        parsed = json.loads(lines[-1]) if lines else {}
+        if result.returncode == 0 and parsed.get("ok"):
+            return parsed
+        return {"ok": False, "error": parsed.get("error") or "Мегаплан временно не ответил"}
+    except Exception as exc:
+        print(f"{LOG_PREFIX} morning brief failed: {exc}", file=sys.stderr)
+        return {"ok": False, "error": "техническая ошибка чтения Мегаплана"}
+
+
+def send_morning_brief(token, chat_id, config=None):
+    config = config or qa_schedule.morning_brief_config()
+    result = run_morning_brief({"invoice_days": config["invoice_overdue_days"],
+                                "stale_days": config["deal_stale_days"],
+                                "completed_statuses": config.get("completed_statuses") or []})
+    if not result.get("ok"):
+        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку. "
+                     "Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
+        return False
+    overdue, stale = result.get("overdue") or [], result.get("stale") or []
+    lines = ["Утренний список дел"]
+    if overdue:
+        lines.append("\nНеоплаченные счета:")
+        for item in overdue:
+            lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
+                         f"остаток {bank_money(item.get('remainder'))} ₽ из {bank_money(item.get('amount'))} ₽ · {item['days']} дн.")
+    if stale:
+        lines.append("\nСделки без движения:")
+        for item in stale:
+            lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
+                         f"{bank_money(item.get('amount'))} ₽ · {item['days']} дн. · {item.get('status') or 'статус не указан'}")
+    if not overdue and not stale:
+        lines.append("\nПросроченных счетов и незавершённых сделок без движения нет.")
+    deal_ids = list(dict.fromkeys(str(item["deal_id"]) for item in overdue + stale))
+    keyboard = ({"keyboard": [[{"text": f"№{deal_id} · открыть сделку"}] for deal_id in deal_ids],
+                 "resize_keyboard": True, "one_time_keyboard": True} if deal_ids else None)
+    send_message(token, chat_id, "\n".join(lines), keyboard)
+    return True
+
+
 def queue_deal_transition(transition, chat_id):
     data = durable_json.read(PENDING_TRANSITIONS_FILE, dict)
     deal_id = str(transition["deal_id"])
@@ -10966,6 +11013,15 @@ def main():
             next_qa_check = time.time() + 60
         if not draining_reload and time.time() >= next_qa_autopilot_check:
             qa_plan = qa_schedule.load()
+            if (qa_schedule.morning_brief_due(datetime.now(timezone.utc), qa_plan)
+                    and periodic_schedule.claim_daily(os.path.join(BASE_DIR, 'watcher_schedule.json'),
+                                                      'owner-morning-brief', 0)):
+                run_singleton_background_job(
+                    'owner-morning-brief',
+                    lambda: send_morning_brief(token, authorized_chat_id,
+                                               qa_schedule.morning_brief_config(qa_plan)),
+                    token, authorized_chat_id,
+                )
             # One night cycle per night: the explorer spends model calls.
             if (nightly_qa_window()
                     and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'),

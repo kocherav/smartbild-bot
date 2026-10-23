@@ -8,7 +8,7 @@
 | Файл | Тип | Назначение | Публичный интерфейс |
 |---|---|---|---|
 | `telegram-bridge/allocation_runtime.py` | Рабочий модуль | Resumable application of dashboard-confirmed supplier cost allocations. | `money`, `sync_deal`, `process`, `poll`, `poll_in_environment` |
-| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+212) |
+| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+214) |
 | `telegram-bridge/build_cumulative_deal_execution.py` | Рабочий модуль | Build a cumulative plan/fact workbook for one deal from a multi-period table. | `normalized`, `approved_table_totals`, `build` |
 | `telegram-bridge/build_current_execution.py` | Рабочий модуль | Build the best available cumulative execution workbook for a deal. | `safe`, `build_generic`, `build` |
 | `telegram-bridge/build_installer_report_mockups.py` | Рабочий модуль | Создание демонстрационных XLSX-макетов отчёта монтажника и сверки владельца. | `setup`, `style_body`, `reconciliation_sheet`, `owner_book`, `installer_book` |
@@ -103,7 +103,7 @@
 | `telegram-bridge/product_matching_runtime.py` | Рабочий модуль | Background semantic matching through the bot's existing Codex connection. | `infer`, `poll` |
 | `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `digest`, `ideas_text` |
 | `telegram-bridge/qa_handoff.py` | Рабочий модуль | Human-approved handoff from QA findings to the existing developer agent. | `now`, `ready`, `summarize`, `developer_prompt`, `mark_notified`, `decide`, `claim`, `finish`, `defer_external`, `resume_waiting` |
-| `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `focus`, `missions_for`, `plan_text` |
+| `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `morning_brief_config`, `morning_brief_due`, `focus` (+2) |
 | `telegram-bridge/reconcile_operations.py` | Рабочий модуль | Local operator tool. Never calls a remote write or automatically replays input. | `main` |
 | `telegram-bridge/requisites_card.py` | Рабочий модуль | Deterministic extraction of Russian company requisites from PDF/Word text. | `compact_digits`, `document_text`, `value_after_label`, `parse`, `is_requisites_card`, `parse_document`, `parse_document_from_text` |
 | `telegram-bridge/runtime_guards.py` | Рабочий модуль | Incremental adapter around existing business functions, not an AI router. | `install`, `decorate` |
@@ -135,6 +135,7 @@
 | `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
 | `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `NavigationJourneys` |
 | `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `UnsupportedInputJourneys`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
+| `telegram-bridge/test_human_morning_brief.py` | Тест | Узкоспециализированная утилита «test human morning brief»; интерфейс перечислен справа. | `MorningBriefHumanQATests` |
 | `telegram-bridge/test_human_operator_journey.py` | Тест | Узкоспециализированная утилита «test human operator journey»; интерфейс перечислен справа. | `TelegramOperator`, `TelegramPollingMechanicsTests` |
 | `telegram-bridge/test_human_phrasings.py` | Тест | The same request in the many ways people actually say it. | `PhrasingTests` |
 | `telegram-bridge/test_human_qa_explorer.py` | Тест | Узкоспециализированная утилита «test human qa explorer»; интерфейс перечислен справа. | `ScriptedBrain`, `ExplorerTests` |
@@ -225,6 +226,7 @@
 | `megaplan-crm/megaplan_finance.py` | Рабочий модуль | Create confirmed, idempotent Megaplan expense operations from bank email candidates. | `load`, `save`, `operation_form`, `megaplan_operations`, `existing_operation`, `record_procurement_payments`, `create`, `main` |
 | `megaplan-crm/megaplan_transport.py` | Рабочий модуль | Cross-process CRM budgets and circuit breaker. Never replay a write here. | `ProtectionPause`, `connect`, `retry_seconds`, `paused`, `reachable`, `foreground_waiting`, `acquire_slot`, `urlopen`, `notify_status` |
 | `megaplan-crm/megaplan_webhook.py` | Рабочий модуль | Webhook receiver for the "Отправить в ТГ" button the owner configures inside | `load_env`, `get_api`, `find_invoice`, `invoice_pdf`, `download_pdf`, `format_invoice_date`, `invoice_filename`, `invoice_caption`, `send_telegram_document`, `BoundedHTTPServer`, `Handler`, `fetch_invoice_pdf_cli` |
+| `megaplan-crm/morning_brief.py` | Рабочий модуль | Build the owner's read-only morning action list without per-deal CRM calls. | `build`, `main` |
 | `megaplan-crm/offer_catalog_cache.py` | Рабочий модуль | Local cache of Megaplan's Offer catalog, for name-matching (Phase 1b's "check Мегаплан's | `refresh`, `find_candidate` |
 | `megaplan-crm/own_companies.py` | Рабочий модуль | Canonical directory of the legal entities used by SmartBild. | `load_directory`, `normalize_name`, `companies`, `company_by_id`, `resolve_company`, `default_selling_company` |
 | `megaplan-crm/payer_manager.py` | Рабочий модуль | Create/reuse a client's payer and attach it to an existing Megaplan deal. | `digits`, `valid_inn`, `normalize`, `payer_matches`, `contractor_name`, `resolve_contractor`, `apply`, `main` |
@@ -288,6 +290,7 @@
 | `megaplan-crm/test_legacy_report_plan.py` | Тест | Узкоспециализированная утилита «test legacy report plan»; интерфейс перечислен справа. | `LegacyPlanTests` |
 | `megaplan-crm/test_megaplan_discounts.py` | Тест | Узкоспециализированная утилита «test megaplan discounts»; интерфейс перечислен справа. | `MegaplanDiscountLedgerTest` |
 | `megaplan-crm/test_megaplan_transport.py` | Тест | Узкоспециализированная утилита «test megaplan transport»; интерфейс перечислен справа. | `TransportTest` |
+| `megaplan-crm/test_morning_brief.py` | Тест | Узкоспециализированная утилита «test morning brief»; интерфейс перечислен справа. | `FakeAPI`, `MorningBriefTests` |
 | `megaplan-crm/test_payer_manager.py` | Тест | Узкоспециализированная утилита «test payer manager»; интерфейс перечислен справа. | `FakeAPI`, `PayerManagerTests` |
 | `megaplan-crm/test_payer_signatory_store.py` | Тест | Узкоспециализированная утилита «test payer signatory store»; интерфейс перечислен справа. | `PayerSignatoryStoreTests` |
 | `megaplan-crm/test_position_type_source.py` | Тест | Узкоспециализированная утилита «test position type source»; интерфейс перечислен справа. | `PositionTypeSourceTests`, `ExistingCatalogTypeTests` |
@@ -569,5 +572,5 @@
 
 ## Итого
 
-- Python: 533
+- Python: 536
 - JavaScript/MJS: 11

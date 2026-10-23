@@ -4,6 +4,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 import periodic_schedule as schedule
+import qa_schedule
 
 class ScheduleTests(unittest.TestCase):
     def test_restart_and_initialization_cannot_increase_poll_frequency(self):
@@ -36,5 +37,11 @@ class ScheduleTests(unittest.TestCase):
             self.assertFalse(schedule.claim_daily(path,'qa',1,now=before))
             self.assertTrue(schedule.claim_daily(path,'qa',1,now=after))
             self.assertFalse(schedule.claim_daily(path,'qa',1,now=after))
+
+    def test_morning_brief_is_due_only_on_weekdays_after_configured_time(self):
+        plan={**qa_schedule.DEFAULT, 'morning_brief': {**qa_schedule.DEFAULT['morning_brief'], 'at_moscow':'09:00'}}
+        self.assertFalse(qa_schedule.morning_brief_due(dt.datetime(2026,10,23,5,59,tzinfo=dt.timezone.utc),plan))
+        self.assertTrue(qa_schedule.morning_brief_due(dt.datetime(2026,10,23,6,0,tzinfo=dt.timezone.utc),plan))
+        self.assertFalse(qa_schedule.morning_brief_due(dt.datetime(2026,10,24,7,0,tzinfo=dt.timezone.utc),plan))
 
 if __name__=='__main__':unittest.main()
