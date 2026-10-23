@@ -8803,11 +8803,19 @@ def process_handoff_task(token, chat_id, task_id):
         result = ask_developer(handoff_watcher.developer_prompt(task))
     ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     handoff_watcher.finish(task_id, result, ok)
+    # The developer's own words are a claim; GitHub is the receipt.
+    try:
+        verification = handoff_watcher.verify_report(task_id, handoff_watcher.repository())
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
+                        'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
+    handoff_watcher.record_verification(task_id, verification)
     if os.path.getmtime(__file__) != bridge_mtime_before:
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
-    send_message(token, chat_id, ('✅' if ok else '⚠️') + f" Разработчик по {task_id}:\n\n{result[-3000:]}", MAIN_KEYBOARD)
-    return ok
+    send_message(token, chat_id, handoff_watcher.verification_text(task_id, verification)
+                 + f"\n\nСообщение разработчика:\n{result[-3000:]}", MAIN_KEYBOARD)
+    return ok and verification['ok']
 
 
 def run_qa_autopilot(token, chat_id, profile='human'):

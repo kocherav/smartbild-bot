@@ -15,8 +15,9 @@ def task_text(task_id='TASK-20261023-01', kind='code', title='Сверка пр�
 class FakeGit:
     """Remote branches as {ref: {path: (text, commit_time)}}; records every command."""
 
-    def __init__(self, branches):
+    def __init__(self, branches, commits=None):
         self.branches = branches
+        self.commits = commits or {}    # sha -> published on a remote branch
         self.commands = []
 
     def __call__(self, cmd, **_kwargs):
@@ -34,7 +35,12 @@ class FakeGit:
             return done(''.join(path + '\n' for path in files if path.startswith(hw.INBOX + '/')))
         if args[0] == 'show':
             ref, path = args[1].split(':', 1)
-            return done(self.branches[ref.removeprefix('origin/')][path][0])
+            entry = self.branches.get(ref.removeprefix('origin/'), {}).get(path)
+            return done(entry[0]) if entry else done('', 128)
+        if args[0] == 'cat-file':
+            return done('', 0 if args[2].split('^')[0] in self.commits else 1)
+        if args[0] == 'branch':
+            return done('  origin/main\n' if self.commits.get(args[3]) else '')
         if args[0] == 'log':
             return done(str(self.branches[args[3].removeprefix('origin/')][args[5]][1]) + '\n')
         raise AssertionError('Наблюдатель выполнил не только чтение: ' + ' '.join(args))
@@ -78,7 +84,7 @@ class HandoffWatcherTests(unittest.TestCase):
         self.assertEqual(['TASK-20261023-02'], [t['id'] for t in ask])
         self.assertEqual([], problems)
         self.assertEqual(([], [], []), self.cycle(git), 'тот же файл не выполняется повторно')
-        allowed = {'fetch', 'rev-parse', 'for-each-ref', 'ls-tree', 'show', 'log'}
+        allowed = {'fetch', 'rev-parse', 'for-each-ref', 'ls-tree', 'show', 'log', 'cat-file', 'branch'}
         self.assertTrue(all(command[0] in allowed for command in git.commands))
 
     def test_amended_task_is_handed_over_again_after_the_run(self):
@@ -134,12 +140,44 @@ class HandoffWatcherTests(unittest.TestCase):
         self.assertIsNone(hw.load_task('TASK-20261023-01', '/repo', git, self.state))
 
 
+class ReportVerificationTests(unittest.TestCase):
+    REPORT = 'handoff/outbox/TASK-20261023-01.md'
+
+    def verify(self, report, commits):
+        git = FakeGit({'main': {self.REPORT: (report, 1)}} if report else {'main': {}}, commits)
+        return hw.verify_report('TASK-20261023-01', '/repo', runner=git)
+
+    def test_report_with_published_commits_is_confirmed(self):
+        result = self.verify('status: done\ncommits: 7965a5f, c32e120\nchecks: ok\n',
+                             {'7965a5f': True, 'c32e120': True})
+        self.assertTrue(result['ok'])
+        self.assertIn('подтверждён', hw.verification_text('TASK-20261023-01', result))
+
+    def test_invented_or_unpushed_commits_are_reported_as_unverified(self):
+        # 23.10: the developer reported 11f4155, e5fe682, c6499e1 that never existed.
+        result = self.verify('status: done\ncommits: 11f4155, e5fe682, abc1234\n',
+                             {'abc1234': False})
+        self.assertFalse(result['ok'])
+        self.assertEqual({'11f4155': False, 'e5fe682': False, 'abc1234': False}, result['commits'])
+        self.assertIn('НЕ подтверждён', hw.verification_text('TASK-20261023-01', result))
+
+    def test_missing_report_or_status_is_unverified(self):
+        self.assertIn('не найден', self.verify(None, {})['problems'][0])
+        self.assertFalse(self.verify('commits: 7965a5f\n', {'7965a5f': True})['ok'])
+
+    def test_status_comment_and_order_do_not_confuse_the_parser(self):
+        result = self.verify('status: blocked   # нет доступа\nnot_done: всё\ncommits:\n', {})
+        self.assertEqual(('blocked', True), (result['status'], result['ok']))
+
+
 class BridgeHandoffTests(unittest.TestCase):
     def test_poll_dispatches_code_task_and_asks_owner_for_release(self):
         import bridge
         git = FakeGit({'claude/x': {
             'handoff/inbox/TASK-20261023-01.md': (task_text(), 10),
-            'handoff/inbox/TASK-20261023-02.md': (task_text('TASK-20261023-02', 'release', 'Выпуск'), 11)}})
+            'handoff/inbox/TASK-20261023-02.md': (task_text('TASK-20261023-02', 'release', 'Выпуск'), 11)},
+            'main': {'handoff/outbox/TASK-20261023-01.md': ('status: done\ncommits: 7965a5f\n', 12)}},
+            {'7965a5f': True})
         sent = []
         with tempfile.TemporaryDirectory() as temporary, \
              patch.object(hw, 'STATE', Path(temporary) / 'handoff_state.json'), \
@@ -154,11 +192,15 @@ class BridgeHandoffTests(unittest.TestCase):
             self.assertIn('✅ Выполнить TASK-20261023-02', json.dumps(card, ensure_ascii=False))
             state = hw.read_state()
             self.assertEqual('done', state['tasks']['TASK-20261023-01']['status'])
+            self.assertTrue(state['tasks']['TASK-20261023-01']['verification']['ok'])
+            self.assertTrue(any('TASK-20261023-01: отчёт подтверждён в GitHub' in text for text, _ in sent))
             self.assertEqual('awaiting_owner', state['tasks']['TASK-20261023-02']['status'])
             with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()):
                 self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))
             self.assertEqual(2, developer.call_count)
             self.assertEqual('done', hw.read_state()['tasks']['TASK-20261023-02']['status'])
+            self.assertTrue(any('TASK-20261023-02: отчёт разработчика НЕ подтверждён' in text for text, _ in sent),
+                            'нет отчёта в GitHub — владелец видит предупреждение, а не «готово»')
             self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))
             self.assertEqual(2, developer.call_count, 'повторная кнопка не запускает разработчика')
 
