@@ -178,6 +178,7 @@ class FakeMegaplan:
         self.deals = {}
         self.contractors = {}
         self.invoices = {}
+        self.bank_transactions = []
         self.employees = {}
         self.statuses = {'1': 'Новая', '2': 'Выставление счета', '3': 'Закупка', '4': 'Монтаж', '5': 'Завершена'}
         self.calls = []
@@ -267,7 +268,7 @@ class FakeMegaplan:
 
     # -- CLI dispatch -------------------------------------------------------
     CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api',
-                   'generate_contract', 'deal_proposal'}
+                   'generate_contract', 'deal_proposal', 'morning_brief'}
 
     def handle(self, script, args, spec):
         script = script[:-3] if script.endswith('.py') else script
@@ -586,6 +587,39 @@ class FakeMegaplan:
         if action == 'list':
             return {'ok': True, 'transactions': []}
         return None
+
+    def cli_morning_brief(self, action, spec):
+        if not self.reachable:
+            return {'ok': False, 'error': 'CRM недоступна'}
+        now = dt.datetime(2026, 10, 23, 6, 5, tzinfo=dt.timezone.utc)
+        completed = tuple(str(x).casefold() for x in spec.get('completed_statuses') or [])
+        overdue, stale = [], []
+        payments = {}
+        for tx in self.bank_transactions:
+            if tx.get('status') == 'assigned' and tx.get('direction') == 'income':
+                key = str(tx.get('deal_id'))
+                payments[key] = payments.get(key, 0) + float(tx.get('amount') or 0)
+        for deal_id in self.deals:
+            paid = payments.get(deal_id, 0)
+            invoices = sorted((x for x in self.invoices.values() if x['deal_id'] == deal_id),
+                              key=lambda x: x['created_at'])
+            for invoice in invoices:
+                deal = self.deals[invoice['deal_id']]
+                issued = dt.datetime.fromisoformat(invoice['created_at'].replace('Z', '+00:00'))
+                age = (now - issued.astimezone(dt.timezone.utc)).days
+                applied = min(paid, float(invoice['sum'])); paid -= applied
+                remainder = float(invoice['sum']) - applied
+                if invoice['status'] in ('drawn', 'partially_paid') and remainder > 0 and age > int(spec.get('invoice_days', 7)):
+                    overdue.append({'deal_id': deal['id'], 'client': self.summary(deal)['client'],
+                                    'amount': str(invoice['sum']), 'remainder': str(remainder), 'days': age})
+        for deal in self.deals.values():
+            item = self.summary(deal)
+            updated = dt.datetime.fromisoformat(deal.get('updated_at') or deal['created_at']).astimezone(dt.timezone.utc)
+            age = (now - updated).days
+            if age > int(spec.get('stale_days', 14)) and not any(x in item['status'].casefold() for x in completed):
+                stale.append({'deal_id': deal['id'], 'client': item['client'], 'amount': str(item['price']),
+                              'days': age, 'status': item['status']})
+        return {'ok': True, 'overdue': overdue, 'stale': stale}
 
 
 # ---------------------------------------------------------------------------

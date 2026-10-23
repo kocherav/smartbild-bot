@@ -93,6 +93,7 @@ def summary(d):
         "status": state.get("name") or "не указан",
         "program": (d.get("program") or {}).get("name"),
         "created_at": created,
+        "updated_at": (d.get("timeUpdated") or {}).get("value"),
         "price": money_value(d.get("price")),
         "positions_count": d.get("positionsCount"),
         "transitions": transitions,
