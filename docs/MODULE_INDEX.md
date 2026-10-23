@@ -8,7 +8,7 @@
 | Файл | Тип | Назначение | Публичный интерфейс |
 |---|---|---|---|
 | `telegram-bridge/allocation_runtime.py` | Рабочий модуль | Resumable application of dashboard-confirmed supplier cost allocations. | `money`, `sync_deal`, `process`, `poll`, `poll_in_environment` |
-| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+212) |
+| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+214) |
 | `telegram-bridge/build_cumulative_deal_execution.py` | Рабочий модуль | Build a cumulative plan/fact workbook for one deal from a multi-period table. | `normalized`, `approved_table_totals`, `build` |
 | `telegram-bridge/build_current_execution.py` | Рабочий модуль | Build the best available cumulative execution workbook for a deal. | `safe`, `build_generic`, `build` |
 | `telegram-bridge/build_installer_report_mockups.py` | Рабочий модуль | Создание демонстрационных XLSX-макетов отчёта монтажника и сверки владельца. | `setup`, `style_body`, `reconciliation_sheet`, `owner_book`, `installer_book` |
@@ -103,7 +103,7 @@
 | `telegram-bridge/product_matching_runtime.py` | Рабочий модуль | Background semantic matching through the bot's existing Codex connection. | `infer`, `poll` |
 | `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `digest`, `ideas_text` |
 | `telegram-bridge/qa_handoff.py` | Рабочий модуль | Human-approved handoff from QA findings to the existing developer agent. | `now`, `ready`, `summarize`, `developer_prompt`, `mark_notified`, `decide`, `claim`, `finish`, `defer_external`, `resume_waiting` |
-| `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `focus`, `missions_for`, `plan_text` |
+| `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `morning_brief_config`, `morning_brief_due`, `focus` (+2) |
 | `telegram-bridge/reconcile_operations.py` | Рабочий модуль | Local operator tool. Never calls a remote write or automatically replays input. | `main` |
 | `telegram-bridge/requisites_card.py` | Рабочий модуль | Deterministic extraction of Russian company requisites from PDF/Word text. | `compact_digits`, `document_text`, `value_after_label`, `parse`, `is_requisites_card`, `parse_document`, `parse_document_from_text` |
 | `telegram-bridge/runtime_guards.py` | Рабочий модуль | Incremental adapter around existing business functions, not an AI router. | `install`, `decorate` |
@@ -133,8 +133,9 @@
 | `telegram-bridge/test_human_fixtures.py` | Тест | Узкоспециализированная утилита «test human fixtures»; интерфейс перечислен справа. | `fake_crm`, `HumanFixtureTests` |
 | `telegram-bridge/test_human_intents.py` | Тест | Узкоспециализированная утилита «test human intents»; интерфейс перечислен справа. | `HumanIntentTests` |
 | `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
-| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `ProposalJourneys`, `NavigationJourneys` |
+| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `NavigationJourneys` |
 | `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `UnsupportedInputJourneys`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
+| `telegram-bridge/test_human_morning_brief.py` | Тест | Узкоспециализированная утилита «test human morning brief»; интерфейс перечислен справа. | `MorningBriefHumanQATests` |
 | `telegram-bridge/test_human_operator_journey.py` | Тест | Узкоспециализированная утилита «test human operator journey»; интерфейс перечислен справа. | `TelegramOperator`, `TelegramPollingMechanicsTests` |
 | `telegram-bridge/test_human_phrasings.py` | Тест | The same request in the many ways people actually say it. | `PhrasingTests` |
 | `telegram-bridge/test_human_qa_explorer.py` | Тест | Узкоспециализированная утилита «test human qa explorer»; интерфейс перечислен справа. | `ScriptedBrain`, `ExplorerTests` |
@@ -190,7 +191,7 @@
 | `megaplan-crm/bank_matcher.py` | Рабочий модуль | Suggest unambiguous Megaplan deals for imported bank transactions. | `normalized_number`, `references`, `deal_id_from_standard_contract`, `fetch_invoices`, `build_index`, `load_index`, `match_transaction`, `suggest` |
 | `megaplan-crm/bank_statement.py` | Рабочий модуль | Import Alfa Bank XLSX statements and keep an auditable deal-assignment registry. | `text`, `amount`, `date_text`, `load_registry`, `save_registry`, `fingerprint`, `parse_xlsx`, `read_1c_text`, `parse_pairs`, `parse_1c`, `parse_statement`, `commission_group` (+6) |
 | `megaplan-crm/build_deal_work_statement.py` | Рабочий модуль | Build an installer-facing work statement without deal economics. | `normalize_status`, `is_post_signing_status`, `statement_rows`, `build_xlsx`, `main` |
-| `megaplan-crm/build_profitability_report.py` | Рабочий модуль | "Расчёт рентабельности сделки" (2026-08-25) - whole-deal economics, the second document | `norm`, `is_aggregate_montage_line`, `load_installation_items`, `load_procurement_items`, `compute_profitability`, `build_xlsx`, `money_field_matches`, `main` |
+| `megaplan-crm/build_profitability_report.py` | Рабочий модуль | "Расчёт рентабельности сделки" (2026-08-25) - whole-deal economics, the second document | `norm`, `is_aggregate_montage_line`, `load_installation_items`, `load_procurement_items`, `compute_profitability`, `build_xlsx`, `data_fingerprint`, `money_field_matches`, `main` |
 | `megaplan-crm/build_work_statement.py` | Рабочий модуль | "Ведомость работ" calculator (2026-08-25) - last piece of the roadmap item started by | `compute_statement`, `build_xlsx`, `main` |
 | `megaplan-crm/closing_documents.py` | Рабочий модуль | Общие функции оформления закрывающих DOCX-документов. | `font`, `p`, `heading`, `table`, `base`, `signs`, `floating_picture`, `special_notes`, `money`, `sign_block`, `validate_contract_rows`, `act_number` (+6) |
 | `megaplan-crm/contract_invoice.py` | Рабочий модуль | Create a one-line Megaplan invoice from a payment clause in the latest deal contract. | `money`, `megaplan_date`, `contract_basis`, `basis_from_deal`, `document_text`, `parse_contract`, `specification_text`, `contract_scope`, `latest_contract`, `preview_fingerprint`, `validate_contract_context`, `preview` (+14) |
@@ -225,6 +226,7 @@
 | `megaplan-crm/megaplan_finance.py` | Рабочий модуль | Create confirmed, idempotent Megaplan expense operations from bank email candidates. | `load`, `save`, `operation_form`, `megaplan_operations`, `existing_operation`, `record_procurement_payments`, `create`, `main` |
 | `megaplan-crm/megaplan_transport.py` | Рабочий модуль | Cross-process CRM budgets and circuit breaker. Never replay a write here. | `ProtectionPause`, `connect`, `retry_seconds`, `paused`, `reachable`, `foreground_waiting`, `acquire_slot`, `urlopen`, `notify_status` |
 | `megaplan-crm/megaplan_webhook.py` | Рабочий модуль | Webhook receiver for the "Отправить в ТГ" button the owner configures inside | `load_env`, `get_api`, `find_invoice`, `invoice_pdf`, `download_pdf`, `format_invoice_date`, `invoice_filename`, `invoice_caption`, `send_telegram_document`, `BoundedHTTPServer`, `Handler`, `fetch_invoice_pdf_cli` |
+| `megaplan-crm/morning_brief.py` | Рабочий модуль | Build the owner's read-only morning action list without per-deal CRM calls. | `build`, `main` |
 | `megaplan-crm/offer_catalog_cache.py` | Рабочий модуль | Local cache of Megaplan's Offer catalog, for name-matching (Phase 1b's "check Мегаплан's | `refresh`, `find_candidate` |
 | `megaplan-crm/own_companies.py` | Рабочий модуль | Canonical directory of the legal entities used by SmartBild. | `load_directory`, `normalize_name`, `companies`, `company_by_id`, `resolve_company`, `default_selling_company` |
 | `megaplan-crm/payer_manager.py` | Рабочий модуль | Create/reuse a client's payer and attach it to an existing Megaplan deal. | `digits`, `valid_inn`, `normalize`, `payer_matches`, `contractor_name`, `resolve_contractor`, `apply`, `main` |
@@ -267,7 +269,7 @@
 | `megaplan-crm/test_document_bundle.py` | Тест | Узкоспециализированная утилита «test document bundle»; интерфейс перечислен справа. | `BundleTests` |
 | `megaplan-crm/test_document_order.py` | Тест | Узкоспециализированная утилита «test document order»; интерфейс перечислен справа. | `DocumentOrderTests` |
 | `megaplan-crm/test_document_tax_policy.py` | Тест | Узкоспециализированная утилита «test document tax policy»; интерфейс перечислен справа. | `TaxPolicyTests` |
-| `megaplan-crm/test_economics_attachment.py` | Тест | Узкоспециализированная утилита «test economics attachment»; интерфейс перечислен справа. | `FakeAPI`, `EconomicsAttachmentTest` |
+| `megaplan-crm/test_economics_attachment.py` | Тест | Узкоспециализированная утилита «test economics attachment»; интерфейс перечислен справа. | `FakeAPI`, `EconomicsAttachmentTest`, `UnchangedEconomicsTest`, `ProfitabilityFingerprintTest` |
 | `megaplan-crm/test_email_payment_monitor.py` | Тест | Узкоспециализированная утилита «test email payment monitor»; интерфейс перечислен справа. | `EmailPaymentTests` |
 | `megaplan-crm/test_final_addendum.py` | Тест | Узкоспециализированная утилита «test final addendum»; интерфейс перечислен справа. | `FinalAddendumTests` |
 | `megaplan-crm/test_financial_amounts.py` | Тест | Узкоспециализированная утилита «test financial amounts»; интерфейс перечислен справа. | `FinancialAmountsTest` |
@@ -288,6 +290,7 @@
 | `megaplan-crm/test_legacy_report_plan.py` | Тест | Узкоспециализированная утилита «test legacy report plan»; интерфейс перечислен справа. | `LegacyPlanTests` |
 | `megaplan-crm/test_megaplan_discounts.py` | Тест | Узкоспециализированная утилита «test megaplan discounts»; интерфейс перечислен справа. | `MegaplanDiscountLedgerTest` |
 | `megaplan-crm/test_megaplan_transport.py` | Тест | Узкоспециализированная утилита «test megaplan transport»; интерфейс перечислен справа. | `TransportTest` |
+| `megaplan-crm/test_morning_brief.py` | Тест | Узкоспециализированная утилита «test morning brief»; интерфейс перечислен справа. | `FakeAPI`, `MorningBriefTests` |
 | `megaplan-crm/test_payer_manager.py` | Тест | Узкоспециализированная утилита «test payer manager»; интерфейс перечислен справа. | `FakeAPI`, `PayerManagerTests` |
 | `megaplan-crm/test_payer_signatory_store.py` | Тест | Узкоспециализированная утилита «test payer signatory store»; интерфейс перечислен справа. | `PayerSignatoryStoreTests` |
 | `megaplan-crm/test_position_type_source.py` | Тест | Узкоспециализированная утилита «test position type source»; интерфейс перечислен справа. | `PositionTypeSourceTests`, `ExistingCatalogTypeTests` |
@@ -569,5 +572,5 @@
 
 ## Итого
 
-- Python: 533
+- Python: 536
 - JavaScript/MJS: 11

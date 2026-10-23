@@ -39,6 +39,7 @@ import statement_document_context
 import periodic_schedule
 import qa_schedule
 import handoff_watcher
+import voice_intake
 import legacy_report_ui
 import closing_runtime
 import product_matching_runtime
@@ -2815,6 +2816,66 @@ def run_deal_browser(spec, timeout=45):
         return {"ok": False, "error": "техническая ошибка поиска сделок"}
 
 
+def run_morning_brief(spec, timeout=90):
+    try:
+        result = subprocess.run(
+            [REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "morning_brief.py")],
+            cwd=MEGAPLAN_DIR, input=json.dumps(spec, ensure_ascii=False),
+            capture_output=True, text=True, timeout=timeout,
+        )
+        lines = (result.stdout or "").strip().splitlines()
+        parsed = json.loads(lines[-1]) if lines else {}
+        if result.returncode == 0 and parsed.get("ok"):
+            return parsed
+        return {"ok": False, "error": parsed.get("error") or "Мегаплан временно не ответил"}
+    except Exception as exc:
+        print(f"{LOG_PREFIX} morning brief failed: {exc}", file=sys.stderr)
+        return {"ok": False, "error": "техническая ошибка чтения Мегаплана"}
+
+
+MORNING_BRIEF_MAX_ITEMS = 10
+
+
+def send_morning_brief(token, chat_id, config=None):
+    config = config or qa_schedule.morning_brief_config()
+    result = run_morning_brief({"invoice_days": config["invoice_overdue_days"],
+                                "stale_days": config["deal_stale_days"],
+                                "completed_statuses": config.get("completed_statuses") or []})
+    if not result.get("ok"):
+        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку. "
+                     "Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
+        return False
+    overdue = sorted(result.get("overdue") or [], key=lambda item: -int(item.get("days") or 0))
+    stale = sorted(result.get("stale") or [], key=lambda item: -float(item.get("amount") or 0))
+    limit = int(config.get("max_items") or MORNING_BRIEF_MAX_ITEMS)
+    hidden = {"overdue": max(0, len(overdue) - limit), "stale": max(0, len(stale) - limit)}
+    # A morning list is read in a minute: the oldest debts and the largest stuck
+    # deals first, the rest counted (QA 23.10: the cache holds hundreds of deals).
+    overdue, stale = overdue[:limit], stale[:limit]
+    lines = ["Утренний список дел"]
+    if overdue:
+        lines.append("\nНеоплаченные счета:")
+        for item in overdue:
+            lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
+                         f"остаток {bank_money(item.get('remainder'))} ₽ из {bank_money(item.get('amount'))} ₽ · {item['days']} дн.")
+        if hidden["overdue"]:
+            lines.append(f"…и ещё {hidden['overdue']} неоплаченных счетов.")
+    if stale:
+        lines.append("\nСделки без движения:")
+        for item in stale:
+            lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
+                         f"{bank_money(item.get('amount'))} ₽ · {item['days']} дн. · {item.get('status') or 'статус не указан'}")
+        if hidden["stale"]:
+            lines.append(f"…и ещё {hidden['stale']} сделок без движения.")
+    if not overdue and not stale:
+        lines.append("\nПросроченных счетов и незавершённых сделок без движения нет.")
+    deal_ids = list(dict.fromkeys(str(item["deal_id"]) for item in overdue + stale))
+    keyboard = ({"keyboard": [[{"text": f"№{deal_id} · открыть сделку"}] for deal_id in deal_ids],
+                 "resize_keyboard": True, "one_time_keyboard": True} if deal_ids else None)
+    send_message(token, chat_id, "\n".join(lines), keyboard)
+    return True
+
+
 def queue_deal_transition(transition, chat_id):
     data = durable_json.read(PENDING_TRANSITIONS_FILE, dict)
     deal_id = str(transition["deal_id"])
@@ -3389,10 +3450,12 @@ def format_profitability(deal_id, result):
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
     result = build_and_store_profitability(deal_id)
-    if not result.get("ok"):
+    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    send_message(token, chat_id, format_profitability(deal_id, result), DEAL_ACTIONS_KEYBOARD)
+    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
+            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
+    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
@@ -3509,6 +3572,29 @@ def run_background_job(job, token, chat_id, operation="background", allow_stale=
 UNSUPPORTED_MESSAGE_KINDS = (("voice", "Голосовые сообщения"), ("video_note", "Видеосообщения-кружки"),
                              ("audio", "Аудиофайлы"), ("sticker", "Стикеры"), ("location", "Геопозицию"),
                              ("contact", "Контакты"))
+
+
+def transcribe_voice_message(token, chat_id, msg, env):
+    """Download, recognise and echo a voice message; None when it cannot be used."""
+    voice = msg.get("voice") or {}
+    if int(voice.get("duration") or 0) > voice_intake.MAX_SECONDS:
+        send_message(token, chat_id, "🎙 Голосовое длиннее 3 минут не распознаю. Разбейте поручение на части "
+                     "или напишите его текстом.", home_keyboard(chat_id))
+        return None
+    send_typing(token, chat_id)
+    path, error = download_telegram_media(token, voice, "voice.ogg")
+    if error:
+        send_message(token, chat_id, f"🎙 {error} Напишите поручение текстом.", home_keyboard(chat_id))
+        return None
+    try:
+        text = voice_intake.transcribe(path, env)
+    except voice_intake.VoiceError as exc:
+        send_message(token, chat_id, f"🎙 Голосовое не распознано: {exc}. Поручение не принято — "
+                     "напишите его текстом.", home_keyboard(chat_id))
+        return None
+    send_message(token, chat_id, f"🎙 Распознано: «{text}»\nЕсли неверно — повторите текстом. "
+                 "Записи по-прежнему выполняются только после подтверждения кнопкой.")
+    return text
 
 
 def run_foreground(job):
@@ -7669,11 +7755,17 @@ def build_and_store_profitability(deal_id):
         "action": "upsert_profitability_file",
         "deal_id": str(deal_id),
         "path": result["path"],
+        # Unchanged numbers keep the published file: no CRM write (QA, 23.10).
+        "data_fingerprint": result.get("data_fingerprint"),
     })
     if not stored.get("ok"):
-        return {**result, "ok": False,
+        return {**result, "ok": False, "built": True,
                 "error": f"файл построен, но не сохранён в сделке: {stored.get('error') or 'ошибка Мегаплана'}"}
     result["stored"] = stored
+    if stored.get("unchanged"):
+        # The same version is already in the deal and in the archive.
+        result["unchanged"] = True
+        return result
     archived = run_financial_archive({
         "deal_id": str(deal_id), "path": result["path"], "category": "economics",
     })
@@ -10934,6 +11026,15 @@ def main():
             next_qa_check = time.time() + 60
         if not draining_reload and time.time() >= next_qa_autopilot_check:
             qa_plan = qa_schedule.load()
+            if (qa_schedule.morning_brief_due(datetime.now(timezone.utc), qa_plan)
+                    and periodic_schedule.claim_daily(os.path.join(BASE_DIR, 'watcher_schedule.json'),
+                                                      'owner-morning-brief', 0)):
+                run_singleton_background_job(
+                    'owner-morning-brief',
+                    lambda: send_morning_brief(token, authorized_chat_id,
+                                               qa_schedule.morning_brief_config(qa_plan)),
+                    token, authorized_chat_id,
+                )
             # One night cycle per night: the explorer spends model calls.
             if (nightly_qa_window()
                     and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'),
@@ -11066,9 +11167,16 @@ def main():
                        '_workflow_callback': True, '_view_id': control['view_id'], 'date': time.time()}
             else:
                 msg = update.get("message")
+            sender_chat = str(((msg or {}).get("chat") or {}).get("id") or "")
+            if (msg and "voice" in msg and voice_intake.configured(env)
+                    and (sender_chat == authorized_chat_id or sender_chat in linked_accounts)):
+                # A dictated request becomes ordinary text (owner decision 23.10, OpenAI).
+                transcript = transcribe_voice_message(token, sender_chat, msg, env)
+                if not transcript:
+                    continue
+                msg = {**msg, "text": transcript, "_voice": True}
             if msg and not any(key in msg for key in ("text", "document", "photo", "video")):
                 unsupported = next((label for key, label in UNSUPPORTED_MESSAGE_KINDS if key in msg), None)
-                sender_chat = str((msg.get("chat") or {}).get("id") or "")
                 if unsupported and (sender_chat == authorized_chat_id or sender_chat in linked_accounts):
                     # A dictated request used to vanish without any answer.
                     send_message(token, sender_chat, f"{unsupported} бот пока не распознаёт, поручение не принято. "

@@ -18,6 +18,7 @@ CLI: `python3 build_profitability_report.py <deal_id> [--out path.xlsx]`
 Prints a single-line JSON summary.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -358,6 +359,22 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     wb.save(path)
 
 
+# Bump when the workbook layout or the meaning of its numbers changes.
+REPORT_FORMAT = "profitability-v1"
+
+
+def data_fingerprint(deal_id, rows, totals, audit):
+    """Identity of the numbers in the workbook, not of the xlsx bytes.
+
+    The file itself carries build-time metadata, so its hash changes on every
+    run.  This digest changes only when a figure the reader sees can change.
+    """
+    payload = json.dumps({"format": REPORT_FORMAT, "deal_id": str(deal_id), "rows": rows,
+                          "totals": totals, "audit": audit},
+                         sort_keys=True, ensure_ascii=False, default=str, allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def money_field_matches(field, expected, tolerance=0.0001):
     field = field or {}
     current = field.get("valueInMain")
@@ -417,10 +434,8 @@ def main():
     rows, total_revenue, total_cost, total_profit, margin_pct = compute_profitability(
         entries, load_procurement_items(args.deal_id),load_installation_items(args.deal_id), args.deal_id)
     audit = financial_amounts.audit_rows(args.deal_id, entries)
-    build_xlsx(rows, args.deal_id, out_path, audit, {
-        "revenue": total_revenue, "cost": total_cost,
-        "profit": total_profit, "margin": margin_pct,
-    })
+    totals = {"revenue": total_revenue, "cost": total_cost, "profit": total_profit, "margin": margin_pct}
+    build_xlsx(rows, args.deal_id, out_path, audit, totals)
 
     current_profit = deal.get("Category1000068CustomFieldRentabelnost") or {}
     profit_is_current = money_field_matches(current_profit, total_profit)
@@ -438,6 +453,7 @@ def main():
         "total_revenue": total_revenue, "total_cost": total_cost,
         "total_profit": total_profit, "margin_pct": margin_pct,
         "financial_audit_count": len(audit),
+        "data_fingerprint": data_fingerprint(args.deal_id, rows, totals, audit),
         "profitability_write": "unchanged" if profit_is_current else "updated",
     }, ensure_ascii=False))
 

@@ -24,6 +24,8 @@ DEFAULT = {
     'full': {'daily_at_moscow_hour': 4},
     'night': {'window_moscow_hours': [0, 7], 'sequence': ['full', 'browser', 'human', 'explore']},
     'digest': {'after_moscow': '17:30'},
+    'morning_brief': {'weekdays_only': True, 'at_moscow': '09:00', 'invoice_overdue_days': 7,
+                      'deal_stale_days': 14, 'completed_statuses': ['заверш', 'закрыт', 'отказ']},
     'explore': {'missions_per_night': 4, 'weekly_focus': {}},
 }
 
@@ -55,6 +57,12 @@ def validate(value):
             raise ValueError('handoff.every_minutes: от 5 минут до суток')
         if 'release' in (handoff.get('auto_kinds') or []):
             raise ValueError('handoff.auto_kinds: выпуск всегда подтверждает владелец')
+    brief = value.get('morning_brief') or DEFAULT['morning_brief']
+    brief_hour, brief_minute = (int(x) for x in brief['at_moscow'].split(':'))
+    if brief_hour not in range(24) or brief_minute not in range(60):
+        raise ValueError('morning_brief.at_moscow: ЧЧ:ММ')
+    if not 1 <= int(brief['invoice_overdue_days']) <= 365 or not 1 <= int(brief['deal_stale_days']) <= 365:
+        raise ValueError('morning_brief: пороги должны быть от 1 до 365 дней')
     return value
 
 
@@ -99,6 +107,17 @@ def digest_due(moment=None, schedule=None):
     hour, minute = (int(x) for x in (schedule or load())['digest']['after_moscow'].split(':'))
     local = moscow(moment)
     return (local.hour, local.minute) >= (hour, minute)
+
+
+def morning_brief_config(schedule=None):
+    return {**DEFAULT['morning_brief'], **((schedule or load()).get('morning_brief') or {})}
+
+
+def morning_brief_due(moment=None, schedule=None):
+    config = morning_brief_config(schedule)
+    local = moscow(moment)
+    hour, minute = (int(x) for x in config['at_moscow'].split(':'))
+    return (not config.get('weekdays_only') or local.weekday() < 5) and (local.hour, local.minute) >= (hour, minute)
 
 
 def focus(day, schedule=None):

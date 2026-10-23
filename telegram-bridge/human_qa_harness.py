@@ -15,6 +15,7 @@ as an isolation finding.
 """
 import copy
 import datetime as dt
+import hashlib
 import datetime as dt
 import json
 import os
@@ -178,12 +179,14 @@ class FakeMegaplan:
         self.deals = {}
         self.contractors = {}
         self.invoices = {}
+        self.bank_transactions = []
         self.employees = {}
         self.statuses = {'1': 'Новая', '2': 'Выставление счета', '3': 'Закупка', '4': 'Монтаж', '5': 'Завершена'}
         self.calls = []
         self.writes = []
         self.failures = {}     # (script, action) -> error text
         self.reachable = True
+        self.economics = {}             # deal_id -> published economics file (survives a bot restart)
         self.crash_after_write = set()   # (script, action): the process dies after this write
         self.crash_before_write = set()  # operation was claimed, CRM received no write
         self.duplicate_after_write = set()
@@ -267,7 +270,7 @@ class FakeMegaplan:
 
     # -- CLI dispatch -------------------------------------------------------
     CRM_SCRIPTS = {'deal_browser', 'payer_manager', 'contract_invoice', 'megaplan_webhook', 'megaplan_api',
-                   'generate_contract', 'deal_proposal'}
+                   'generate_contract', 'deal_proposal', 'morning_brief'}
 
     def handle(self, script, args, spec):
         script = script[:-3] if script.endswith('.py') else script
@@ -338,9 +341,17 @@ class FakeMegaplan:
             deal['executors'] = [employee['name']]
             return {'ok': True, 'deal': self.summary(deal), 'employee': employee}
         if action == 'upsert_profitability_file':
+            # Mirrors deal_browser.replace_economics_attachment: same numbers and
+            # the published file still present -> no write.
             deal = self._deal(spec)
+            published = self.economics.get(deal['id'])
+            if (spec.get('data_fingerprint') and published
+                    and published['data_fingerprint'] == spec['data_fingerprint'] and published['present']):
+                return {'ok': True, **published, 'unchanged': True}
             self._write('deal_browser', action, spec)
-            return {'ok': True, 'file': {'name': Path(spec.get('path') or '').name}}
+            self.economics[deal['id']] = {'file_id': f"econ-{len(self.writes)}", 'present': True,
+                                          'data_fingerprint': spec.get('data_fingerprint')}
+            return {'ok': True, 'file_id': self.economics[deal['id']]['file_id']}
         if action == 'upload_contracts':
             deal = self._deal(spec)
             self._write('deal_browser', action, spec)
@@ -570,8 +581,10 @@ class FakeMegaplan:
                    for p in deal['positions'])
         path = self.root / f"Рентабельность {deal['id']}.xlsx"
         path.write_bytes(b'PK xlsx')
+        figures = [(p['name'], p['qty'], p['price'], p.get('cost_material'), p.get('cost_work')) for p in deal['positions']]
         return {'ok': True, 'path': str(path), 'total_revenue': revenue, 'total_cost': cost,
-                'total_profit': revenue - cost, 'margin_pct': (revenue - cost) / revenue * 100 if revenue else 0}
+                'total_profit': revenue - cost, 'margin_pct': (revenue - cost) / revenue * 100 if revenue else 0,
+                'data_fingerprint': hashlib.sha256(json.dumps(figures, sort_keys=True).encode()).hexdigest()}
 
     def cli_deal_ledger(self, action, spec):
         if action == 'list-recent':
@@ -586,6 +599,39 @@ class FakeMegaplan:
         if action == 'list':
             return {'ok': True, 'transactions': []}
         return None
+
+    def cli_morning_brief(self, action, spec):
+        if not self.reachable:
+            return {'ok': False, 'error': 'CRM недоступна'}
+        now = dt.datetime(2026, 10, 23, 6, 5, tzinfo=dt.timezone.utc)
+        completed = tuple(str(x).casefold() for x in spec.get('completed_statuses') or [])
+        overdue, stale = [], []
+        payments = {}
+        for tx in self.bank_transactions:
+            if tx.get('status') == 'assigned' and tx.get('direction') == 'income':
+                key = str(tx.get('deal_id'))
+                payments[key] = payments.get(key, 0) + float(tx.get('amount') or 0)
+        for deal_id in self.deals:
+            paid = payments.get(deal_id, 0)
+            invoices = sorted((x for x in self.invoices.values() if x['deal_id'] == deal_id),
+                              key=lambda x: x['created_at'])
+            for invoice in invoices:
+                deal = self.deals[invoice['deal_id']]
+                issued = dt.datetime.fromisoformat(invoice['created_at'].replace('Z', '+00:00'))
+                age = (now - issued.astimezone(dt.timezone.utc)).days
+                applied = min(paid, float(invoice['sum'])); paid -= applied
+                remainder = float(invoice['sum']) - applied
+                if invoice['status'] in ('drawn', 'partially_paid') and remainder > 0 and age > int(spec.get('invoice_days', 7)):
+                    overdue.append({'deal_id': deal['id'], 'client': self.summary(deal)['client'],
+                                    'amount': str(invoice['sum']), 'remainder': str(remainder), 'days': age})
+        for deal in self.deals.values():
+            item = self.summary(deal)
+            updated = dt.datetime.fromisoformat(deal.get('updated_at') or deal['created_at']).astimezone(dt.timezone.utc)
+            age = (now - updated).days
+            if age > int(spec.get('stale_days', 14)) and not any(x in item['status'].casefold() for x in completed):
+                stale.append({'deal_id': deal['id'], 'client': item['client'], 'amount': str(item['price']),
+                              'days': age, 'status': item['status']})
+        return {'ok': True, 'overdue': overdue, 'stale': stale}
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +771,9 @@ class Stand:
         self.journey = None
         self.failure = None
         self.unexpected = []      # external calls without a double
+        self.env = {}             # extra .env values (e.g. OPENAI_API_KEY)
+        self.speech = []          # what the speech service hears, in order; Exception = failure
+        self.speech_calls = 0
         self.blocked_writes = []
         self.finished = False
 
@@ -824,6 +873,22 @@ class Stand:
                 return done(0 if ok else 1, text + '\n')
         self.unexpected.append(' '.join(argv)[:300])
         return done(1, '', 'external process is not available on the QA stand')
+
+    def download_media(self, _token, media, default_name='media.bin'):
+        target = self.root / 'state' / f"media-{media.get('file_id')}{Path(default_name).suffix}"
+        target.write_bytes(b'OggS')
+        return str(target), None
+
+    def hear(self, _path, _env, timeout=60):
+        """The speech service double: returns the next scripted transcript."""
+        import voice_intake
+        self.speech_calls += 1
+        if not self.speech:
+            raise voice_intake.VoiceError('сервис распознавания недоступен')
+        heard = self.speech.pop(0)
+        if isinstance(heard, Exception):
+            raise heard
+        return heard
 
     def download_document(self, _token, document):
         source, name = self.uploads.get(document.get('file_id'), (None, None))
@@ -925,7 +990,12 @@ class Stand:
             patch.object(bridge, 'os', child_os),
             patch.object(bridge, 'time', quick_time),
             patch.object(bridge.subprocess, 'run', self.subprocess_run),
-            patch.object(bridge, 'load_env', return_value={'TELEGRAM_BOT_TOKEN': 'qa', 'TELEGRAM_CHAT_ID': self.owner_chat}),
+            patch.object(bridge, 'load_env', return_value={'TELEGRAM_BOT_TOKEN': 'qa', 'TELEGRAM_CHAT_ID': self.owner_chat,
+                                                           **self.env}),
+            patch.object(bridge, 'download_telegram_media', side_effect=self.download_media),
+            patch.object(bridge.voice_intake, 'to_wav', side_effect=lambda source, target, runner=None:
+                         (Path(target).write_bytes(b'RIFF'), target)[1]),
+            patch.object(bridge.voice_intake, 'request_transcription', side_effect=self.hear),
             patch.object(bridge, 'tg_api', side_effect=lambda *a, **k: (deadline_guard(), self.telegram.api(*a, **k))[1]),
             patch.object(bridge, 'download_telegram_document', side_effect=self.download_document),
             patch.object(bridge, 'get_offset', return_value=0), patch.object(bridge, 'save_offset'),
@@ -1023,9 +1093,11 @@ def _install_audit(hook):
 class HumanJourneyCase:
     """Mixin for unittest cases: exposes transcript/observations to offline_tests."""
 
-    def play(self, journey, model_rules=(), setup=None, timeout=60):
+    def play(self, journey, model_rules=(), setup=None, timeout=60, env=None, speech=()):
         """``journey`` may be a list: the bot is restarted between its parts."""
         stand = Stand(model_rules)
+        stand.env.update(env or {})
+        stand.speech.extend(speech)
         self.addCleanup(stand.close)
         if setup:
             setup(stand.crm)

@@ -93,6 +93,7 @@ def summary(d):
         "status": state.get("name") or "не указан",
         "program": (d.get("program") or {}).get("name"),
         "created_at": created,
+        "updated_at": (d.get("timeUpdated") or {}).get("value"),
         "price": money_value(d.get("price")),
         "positions_count": d.get("positionsCount"),
         "transitions": transitions,
@@ -296,11 +297,13 @@ def comparable_client_name(value):
     return comparable_contractor_name(value)
 
 
-def replace_economics_attachment(api, deal_id, path):
+def replace_economics_attachment(api, deal_id, path, data_fingerprint=None):
     """Publish one current economics workbook and retire the previous bot copy.
 
     The new attachment is created and verified first.  Therefore a failed upload
-    never removes the last usable report from the deal.
+    never removes the last usable report from the deal.  When the numbers are
+    unchanged (same ``data_fingerprint``) and the published file is still in the
+    deal, nothing is written: a read button must not rewrite CRM files.
     """
     with open(ECONOMICS_ATTACHMENTS_LOCK, "a+", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -323,6 +326,11 @@ def replace_economics_attachment(api, deal_id, path):
         previous = registry.get(str(deal_id)) or {}
         if previous.get('pending_comment_create'):
             raise ValueError('Результат первой публикации экономики неизвестен. Требуется сверка комментария по сохранённому ID файла; повторное создание остановлено')
+        if data_fingerprint and previous.get('data_fingerprint') == data_fingerprint and previous.get('file_id'):
+            current = api._call("GET", f"/deal/{deal_id}/allFiles", params={"limit": 100}).get("data") or []
+            if str(previous['file_id']) in {str(item.get("id")) for item in current}:
+                return {**previous, "unchanged": True}
+            # The registered copy disappeared from the deal: publish it once more.
         uploaded = api.upload_file(path)
         comment_payload = {
             "contentType": "Comment",
@@ -376,6 +384,7 @@ def replace_economics_attachment(api, deal_id, path):
             "file_id": str(uploaded["id"]),
             "filename": uploaded.get("name") or os.path.basename(path),
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **({"data_fingerprint": data_fingerprint} if data_fingerprint else {}),
         }
         save_registry()
         return registry[str(deal_id)]
@@ -635,7 +644,7 @@ def main():
         if not allowed_name:
             raise ValueError("разрешена загрузка только экономики, сформированной ботом")
         api._call("GET", f"/deal/{deal_id}")
-        stored = replace_economics_attachment(api, deal_id, path)
+        stored = replace_economics_attachment(api, deal_id, path, spec.get("data_fingerprint"))
         print(json.dumps({"ok": True, "deal_id": deal_id, **stored}, ensure_ascii=False))
         return
     if action == "record_procurement_receipt":

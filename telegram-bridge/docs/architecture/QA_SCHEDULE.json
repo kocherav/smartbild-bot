@@ -24,6 +24,13 @@
   "digest": {
     "after_moscow": "17:30"
   },
+  "morning_brief": {
+    "weekdays_only": true,
+    "at_moscow": "09:00",
+    "invoice_overdue_days": 7,
+    "deal_stale_days": 14,
+    "completed_statuses": ["заверш", "закрыт", "отказ", "успешно реализована", "не реализована"]
+  },
   "explore": {
     "missions_per_night": 4,
     "weekly_focus": {
