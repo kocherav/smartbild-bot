@@ -39,6 +39,7 @@ import statement_document_context
 import periodic_schedule
 import qa_schedule
 import handoff_watcher
+import voice_intake
 import legacy_report_ui
 import closing_runtime
 import product_matching_runtime
@@ -3511,6 +3512,29 @@ def run_background_job(job, token, chat_id, operation="background", allow_stale=
 UNSUPPORTED_MESSAGE_KINDS = (("voice", "Голосовые сообщения"), ("video_note", "Видеосообщения-кружки"),
                              ("audio", "Аудиофайлы"), ("sticker", "Стикеры"), ("location", "Геопозицию"),
                              ("contact", "Контакты"))
+
+
+def transcribe_voice_message(token, chat_id, msg, env):
+    """Download, recognise and echo a voice message; None when it cannot be used."""
+    voice = msg.get("voice") or {}
+    if int(voice.get("duration") or 0) > voice_intake.MAX_SECONDS:
+        send_message(token, chat_id, "🎙 Голосовое длиннее 3 минут не распознаю. Разбейте поручение на части "
+                     "или напишите его текстом.", home_keyboard(chat_id))
+        return None
+    send_typing(token, chat_id)
+    path, error = download_telegram_media(token, voice, "voice.ogg")
+    if error:
+        send_message(token, chat_id, f"🎙 {error} Напишите поручение текстом.", home_keyboard(chat_id))
+        return None
+    try:
+        text = voice_intake.transcribe(path, env)
+    except voice_intake.VoiceError as exc:
+        send_message(token, chat_id, f"🎙 Голосовое не распознано: {exc}. Поручение не принято — "
+                     "напишите его текстом.", home_keyboard(chat_id))
+        return None
+    send_message(token, chat_id, f"🎙 Распознано: «{text}»\nЕсли неверно — повторите текстом. "
+                 "Записи по-прежнему выполняются только после подтверждения кнопкой.")
+    return text
 
 
 def run_foreground(job):
@@ -11074,9 +11098,16 @@ def main():
                        '_workflow_callback': True, '_view_id': control['view_id'], 'date': time.time()}
             else:
                 msg = update.get("message")
+            sender_chat = str(((msg or {}).get("chat") or {}).get("id") or "")
+            if (msg and "voice" in msg and voice_intake.configured(env)
+                    and (sender_chat == authorized_chat_id or sender_chat in linked_accounts)):
+                # A dictated request becomes ordinary text (owner decision 23.10, OpenAI).
+                transcript = transcribe_voice_message(token, sender_chat, msg, env)
+                if not transcript:
+                    continue
+                msg = {**msg, "text": transcript, "_voice": True}
             if msg and not any(key in msg for key in ("text", "document", "photo", "video")):
                 unsupported = next((label for key, label in UNSUPPORTED_MESSAGE_KINDS if key in msg), None)
-                sender_chat = str((msg.get("chat") or {}).get("id") or "")
                 if unsupported and (sender_chat == authorized_chat_id or sender_chat in linked_accounts):
                     # A dictated request used to vanish without any answer.
                     send_message(token, sender_chat, f"{unsupported} бот пока не распознаёт, поручение не принято. "

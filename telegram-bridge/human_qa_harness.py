@@ -737,6 +737,9 @@ class Stand:
         self.journey = None
         self.failure = None
         self.unexpected = []      # external calls without a double
+        self.env = {}             # extra .env values (e.g. OPENAI_API_KEY)
+        self.speech = []          # what the speech service hears, in order; Exception = failure
+        self.speech_calls = 0
         self.blocked_writes = []
         self.finished = False
 
@@ -836,6 +839,22 @@ class Stand:
                 return done(0 if ok else 1, text + '\n')
         self.unexpected.append(' '.join(argv)[:300])
         return done(1, '', 'external process is not available on the QA stand')
+
+    def download_media(self, _token, media, default_name='media.bin'):
+        target = self.root / 'state' / f"media-{media.get('file_id')}{Path(default_name).suffix}"
+        target.write_bytes(b'OggS')
+        return str(target), None
+
+    def hear(self, _path, _env, timeout=60):
+        """The speech service double: returns the next scripted transcript."""
+        import voice_intake
+        self.speech_calls += 1
+        if not self.speech:
+            raise voice_intake.VoiceError('сервис распознавания недоступен')
+        heard = self.speech.pop(0)
+        if isinstance(heard, Exception):
+            raise heard
+        return heard
 
     def download_document(self, _token, document):
         source, name = self.uploads.get(document.get('file_id'), (None, None))
@@ -937,7 +956,12 @@ class Stand:
             patch.object(bridge, 'os', child_os),
             patch.object(bridge, 'time', quick_time),
             patch.object(bridge.subprocess, 'run', self.subprocess_run),
-            patch.object(bridge, 'load_env', return_value={'TELEGRAM_BOT_TOKEN': 'qa', 'TELEGRAM_CHAT_ID': self.owner_chat}),
+            patch.object(bridge, 'load_env', return_value={'TELEGRAM_BOT_TOKEN': 'qa', 'TELEGRAM_CHAT_ID': self.owner_chat,
+                                                           **self.env}),
+            patch.object(bridge, 'download_telegram_media', side_effect=self.download_media),
+            patch.object(bridge.voice_intake, 'to_wav', side_effect=lambda source, target, runner=None:
+                         (Path(target).write_bytes(b'RIFF'), target)[1]),
+            patch.object(bridge.voice_intake, 'request_transcription', side_effect=self.hear),
             patch.object(bridge, 'tg_api', side_effect=lambda *a, **k: (deadline_guard(), self.telegram.api(*a, **k))[1]),
             patch.object(bridge, 'download_telegram_document', side_effect=self.download_document),
             patch.object(bridge, 'get_offset', return_value=0), patch.object(bridge, 'save_offset'),
@@ -1035,9 +1059,11 @@ def _install_audit(hook):
 class HumanJourneyCase:
     """Mixin for unittest cases: exposes transcript/observations to offline_tests."""
 
-    def play(self, journey, model_rules=(), setup=None, timeout=60):
+    def play(self, journey, model_rules=(), setup=None, timeout=60, env=None, speech=()):
         """``journey`` may be a list: the bot is restarted between its parts."""
         stand = Stand(model_rules)
+        stand.env.update(env or {})
+        stand.speech.extend(speech)
         self.addCleanup(stand.close)
         if setup:
             setup(stand.crm)
