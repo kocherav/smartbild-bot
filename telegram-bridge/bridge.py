@@ -492,6 +492,9 @@ DEALS_KEYBOARD = {
 }
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
+        # Quick actions (QA idea И-1): the most frequent operations in one tap.
+        [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
+        [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
         [{"text": "⬅️ К списку сделок"}],
@@ -3241,6 +3244,36 @@ DEAL_SEARCH_PHRASE_RE = re.compile(
 )
 
 
+BARE_DEAL_NUMBER_RE = re.compile(r"^\s*№?\s*(\d{3,7})\s*$")
+ASSISTANT_CONTEXT_SECONDS = 600
+
+
+def handle_bare_deal_number(token, chat_id, text):
+    """A lone number opens that deal (QA idea И-2) — only when nobody asked a question.
+
+    A number can be the answer to the bot's or the assistant's question (deal of a
+    supplier invoice, quantity, report number), so any pending step, an active
+    deal wizard, an open invoice or catalog task, or an assistant turn in the last
+    ten minutes keeps the old behaviour.
+    """
+    match = BARE_DEAL_NUMBER_RE.match(text or "")
+    if not match:
+        return False
+    state = current_deal_ui_state(chat_id)
+    if state.get("pending") or state.get("deal_creation_active"):
+        return False
+    if time.time() - float(state.get("assistant_turn_at") or 0) < ASSISTANT_CONTEXT_SECONDS:
+        return False
+    try:
+        tasks = invoice_tasks.read(chat_id)
+    except Exception:
+        return False
+    if invoice_tasks.active(tasks) or (tasks.get("foreground") == "catalog"
+                                       and time.time() - float(tasks.get("catalog_at") or 0) < 86400):
+        return False
+    return handle_deal_ui(token, chat_id, "№" + match.group(1))
+
+
 def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
@@ -4692,6 +4725,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         "✅ Сформировать договор", "📑 Получить договор",
         "🧾 Выставить счёт по договору", "✅ Выставить счёт",
         "🧾 Работа со счетами", "📋 Общий счёт по спецификации", "✅ Выставить общий счёт", "📚 Скачать счёт",
+        "🧾 Выставить счёт", "🏢 Сменить плательщика", "📤 Отправить по ЭДО",
         "1. Полностью согласно спецификации", "2. Упрощённый согласно п.6.4", "3. Оба варианта",
         "📎 Получить договор из Мегаплана", "🛠 Ведомость работ", "📋 Монтажная ведомость",
         "📄 Позиции сделки", "📥 Получить счёт", "✅ Загрузить договоры в сделку",
@@ -5153,7 +5187,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if pending == "invoice_full_confirm" and value == "✅ Выставить общий счёт":
         update_deal_ui_state(chat_id, pending="invoice_menu")
-        create_and_send_full_invoice(token, chat_id, deal_id)
+        invoice_id = create_and_send_full_invoice(token, chat_id, deal_id)
+        if invoice_id:
+            offer_edo(token, chat_id, deal_id, invoice_id)
         return True
     if pending == "invoice_download":
         invoice = (state.get("invoice_downloads") or {}).get(value)
@@ -5202,6 +5238,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                     pass
         else:
             send_message(token, chat_id, "Счёт создан, но PDF пока не удалось получить. Его можно скачать через меню счетов.", return_keyboard)
+        offer_edo(token, chat_id, deal_id, result["invoice_id"])
         return True
     if pending == "contract_signatory_name":
         if value.startswith(("📝 ", "📑 ", "👁 ", "✅ ", "⬅️ ", "🤝 ")):
@@ -5498,7 +5535,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         else:
             send_message(token,chat_id,installation_summary(item)+f"\nПринято работ: {money(item.get('accepted_total'))}\nВыплаты, записанные в кабинете: {money(item.get('paid_gross_total',item.get('paid_total')))}\nЗачтено из этих выплат: {money(item.get('paid_total'))}\n{installation_balance_text(item)}",DEAL_ACTIONS_KEYBOARD)
         return True
-    if value == "🧾 Работа со счетами" and deal_id:
+    if value == "🏢 Сменить плательщика" and deal_id:
+        return _start_human_payer(token, chat_id, deal_id)
+    if value == "📤 Отправить по ЭДО":
+        return send_offered_edo(token, chat_id, state)
+    if value in ("🧾 Работа со счетами", "🧾 Выставить счёт") and deal_id:
         update_deal_ui_state(chat_id, pending="invoice_menu", invoice_downloads=None)
         send_message(token, chat_id, "Работа со счетами — можно выставить общий счёт, счёт по отдельному этапу оплаты или скачать любой ранее созданный счёт.", INVOICE_MENU_KEYBOARD)
         return True
@@ -8229,6 +8270,39 @@ def invoice_error_text(error):
     return error
 
 
+EDO_OFFER_KEYBOARD = {"keyboard": [[{"text": "📤 Отправить по ЭДО"}], [{"text": "⬅️ Назад к сделке"}]],
+                      "resize_keyboard": True, "one_time_keyboard": True}
+
+
+def offer_edo(token, chat_id, deal_id, invoice_id):
+    """Next step after an invoice (QA idea И-4): offered, never sent on its own."""
+    update_deal_ui_state(chat_id, edo_offer={"deal_id": str(deal_id), "invoice_ids": [str(invoice_id)]})
+    send_message(token, chat_id, f"Дальше: отправить договор и этот счёт Татьяне для передачи клиенту по ЭДО? "
+                 f"Сделка №{deal_id}. Без нажатия ничего не отправляется.", EDO_OFFER_KEYBOARD)
+
+
+def send_offered_edo(token, chat_id, state):
+    offer = state.get("edo_offer") or {}
+    if not offer.get("deal_id") or str(offer["deal_id"]) != str(state.get("current_deal_id") or offer["deal_id"]):
+        send_message(token, chat_id, "Это предложение отправки устарело. Откройте сделку и выставьте или выберите счёт заново.",
+                     DEAL_ACTIONS_KEYBOARD)
+        return True
+    update_deal_ui_state(chat_id, edo_offer=None)
+    try:
+        result = dispatch_edo_documents(token, offer["deal_id"], offer["invoice_ids"])
+    except Exception as exc:
+        print(f"{LOG_PREFIX} EDO dispatch failed: {exc}", file=sys.stderr)
+        result = {"ok": False, "error": "техническая ошибка отправки; повторять до проверки не нужно"}
+    if result.get("skipped"):
+        text = "Этот договор и счёт уже отправлялись по ЭДО. Повторно не отправляю."
+    elif result.get("ok"):
+        text = "✅ Договор и счёт отправлены Татьяне по email и в Telegram для передачи по ЭДО."
+    else:
+        text = f"⚠️ Комплект для ЭДО не отправлен: {result.get('error')}"
+    send_message(token, chat_id, text, DEAL_ACTIONS_KEYBOARD)
+    return True
+
+
 def create_and_send_contract_invoice(token, chat_id, deal_id, clause, keyboard=INVOICE_MENU_KEYBOARD):
     preview = run_contract_invoice({"action": "preview", "deal_id": str(deal_id), "clause": clause})
     if not preview.get('ok'):
@@ -8242,7 +8316,7 @@ def create_and_send_contract_invoice(token, chat_id, deal_id, clause, keyboard=I
         return False
     send_message(token, chat_id, f"Счёт №{result.get('invoice_number') or result['invoice_id']} выставлен и привязан к сделке №{deal_id}.", keyboard)
     send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id)
-    return True
+    return str(result["invoice_id"])
 
 
 def create_and_send_full_invoice(token, chat_id, deal_id, keyboard=INVOICE_MENU_KEYBOARD):
@@ -8260,6 +8334,7 @@ def create_and_send_full_invoice(token, chat_id, deal_id, keyboard=INVOICE_MENU_
     send_message(token, chat_id, f"Общий счёт №{result.get('invoice_number') or result['invoice_id']} выставлен: позиций — {result.get('rows_count')}.", keyboard)
     update_deal_ui_state(chat_id,invoice_full_preview=None)
     send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id)
+    return str(result["invoice_id"])
     return True
 
 
@@ -9106,16 +9181,33 @@ def _human_choice_keyboard(labels, extra=None):
     return {'keyboard':rows,'resize_keyboard':True,'one_time_keyboard':True}
 
 
+def payer_choices(payers):
+    """Button label -> payer (QA idea И-5): name, INN and the current mark tell payers apart."""
+    choices = {}
+    for item in payers:
+        label = item.get('name') or 'Без названия'
+        if item.get('inn'):
+            label += f" · ИНН {item['inn']}"
+        if item.get('selected'):
+            label += ' · ✓ текущий'
+        if label in choices:
+            label += f" · ID {item['id']}"
+        choices[label] = item
+    return choices
+
+
 def _start_human_payer(token,chat_id,deal_id,target=None):
     result=run_payer_card_apply({'action':'list_deal_payers','deal_id':str(deal_id)})
     if not result.get('ok'):
         send_message(token,chat_id,'Не удалось прочитать плательщиков сделки: '+str(result.get('error')))
         return True
     payers=result.get('payers') or []
-    choices={f"Плательщик ID {item['id']} — {item['name']}":item for item in payers}
+    choices=payer_choices(payers)
     if target:
         needle=' '.join(str(target).casefold().replace('ё','е').split())
-        matches=[item for item in payers if needle in ' '.join(str(item.get('name') or '').casefold().replace('ё','е').split())]
+        digits=re.sub(r'\D','',str(target))
+        matches=([item for item in payers if digits and str(item.get('inn') or '')==digits] if len(digits)>=10 else
+                 [item for item in payers if needle in ' '.join(str(item.get('name') or '').casefold().replace('ё','е').split())])
         if len(matches)==1 and matches[0].get('selected'):
             update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
             send_message(token,chat_id,f"В сделке №{deal_id} плательщик уже «{matches[0]['name']}». Менять нечего, ничего не записано.",DEAL_ACTIONS_KEYBOARD)
@@ -9125,7 +9217,7 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
             update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item})
             current=next((x for x in payers if x.get('selected')),None)
             send_message(token,chat_id,
-                f"Сделка №{deal_id}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nНовый плательщик: {item['name']} (ID {item['id']}).\n\nДанные ещё не записаны.",HUMAN_PAYER_CONFIRM_KEYBOARD)
+                f"Сделка №{deal_id}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nНовый плательщик: {item['name']}" + (f", ИНН {item['inn']}" if item.get('inn') else '') + f" (ID {item['id']}).\n\nДанные ещё не записаны.",HUMAN_PAYER_CONFIRM_KEYBOARD)
             return True
     update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices)
     if choices:
@@ -9270,7 +9362,7 @@ def handle_human_workflow(token,chat_id,text):
         if not result.get('ok'):send_message(token,chat_id,'Плательщик не изменён: '+str(result.get('error')),HUMAN_PAYER_CONFIRM_KEYBOARD);return True
         check=run_payer_card_apply({'action':'list_deal_payers','deal_id':intent.get('deal_id')});selected=next((x for x in check.get('payers') or [] if x.get('selected')),None)
         if str((selected or {}).get('id'))!=str(payer.get('id')):send_message(token,chat_id,'Запись не подтверждена обратным чтением. Не повторяйте без сверки.');return True
-        update_deal_ui_state(chat_id,pending=None,human_intent=None);send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.",DEAL_ACTIONS_KEYBOARD);return True
+        update_deal_ui_state(chat_id,pending=None,human_intent=None);send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.\n\nДальше: «🧾 Выставить счёт» — счёт будет выставлен уже на нового плательщика.",DEAL_ACTIONS_KEYBOARD);return True
     if pending=='human_executor_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
@@ -9796,6 +9888,8 @@ def main():
                 return
             if is_owner and handle_deal_search_phrase(token, chat_id, text):
                 return
+            if is_owner and handle_bare_deal_number(token, chat_id, text):
+                return
             if handle_current_execution_ui(token, chat_id, text):
                 return
             if is_installer and not is_owner:
@@ -9877,6 +9971,9 @@ def main():
         # catalog searches). Run them in a child so the parent keeps polling
         # Telegram and deterministic menu buttons remain responsive. Serialize
         # model children because they resume one shared Codex conversation.
+        # Remember that the assistant is in a conversation: a bare number sent
+        # soon after is probably an answer to its question, not a deal to open.
+        update_deal_ui_state(chat_id, assistant_turn_at=time.time())
         worker_pid = os.fork()
         if worker_pid:
             # Reap already-finished workers without ever waiting for a live one.
