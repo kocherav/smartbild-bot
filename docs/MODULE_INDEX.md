@@ -73,7 +73,7 @@
 | `telegram-bridge/durable_json.py` | Рабочий модуль | Small fail-closed storage for legacy ledgers while their readers coexist. | `locked`, `transaction`, `read`, `save` |
 | `telegram-bridge/effect_runner.py` | Рабочий модуль | Exactly-once local dispatch with honest handling of uncertain remote effects. | `execute` |
 | `telegram-bridge/extract_document_text.py` | Рабочий модуль | Read Office invoice cells without empty merged-cell noise; no external writes. | `extract` |
-| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+2) |
+| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+5) |
 | `telegram-bridge/hogart_closing.py` | Рабочий модуль | Fetch verified Trio Climate closing originals before composing accountant hints. | `money`, `DocumentList`, `documents`, `candidates`, `validate_text`, `fetch`, `sync` |
 | `telegram-bridge/human_fixtures.py` | Рабочий модуль | Read-only CRM snapshots for human journeys. | `crm_cli`, `capture`, `provenance_path`, `register`, `current_provenance`, `verified_snapshot`, `load` |
 | `telegram-bridge/human_intents.py` | Рабочий модуль | Conservative routing of ordinary Russian business requests. | `Intent`, `name_stems`, `classify` |
@@ -127,7 +127,7 @@
 | `telegram-bridge/test_effect_runner.py` | Тест | Узкоспециализированная утилита «test effect runner»; интерфейс перечислен справа. | `EffectsTest` |
 | `telegram-bridge/test_email_notification_ui.py` | Тест | Узкоспециализированная утилита «test email notification ui»; интерфейс перечислен справа. | `EmailNotificationTests` |
 | `telegram-bridge/test_full_transfer_stage_path.py` | Тест | Узкоспециализированная утилита «test full transfer stage path»; интерфейс перечислен справа. | `FullTransferPathTests` |
-| `telegram-bridge/test_handoff_watcher.py` | Тест | Узкоспециализированная утилита «test handoff watcher»; интерфейс перечислен справа. | `task_text`, `FakeGit`, `HandoffWatcherTests`, `BridgeHandoffTests` |
+| `telegram-bridge/test_handoff_watcher.py` | Тест | Узкоспециализированная утилита «test handoff watcher»; интерфейс перечислен справа. | `task_text`, `FakeGit`, `HandoffWatcherTests`, `ReportVerificationTests`, `BridgeHandoffTests` |
 | `telegram-bridge/test_historical_partial_prepare.py` | Тест | Узкоспециализированная утилита «test historical partial prepare»; интерфейс перечислен справа. | `HistoricalPrepareTests`, `PartialPaymentContextTests`, `AdvanceDeadlineTests`, `ShipmentIdentityTests`, `ShipmentRoundingTests` |
 | `telegram-bridge/test_hogart_closing.py` | Тест | Узкоспециализированная утилита «test hogart closing»; интерфейс перечислен справа. | `HogartClosingTests` |
 | `telegram-bridge/test_human_fixtures.py` | Тест | Узкоспециализированная утилита «test human fixtures»; интерфейс перечислен справа. | `fake_crm`, `HumanFixtureTests` |

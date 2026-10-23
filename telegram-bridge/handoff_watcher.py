@@ -47,7 +47,10 @@ PREAMBLE = """Задание от AI-тестировщика SmartBild (обм�
    первая строка — «status: done | blocked | needs_owner»; затем коммиты (SHA), какие
    проверки выполнены и с каким результатом, что не сделано и почему. Отдельно укажи:
    реализовано / проверено изолированно / выпущено / подтверждено в работающей системе.
-6. Если задание противоречит этим правилам или неясно — не угадывай: status: needs_owner
+6. Бот сам проверит в GitHub, что отчёт лежит в main и что каждый коммит из строки
+   «commits:» существует и опубликован. Не перечисляй коммиты, которых нет на GitHub;
+   если отправить не удалось — так и напиши, status: blocked.
+7. Если задание противоречит этим правилам или неясно — не угадывай: status: needs_owner
    и один конкретный вопрос владельцу в отчёте.
 
 Ниже задание без изменений.
@@ -256,6 +259,62 @@ def load_task(task_id, repo, runner=None, path=None):
     if hashlib.sha256(text.encode()).hexdigest() != record.get('sha256'):
         return None
     return {**parse(text), 'ref': record['ref'], 'path': record['path'], 'sha256': record['sha256']}
+
+
+REPORT_STATUSES = {'done', 'blocked', 'needs_owner'}
+SHA = re.compile(r'\b[0-9a-f]{7,40}\b')
+
+
+def verify_report(task_id, repo, runner=None):
+    """Check the developer's claims against GitHub instead of trusting the text.
+
+    The report must be on origin/main and every commit it names must exist and
+    be reachable from a remote branch.  A claim that cannot be verified is shown
+    to the owner as unverified.
+    """
+    _git(repo, ['fetch', '--prune', '--quiet', 'origin'], runner)
+    path = f'handoff/outbox/{task_id}.md'
+    try:
+        text = _git(repo, ['show', f'origin/main:{path}'], runner)
+    except RuntimeError:
+        return {'ok': False, 'status': None, 'commits': {}, 'report': None,
+                'problems': [f'отчёт {path} не найден в main на GitHub']}
+    fields = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition(':')
+        if separator and key.strip().casefold() in ('status', 'commits') and key.strip().casefold() not in fields:
+            fields[key.strip().casefold()] = value.split('#', 1)[0].strip()
+    status = fields.get('status', '').split()[0].casefold() if fields.get('status') else None
+    problems = [] if status in REPORT_STATUSES else ['в отчёте нет строки status: done | blocked | needs_owner']
+    commits = {}
+    for sha in dict.fromkeys(SHA.findall(fields.get('commits', ''))):
+        try:
+            _git(repo, ['cat-file', '-e', sha + '^{commit}'], runner)
+            commits[sha] = bool(_git(repo, ['branch', '-r', '--contains', sha], runner).strip())
+        except RuntimeError:
+            commits[sha] = False
+    missing = [sha for sha, found in commits.items() if not found]
+    if missing:
+        problems.append('на GitHub нет коммитов: ' + ', '.join(missing))
+    return {'ok': not problems, 'status': status, 'commits': commits, 'report': text, 'problems': problems}
+
+
+def record_verification(task_id, verification, path=None):
+    state = read_state(path)
+    record = state['tasks'][task_id]
+    record['verification'] = {key: verification[key] for key in ('ok', 'status', 'commits', 'problems')}
+    record['verified_at'] = utc_now()
+    save_state(state, path)
+    return record
+
+
+def verification_text(task_id, verification):
+    if verification['ok']:
+        found = len(verification['commits'])
+        return (f"✅ {task_id}: отчёт подтверждён в GitHub (статус {verification['status']}"
+                + (f", коммитов найдено {found}/{found}" if found else '') + ").")
+    return (f"⚠️ {task_id}: отчёт разработчика НЕ подтверждён в GitHub — "
+            + '; '.join(verification['problems']) + ". Не считайте задание выполненным без проверки.")
 
 
 def owner_card(task):
