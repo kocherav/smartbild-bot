@@ -11,9 +11,12 @@
   `/var/lib/smartbild-projects/handoff-repo`; этот клон явно добавляется в
   writable roots. Обычные интерактивные задания сохраняют прежний рабочий каталог.
 - Credential helper хранится локально в служебном репозитории и читает файл
-  `/var/lib/smartbild-projects/.git-credentials` с правами UID 993. Результаты
-  полного gate, safe reload и проверки push из процесса службы записываются после
-  выпуска.
+  `/var/lib/smartbild-projects/.git-credentials` с правами UID 993. Выпуск:
+  целевые тесты 17/17, полный gate 1195/1195, safe reload 19:50:04 UTC. Настоящий
+  Codex запущен отдельным systemd-процессом с UID 993, служебными HOME/CODEX_HOME
+  и тем же sandbox: credential readable=yes; временная ветка
+  `qa/uid993-service-push-check` создана, подтверждена `ls-remote`, удалена и
+  повторно подтверждена отсутствующей. `main` при проверке не менялся.
 
 ## 2026-10-23 — HANDOFF: обмен заданиями тестировщик → разработчик через Git
 
