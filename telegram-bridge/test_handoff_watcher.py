@@ -61,6 +61,13 @@ class HandoffWatcherTests(unittest.TestCase):
             with self.subTest(broken=broken[:40]), self.assertRaises(ValueError):
                 hw.parse(broken)
 
+    def test_repository_uses_service_clone_when_live_tree_is_not_git(self):
+        with patch.dict(hw.os.environ, {}, clear=True), \
+             patch.object(hw.Path, 'is_dir', return_value=True), \
+             patch.object(hw.subprocess, 'run') as runner:
+            self.assertEqual(Path('/var/lib/smartbild-projects/handoff-repo'), hw.repository())
+            runner.assert_not_called()
+
     def test_new_code_task_is_dispatched_once_and_release_waits_for_owner(self):
         git = FakeGit({'claude/x': {
             'handoff/inbox/TASK-20261023-01.md': (task_text(), 10),

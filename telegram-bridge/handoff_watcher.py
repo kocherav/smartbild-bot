@@ -108,6 +108,9 @@ def repository(start=BASE, runner=None):
     explicit = os.environ.get('SMARTBILD_REPO')
     if explicit:
         return Path(explicit)
+    service_repo = Path('/var/lib/smartbild-projects/handoff-repo')
+    if service_repo.is_dir():
+        return service_repo
     found = runner(['git', '-C', str(start), 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
     if found.returncode:
         raise RuntimeError('каталог бота не является Git-репозиторием')
