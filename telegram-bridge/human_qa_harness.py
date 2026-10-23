@@ -15,6 +15,7 @@ as an isolation finding.
 """
 import copy
 import datetime as dt
+import hashlib
 import datetime as dt
 import json
 import os
@@ -184,6 +185,7 @@ class FakeMegaplan:
         self.writes = []
         self.failures = {}     # (script, action) -> error text
         self.reachable = True
+        self.economics = {}             # deal_id -> published economics file (survives a bot restart)
         self.crash_after_write = set()   # (script, action): the process dies after this write
         self.crash_before_write = set()  # operation was claimed, CRM received no write
         self.duplicate_after_write = set()
@@ -338,9 +340,17 @@ class FakeMegaplan:
             deal['executors'] = [employee['name']]
             return {'ok': True, 'deal': self.summary(deal), 'employee': employee}
         if action == 'upsert_profitability_file':
+            # Mirrors deal_browser.replace_economics_attachment: same numbers and
+            # the published file still present -> no write.
             deal = self._deal(spec)
+            published = self.economics.get(deal['id'])
+            if (spec.get('data_fingerprint') and published
+                    and published['data_fingerprint'] == spec['data_fingerprint'] and published['present']):
+                return {'ok': True, **published, 'unchanged': True}
             self._write('deal_browser', action, spec)
-            return {'ok': True, 'file': {'name': Path(spec.get('path') or '').name}}
+            self.economics[deal['id']] = {'file_id': f"econ-{len(self.writes)}", 'present': True,
+                                          'data_fingerprint': spec.get('data_fingerprint')}
+            return {'ok': True, 'file_id': self.economics[deal['id']]['file_id']}
         if action == 'upload_contracts':
             deal = self._deal(spec)
             self._write('deal_browser', action, spec)
@@ -570,8 +580,10 @@ class FakeMegaplan:
                    for p in deal['positions'])
         path = self.root / f"Рентабельность {deal['id']}.xlsx"
         path.write_bytes(b'PK xlsx')
+        figures = [(p['name'], p['qty'], p['price'], p.get('cost_material'), p.get('cost_work')) for p in deal['positions']]
         return {'ok': True, 'path': str(path), 'total_revenue': revenue, 'total_cost': cost,
-                'total_profit': revenue - cost, 'margin_pct': (revenue - cost) / revenue * 100 if revenue else 0}
+                'total_profit': revenue - cost, 'margin_pct': (revenue - cost) / revenue * 100 if revenue else 0,
+                'data_fingerprint': hashlib.sha256(json.dumps(figures, sort_keys=True).encode()).hexdigest()}
 
     def cli_deal_ledger(self, action, spec):
         if action == 'list-recent':

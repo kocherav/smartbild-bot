@@ -3389,10 +3389,12 @@ def format_profitability(deal_id, result):
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
     result = build_and_store_profitability(deal_id)
-    if not result.get("ok"):
+    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    send_message(token, chat_id, format_profitability(deal_id, result), DEAL_ACTIONS_KEYBOARD)
+    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
+            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
+    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
@@ -7669,11 +7671,17 @@ def build_and_store_profitability(deal_id):
         "action": "upsert_profitability_file",
         "deal_id": str(deal_id),
         "path": result["path"],
+        # Unchanged numbers keep the published file: no CRM write (QA, 23.10).
+        "data_fingerprint": result.get("data_fingerprint"),
     })
     if not stored.get("ok"):
-        return {**result, "ok": False,
+        return {**result, "ok": False, "built": True,
                 "error": f"файл построен, но не сохранён в сделке: {stored.get('error') or 'ошибка Мегаплана'}"}
     result["stored"] = stored
+    if stored.get("unchanged"):
+        # The same version is already in the deal and in the archive.
+        result["unchanged"] = True
+        return result
     archived = run_financial_archive({
         "deal_id": str(deal_id), "path": result["path"], "category": "economics",
     })
