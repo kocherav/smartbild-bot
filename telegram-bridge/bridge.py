@@ -2833,6 +2833,9 @@ def run_morning_brief(spec, timeout=90):
         return {"ok": False, "error": "техническая ошибка чтения Мегаплана"}
 
 
+MORNING_BRIEF_MAX_ITEMS = 10
+
+
 def send_morning_brief(token, chat_id, config=None):
     config = config or qa_schedule.morning_brief_config()
     result = run_morning_brief({"invoice_days": config["invoice_overdue_days"],
@@ -2842,18 +2845,28 @@ def send_morning_brief(token, chat_id, config=None):
         send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку. "
                      "Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
         return False
-    overdue, stale = result.get("overdue") or [], result.get("stale") or []
+    overdue = sorted(result.get("overdue") or [], key=lambda item: -int(item.get("days") or 0))
+    stale = sorted(result.get("stale") or [], key=lambda item: -float(item.get("amount") or 0))
+    limit = int(config.get("max_items") or MORNING_BRIEF_MAX_ITEMS)
+    hidden = {"overdue": max(0, len(overdue) - limit), "stale": max(0, len(stale) - limit)}
+    # A morning list is read in a minute: the oldest debts and the largest stuck
+    # deals first, the rest counted (QA 23.10: the cache holds hundreds of deals).
+    overdue, stale = overdue[:limit], stale[:limit]
     lines = ["Утренний список дел"]
     if overdue:
         lines.append("\nНеоплаченные счета:")
         for item in overdue:
             lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
                          f"остаток {bank_money(item.get('remainder'))} ₽ из {bank_money(item.get('amount'))} ₽ · {item['days']} дн.")
+        if hidden["overdue"]:
+            lines.append(f"…и ещё {hidden['overdue']} неоплаченных счетов.")
     if stale:
         lines.append("\nСделки без движения:")
         for item in stale:
             lines.append(f"• Сделка №{item['deal_id']} · {item.get('client') or 'клиент не указан'} · "
                          f"{bank_money(item.get('amount'))} ₽ · {item['days']} дн. · {item.get('status') or 'статус не указан'}")
+        if hidden["stale"]:
+            lines.append(f"…и ещё {hidden['stale']} сделок без движения.")
     if not overdue and not stale:
         lines.append("\nПросроченных счетов и незавершённых сделок без движения нет.")
     deal_ids = list(dict.fromkeys(str(item["deal_id"]) for item in overdue + stale))

@@ -58,6 +58,23 @@ class MorningBriefTests(unittest.TestCase):
                                          completed_statuses=['заверш'])
         self.assertEqual('60', result['overdue'][0]['remainder'])
 
+    def test_money_for_a_paid_invoice_does_not_hide_a_later_debt(self):
+        # QA 23.10: payments were allocated only to unpaid invoices, so the money
+        # that settled invoice A "paid" invoice B and the debtor vanished.
+        old, older = '2026-09-20T06:00:00+00:00', '2026-09-01T06:00:00+00:00'
+        deal = {'id': '1', 'contractor': {'name': 'Клиент'}, 'state': {'name': 'В работе'},
+                'timeCreated': {'value': older}, 'timeUpdated': {'value': old}, 'price': {'value': '150'}}
+        invoices = [{'id': '10', 'deal': {'id': '1'}, 'number': 'A', 'status': 'paid',
+                     'timeCreated': {'value': older}, 'sum': {'value': '100'}},
+                    {'id': '11', 'deal': {'id': '1'}, 'number': 'B', 'status': 'drawn',
+                     'timeCreated': {'value': old}, 'sum': {'value': '50'}}]
+        bank = {'transactions': [{'deal_id': '1', 'amount': '100', 'status': 'assigned', 'direction': 'income'}]}
+        with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=[deal]),
+              patch.object(morning_brief.bank_statement, 'load_registry', return_value=bank)):
+            result = morning_brief.build(FakeAPI(invoices), now=dt.datetime(2026, 10, 23, tzinfo=dt.timezone.utc),
+                                         completed_statuses=['заверш'])
+        self.assertEqual([('B', '50')], [(x['invoice_number'], x['remainder']) for x in result['overdue']])
+
 
 if __name__ == '__main__':
     unittest.main()

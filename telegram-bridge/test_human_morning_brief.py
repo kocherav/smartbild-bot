@@ -68,5 +68,16 @@ class MorningBriefHumanQATests(unittest.TestCase):
         self.assertNotIn('задач нет', text)
 
 
+    def test_long_list_shows_the_largest_first_and_counts_the_rest(self):
+        stale = [{'deal_id': str(200 + n), 'client': f'Клиент {n}', 'amount': str(1000 * n), 'days': 30,
+                  'status': 'Закупка'} for n in range(1, 16)]
+        self._send({'ok': True, 'overdue': [], 'stale': stale})
+        text = self.telegram.events[-1]['text']
+        self.assertIn('…и ещё 5 сделок без движения.', text)
+        self.assertLess(text.index('№215'), text.index('№206'), 'Крупнейшие сделки идут первыми')
+        self.assertNotIn('№205', text)
+        self.assertEqual(10, len([label for label in self.telegram.visible_inline() if 'открыть сделку' in label]))
+
+
 if __name__ == '__main__':
     unittest.main()

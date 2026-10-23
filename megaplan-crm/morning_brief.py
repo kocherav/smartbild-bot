@@ -68,7 +68,9 @@ def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=
     for invoice in invoices:
         deal_id = str((invoice.get("deal") or {}).get("id") or invoice.get("deal_id") or "")
         issued = _moment(invoice.get("timeCreated") or invoice.get("created_at"))
-        if deal_id and issued and str(invoice.get("status") or "") in ("drawn", "partially_paid"):
+        # Paid invoices take part in the allocation too: the money that settled
+        # them must not be counted again against a later unpaid invoice (QA 23.10).
+        if deal_id and issued and str(invoice.get("status") or "") in ("drawn", "partially_paid", "paid"):
             by_deal.setdefault(deal_id, []).append((issued, invoice))
     for deal_id, rows in by_deal.items():
         paid = payments.get(deal_id, Decimal("0"))
@@ -78,6 +80,8 @@ def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=
             paid -= applied
             remainder = total - applied
             age = (now - issued).days
+            if str(invoice.get("status") or "") == "paid":
+                continue
             if remainder > 0 and age > int(invoice_days):
                 deal = deals.get(deal_id) or {}
                 overdue.append({"deal_id": deal_id, "client": deal_browser.summary(deal).get("client"),
