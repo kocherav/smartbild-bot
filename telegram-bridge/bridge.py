@@ -8775,7 +8775,7 @@ def poll_handoff(token, chat_id):
         print(f"{LOG_PREFIX} handoff poll failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return False
     for problem in new_problems:
-        send_message(token, chat_id, f"📨 Файл задания тестировщика не принят: {problem['path']} "
+        send_message(token, chat_id, f"📨 Задание тестировщика оформлено с ошибкой и не передано: {problem['path']} "
                      f"({problem['ref']}) — {problem['error']}. Разработчику ничего не передано.")
     for task in ask:
         send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
@@ -8796,7 +8796,7 @@ def process_handoff_task(token, chat_id, task_id):
     if task is None:
         handoff_watcher.finish(task_id, 'Файл изменён после решения; будет рассмотрен заново.', False)
         return False
-    send_message(token, chat_id, f"📨 {task_id} передано разработчику: {task['title']}")
+    send_message(token, chat_id, handoff_watcher.started_text(task))
     bridge_mtime_before = os.path.getmtime(__file__)
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
@@ -8805,7 +8805,8 @@ def process_handoff_task(token, chat_id, task_id):
     handoff_watcher.finish(task_id, result, ok)
     # The developer's own words are a claim; GitHub is the receipt.
     try:
-        verification = handoff_watcher.verify_report(task_id, handoff_watcher.repository())
+        verification = handoff_watcher.verify_report(task_id, handoff_watcher.repository(),
+                                                     release=task['kind'] == 'release')
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
@@ -8813,8 +8814,7 @@ def process_handoff_task(token, chat_id, task_id):
     if os.path.getmtime(__file__) != bridge_mtime_before:
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
-    send_message(token, chat_id, handoff_watcher.verification_text(task_id, verification)
-                 + f"\n\nСообщение разработчика:\n{result[-3000:]}", MAIN_KEYBOARD)
+    send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
     return ok and verification['ok']
 
 

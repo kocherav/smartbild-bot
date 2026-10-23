@@ -73,7 +73,7 @@
 | `telegram-bridge/durable_json.py` | Рабочий модуль | Small fail-closed storage for legacy ledgers while their readers coexist. | `locked`, `transaction`, `read`, `save` |
 | `telegram-bridge/effect_runner.py` | Рабочий модуль | Exactly-once local dispatch with honest handling of uncertain remote effects. | `execute` |
 | `telegram-bridge/extract_document_text.py` | Рабочий модуль | Read Office invoice cells without empty merged-cell noise; no external writes. | `extract` |
-| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+5) |
+| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+9) |
 | `telegram-bridge/hogart_closing.py` | Рабочий модуль | Fetch verified Trio Climate closing originals before composing accountant hints. | `money`, `DocumentList`, `documents`, `candidates`, `validate_text`, `fetch`, `sync` |
 | `telegram-bridge/human_fixtures.py` | Рабочий модуль | Read-only CRM snapshots for human journeys. | `crm_cli`, `capture`, `provenance_path`, `register`, `current_provenance`, `verified_snapshot`, `load` |
 | `telegram-bridge/human_intents.py` | Рабочий модуль | Conservative routing of ordinary Russian business requests. | `Intent`, `name_stems`, `classify` |
