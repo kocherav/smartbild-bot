@@ -64,8 +64,14 @@ JUDGE_RULES = """Ты — строгий QA-инженер. Оцени разг�
 лишние вопросы; молчание бота. Не придумывай требования, которых нет в цели и критериях.
 Налоговый режим, рассчитанный по действующей политике продавца и показанный в предпросмотре до
 подтверждения, не является самовольным условием пользователя. Не считай дефектом то, что требует бизнес-решения владельца.
+Кроме дефектов ты — изобретатель и оптимизатор: не стесняйся предлагать улучшения функционала,
+которые реально помогли бы менеджеру в этом разговоре: сократить число шагов и нажатий, убрать
+лишний вопрос, предложить следующий шаг заранее, объединить действия, автоматизировать рутину,
+сделать ответ понятнее. Только конкретно и с опорой на увиденное в диалоге (какой шаг, сколько
+нажатий сейчас и сколько могло бы быть); не повторяй дефекты; не больше трёх идей.
 Ответь ТОЛЬКО JSON: {"achieved": true|false,
  "defects": [{"severity": "P1"|"P2"|"P3", "title": "кратко", "evidence": "цитата/шаг", "expected": "как должно быть"}],
+ "ideas": [{"title": "суть улучшения", "why": "что мешало в диалоге", "how": "как сделать", "value": "высокая"|"средняя"|"низкая"}],
  "summary": "одна-две фразы"}
 P1 — неверная или ложная запись денег/данных, потеря данных; P2 — цель не достигается обычным путём;
 P3 — неудобство, неточность текста."""
@@ -207,7 +213,10 @@ def case_from(mission, receipt, verdict, decisions):
             'severity': ranked[0]['severity'] if ranked else 'P2', 'title': title,
             'transcript': receipt['transcript'], 'observations': observations,
             'crm_writes': receipt['crm_writes'], 'decisions': decisions,
-            'unexpected_external': receipt['unexpected_external'], 'judge': verdict}
+            'unexpected_external': receipt['unexpected_external'], 'judge': verdict,
+            # Improvement ideas are proposals for the owner, never a failure.
+            'ideas': [{**idea, 'mission': mission['id']} for idea in (verdict.get('ideas') or [])[:3]
+                      if isinstance(idea, dict) and idea.get('title')]}
 
 
 def fixture_from(snapshot_registry):
@@ -284,6 +293,7 @@ def main(argv=None):
               'successful': all(c['status'] == 'passed' for c in cases) and bool(cases),
               'cases': cases, 'brain_calls': getattr(brain, 'calls', None),
               'missions': [m['id'] for m in selected],
+              'ideas': [idea for case in cases for idea in case.get('ideas') or []],
               'theme': qa_schedule.focus(dt.date.fromisoformat(args.seed)).get('theme')}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'LAST_TEST_RUN.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

@@ -8,7 +8,7 @@
 | Файл | Тип | Назначение | Публичный интерфейс |
 |---|---|---|---|
 | `telegram-bridge/allocation_runtime.py` | Рабочий модуль | Resumable application of dashboard-confirmed supplier cost allocations. | `money`, `sync_deal`, `process`, `poll`, `poll_in_environment` |
-| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+208) |
+| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+212) |
 | `telegram-bridge/build_cumulative_deal_execution.py` | Рабочий модуль | Build a cumulative plan/fact workbook for one deal from a multi-period table. | `normalized`, `approved_table_totals`, `build` |
 | `telegram-bridge/build_current_execution.py` | Рабочий модуль | Build the best available cumulative execution workbook for a deal. | `safe`, `build_generic`, `build` |
 | `telegram-bridge/build_installer_report_mockups.py` | Рабочий модуль | Создание демонстрационных XLSX-макетов отчёта монтажника и сверки владельца. | `setup`, `style_body`, `reconciliation_sheet`, `owner_book`, `installer_book` |
@@ -73,13 +73,13 @@
 | `telegram-bridge/durable_json.py` | Рабочий модуль | Small fail-closed storage for legacy ledgers while their readers coexist. | `locked`, `transaction`, `read`, `save` |
 | `telegram-bridge/effect_runner.py` | Рабочий модуль | Exactly-once local dispatch with honest handling of uncertain remote effects. | `execute` |
 | `telegram-bridge/extract_document_text.py` | Рабочий модуль | Read Office invoice cells without empty merged-cell noise; no external writes. | `extract` |
-| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+5) |
+| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+9) |
 | `telegram-bridge/hogart_closing.py` | Рабочий модуль | Fetch verified Trio Climate closing originals before composing accountant hints. | `money`, `DocumentList`, `documents`, `candidates`, `validate_text`, `fetch`, `sync` |
 | `telegram-bridge/human_fixtures.py` | Рабочий модуль | Read-only CRM snapshots for human journeys. | `crm_cli`, `capture`, `provenance_path`, `register`, `current_provenance`, `verified_snapshot`, `load` |
 | `telegram-bridge/human_intents.py` | Рабочий модуль | Conservative routing of ordinary Russian business requests. | `Intent`, `name_stems`, `classify` |
 | `telegram-bridge/human_live_journeys.py` | Рабочий модуль | Human journeys on a read-only snapshot of the real CRM. | `money`, `LiveSnapshotJourneys` |
 | `telegram-bridge/human_qa_explorer.py` | Рабочий модуль | AI exploratory tester: a language model plays the manager on the QA stand. | `CodexBrain`, `CommandBrain`, `parse_json`, `load_missions`, `choose`, `screen_for_actor`, `explore`, `judge`, `case_from`, `fixture_from`, `live_model_stand`, `main` |
-| `telegram-bridge/human_qa_harness.py` | Рабочий модуль | Human QA stand: the real bridge.main() talks to a virtual operator. | `run_script_in_process`, `JourneyStop`, `SimulatedCrash`, `ForkedChildDone`, `FakeTelegram`, `FakeMegaplan`, `ScriptedModel`, `codex_jsonl`, `Action`, `say`, `press`, `press_old` (+7) |
+| `telegram-bridge/human_qa_harness.py` | Рабочий модуль | Human QA stand: the real bridge.main() talks to a virtual operator. | `run_script_in_process`, `JourneyStop`, `SimulatedCrash`, `ForkedChildDone`, `FakeTelegram`, `FakeMegaplan`, `ScriptedModel`, `codex_jsonl`, `Action`, `say`, `press`, `press_old` (+8) |
 | `telegram-bridge/incoming_dispatch.py` | Рабочий модуль | Track routing separately from completion of background business operations. | `tracked` |
 | `telegram-bridge/installation_handoff.py` | Рабочий модуль | Durable handoff delivery, independent of dialog state and financial writes. | `deliver` |
 | `telegram-bridge/installer_material_delivery.py` | Рабочий модуль | Price-free material files, authorized against current installer assignment. | `authorize`, `build` |
@@ -101,7 +101,7 @@
 | `telegram-bridge/procurement_attachments.py` | Рабочий модуль | Verified originals for accountant delivery; OneDrive remains an internal archive. | `download`, `build`, `email_messages` |
 | `telegram-bridge/procurement_intake_runtime.py` | Рабочий модуль | Supplier document ingestion and new line matching, independent of visiting a deal. | `infer_document`, `status`, `process_commands`, `ingest`, `automatic`, `poll`, `poll_in_environment` |
 | `telegram-bridge/product_matching_runtime.py` | Рабочий модуль | Background semantic matching through the bot's existing Codex connection. | `infer`, `poll` |
-| `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `digest` |
+| `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `digest`, `ideas_text` |
 | `telegram-bridge/qa_handoff.py` | Рабочий модуль | Human-approved handoff from QA findings to the existing developer agent. | `now`, `ready`, `summarize`, `developer_prompt`, `mark_notified`, `decide`, `claim`, `finish`, `defer_external`, `resume_waiting` |
 | `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `focus`, `missions_for`, `plan_text` |
 | `telegram-bridge/reconcile_operations.py` | Рабочий модуль | Local operator tool. Never calls a remote write or automatically replays input. | `main` |
@@ -134,11 +134,12 @@
 | `telegram-bridge/test_human_intents.py` | Тест | Узкоспециализированная утилита «test human intents»; интерфейс перечислен справа. | `HumanIntentTests` |
 | `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
 | `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `ProposalJourneys`, `NavigationJourneys` |
-| `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
+| `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `UnsupportedInputJourneys`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
 | `telegram-bridge/test_human_operator_journey.py` | Тест | Узкоспециализированная утилита «test human operator journey»; интерфейс перечислен справа. | `TelegramOperator`, `TelegramPollingMechanicsTests` |
 | `telegram-bridge/test_human_phrasings.py` | Тест | The same request in the many ways people actually say it. | `PhrasingTests` |
 | `telegram-bridge/test_human_qa_explorer.py` | Тест | Узкоспециализированная утилита «test human qa explorer»; интерфейс перечислен справа. | `ScriptedBrain`, `ExplorerTests` |
 | `telegram-bridge/test_human_qa_isolation.py` | Тест | The QA stand must never read or write production business stores. | `StandIsolationTests` |
+| `telegram-bridge/test_human_quick_actions.py` | Тест | Owner-approved improvements (QA_IDEAS.md И-1, И-2, И-4, И-5), checked as a person uses them. | `QuickActionJourneys`, `EdoOfferJourneys` |
 | `telegram-bridge/test_human_recovery.py` | Тест | Human journeys across a bot restart: what a person sees and what is written. | `open_invoice_preview`, `writes`, `RestartJourneys` |
 | `telegram-bridge/test_human_workflow.py` | Тест | Узкоспециализированная утилита «test human workflow»; интерфейс перечислен справа. | `HumanWorkflowTests` |
 | `telegram-bridge/test_incoming_dispatch.py` | Тест | Узкоспециализированная утилита «test incoming dispatch»; интерфейс перечислен справа. | `InboxTests` |
@@ -568,5 +569,5 @@
 
 ## Итого
 
-- Python: 532
+- Python: 533
 - JavaScript/MJS: 11

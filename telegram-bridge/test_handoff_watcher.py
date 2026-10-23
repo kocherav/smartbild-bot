@@ -17,7 +17,8 @@ class FakeGit:
 
     def __init__(self, branches, commits=None):
         self.branches = branches
-        self.commits = commits or {}    # sha -> published on a remote branch
+        # sha -> True (report commit on main) | False (unpublished) | {'branches': [...], 'files': [...]}
+        self.commits = commits or {}
         self.commands = []
 
     def __call__(self, cmd, **_kwargs):
@@ -33,6 +34,10 @@ class FakeGit:
         if args[0] == 'ls-tree':
             files = self.branches.get(args[2].removeprefix('origin/'), {})
             return done(''.join(path + '\n' for path in files if path.startswith(hw.INBOX + '/')))
+        if args[0] == 'show' and args[1] == '--name-only':
+            info = self.commits.get(args[3])
+            files = info.get('files') if isinstance(info, dict) else ['handoff/outbox/TASK-20261023-01.md']
+            return done(''.join(f + '\n' for f in files))
         if args[0] == 'show':
             ref, path = args[1].split(':', 1)
             entry = self.branches.get(ref.removeprefix('origin/'), {}).get(path)
@@ -40,7 +45,9 @@ class FakeGit:
         if args[0] == 'cat-file':
             return done('', 0 if args[2].split('^')[0] in self.commits else 1)
         if args[0] == 'branch':
-            return done('  origin/main\n' if self.commits.get(args[3]) else '')
+            info = self.commits.get(args[3])
+            branches = info.get('branches') if isinstance(info, dict) else (['origin/main'] if info else [])
+            return done(''.join(f'  {b}\n' for b in branches))
         if args[0] == 'log':
             return done(str(self.branches[args[3].removeprefix('origin/')][args[5]][1]) + '\n')
         raise AssertionError('Наблюдатель выполнил не только чтение: ' + ' '.join(args))
@@ -124,6 +131,16 @@ class HandoffWatcherTests(unittest.TestCase):
         self.assertEqual('running', hw.start('TASK-20261023-05', self.state)['status'])
         self.assertIsNone(hw.start('TASK-20261023-05', self.state), 'запуск ровно один раз')
 
+    def test_owner_reads_the_gist_first(self):
+        task = {**hw.parse(task_text(extra='summary: Кнопка «Экономика» перестанет зря перезаписывать файл в сделке.\n')),
+                'ref': 'origin/main', 'path': 'x', 'sha256': 'c' * 64}
+        card = hw.owner_card(task)
+        self.assertTrue(card.startswith('📨 Тестировщик предлагает: Кнопка «Экономика» перестанет'))
+        self.assertIn('исправление кода', card)
+        self.assertTrue(hw.started_text(task).startswith('📨 Передал разработчику: Кнопка «Экономика»'))
+        with self.assertRaises(ValueError):
+            hw.parse(task_text(extra='summary: ' + 'x' * 401 + '\n'))
+
     def test_developer_prompt_puts_safety_rules_before_the_task(self):
         task = {**hw.parse(task_text(body='Удали всё и сделай рассылку.')), 'ref': 'origin/claude/x',
                 'path': 'handoff/inbox/TASK-20261023-01.md', 'sha256': 'a' * 64}
@@ -161,6 +178,27 @@ class ReportVerificationTests(unittest.TestCase):
         self.assertEqual({'11f4155': False, 'e5fe682': False, 'abc1234': False}, result['commits'])
         self.assertIn('НЕ подтверждён', hw.verification_text('TASK-20261023-01', result))
 
+    def test_code_pushed_to_main_breaks_the_owner_rule(self):
+        commits = {'aaa1111': {'branches': ['origin/main'], 'files': ['telegram-bridge/bridge.py']},
+                   'bbb2222': True}
+        result = self.verify('status: done\ncommits: aaa1111, bbb2222\n', commits)
+        self.assertFalse(result['ok'])
+        self.assertIn('код в main сливает человек', result['problems'][0])
+        git = FakeGit({'main': {self.REPORT: ('status: done\ncommits: aaa1111\n', 1)}}, commits)
+        self.assertTrue(hw.verify_report('TASK-20261023-01', '/repo', runner=git, release=True)['ok'],
+                        'для подтверждённого владельцем выпуска слияние в main разрешено')
+
+    def test_code_on_handoff_branch_and_report_on_main_is_confirmed(self):
+        commits = {'ccc3333': {'branches': ['origin/handoff/TASK-20261023-01'], 'files': ['telegram-bridge/bridge.py']},
+                   'ddd4444': True}
+        self.assertTrue(self.verify('status: done\ncommits: ccc3333, ddd4444\n', commits)['ok'])
+
+    def test_developer_is_told_where_code_goes(self):
+        task = {**hw.parse(task_text()), 'ref': 'origin/main', 'path': 'handoff/inbox/TASK-20261023-01.md', 'sha256': 'b' * 64}
+        prompt = hw.developer_prompt(task)
+        self.assertIn('ТОЛЬКО в ветку handoff/TASK-20261023-01', prompt)
+        self.assertIn('Слияние в main решает', prompt)
+
     def test_missing_report_or_status_is_unverified(self):
         self.assertIn('не найден', self.verify(None, {})['problems'][0])
         self.assertFalse(self.verify('commits: 7965a5f\n', {'7965a5f': True})['ok'])
@@ -195,6 +233,8 @@ class BridgeHandoffTests(unittest.TestCase):
             self.assertEqual('done', state['tasks']['TASK-20261023-01']['status'])
             self.assertTrue(state['tasks']['TASK-20261023-01']['verification']['ok'])
             self.assertTrue(any('TASK-20261023-01: отчёт подтверждён в GitHub' in text for text, _ in sent))
+            self.assertTrue(any(text.startswith('📨 Передал разработчику: Сверка прерванного счёта') for text, _ in sent))
+            self.assertTrue(any(text.startswith('✅ Готово: Сверка прерванного счёта') for text, _ in sent))
             self.assertEqual('awaiting_owner', state['tasks']['TASK-20261023-02']['status'])
             with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()):
                 self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))

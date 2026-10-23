@@ -40,7 +40,7 @@ class HumanWorkflowTests(unittest.TestCase):
         with patch.object(bridge,'run_payer_card_apply',side_effect=payer) as apply:
             self.turn('Давай поменяем плательщика в сделке №900')
             self.assertEqual(bridge.current_deal_ui_state('owner')['pending'],'human_payer_select')
-            self.turn('Плательщик ID 2 — ООО Новый')
+            self.turn('ООО Новый · ИНН 2')
             self.assertEqual(bridge.current_deal_ui_state('owner')['pending'],'human_payer_confirm')
             self.assertEqual(apply.call_count,1)
             self.turn('✅ Сменить плательщика',confirmed=True)

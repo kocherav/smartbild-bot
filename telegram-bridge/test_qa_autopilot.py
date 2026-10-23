@@ -37,6 +37,25 @@ class AutopilotTest(unittest.TestCase):
         self.assertIsNone(qa_autopilot.approve_technical(task))
         self.assertIn('Бот не понял голосовую фразу', qa_autopilot.qa_handoff.summarize(task))
 
+    def test_digest_offers_recent_ideas_once_sorted_by_value(self):
+        now = dt.datetime(2026, 10, 24, 15, 0, tzinfo=dt.timezone.utc)
+        state = {'runs': [
+            {'at': '2026-10-24T01:00:00+00:00', 'successful': True, 'ideas': [
+                {'title': 'Подсказывать «Выставить счёт» после смены статуса', 'value': 'средняя'},
+                {'title': 'Кнопка счёта в карточке', 'why': '8 нажатий до счёта', 'how': 'кнопка', 'value': 'высокая'}]},
+            {'at': '2026-10-24T02:00:00+00:00', 'successful': True, 'ideas': [
+                {'title': 'кнопка счёта в карточке', 'value': 'высокая'}]},
+            {'at': '2026-10-22T02:00:00+00:00', 'successful': True, 'ideas': [{'title': 'Старая идея'}]}],
+            'tasks': []}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'qa.json'
+            path.write_text(json.dumps(state, ensure_ascii=False))
+            text = qa_autopilot.digest(path, now)
+        self.assertIn('💡 Идеи тестировщика', text)
+        self.assertLess(text.index('Кнопка счёта в карточке'), text.index('Подсказывать'))
+        self.assertEqual(1, text.casefold().count('кнопка счёта в карточке'))
+        self.assertNotIn('Старая идея', text)
+
     def test_runner_receipt_is_parsed(self):
         runner = Mock(return_value=Mock(returncode=0, stdout=json.dumps({'run': {'id': 'R'}, 'task': None}), stderr=''))
         result = qa_autopilot.run(runner=runner)

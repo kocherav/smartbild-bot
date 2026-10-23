@@ -41,8 +41,12 @@ PREAMBLE = """Задание от AI-тестировщика SmartBild (обм�
    затронутые тесты и quality_gate.py --run.
 2. Запрещено: хозяйственные записи в Мегаплан/банк/финансовые реестры, рассылки клиентам,
    изменение прав, sudo, удаление рабочих данных, force-push. Живые проверки — только чтением.
-3. Выпуск (safe reload) — только если в задании kind: release; он уже подтверждён владельцем.
-4. Ветку, указанную в задании, сливай в main обычным merge; историю не переписывай.
+3. Код, тесты и документацию отправляй ТОЛЬКО в ветку handoff/{task_id}; в main
+   не отправляй ничего, кроме отчёта handoff/outbox/{task_id}.md. Слияние в main решает
+   человек: владелец или сопровождающий разработчик сливают сами, либо выдают отдельное
+   задание kind: release, подтверждённое кнопкой владельца.
+4. Только для kind: release (уже подтверждено владельцем): слей указанную ветку в main
+   обычным merge, выполни quality_gate и safe reload. Историю не переписывай.
 5. В конце обязательно создай отчёт handoff/outbox/{task_id}.md в main и отправь (git push):
    первая строка — «status: done | blocked | needs_owner»; затем коммиты (SHA), какие
    проверки выполнены и с каким результатом, что не сделано и почему. Отдельно укажи:
@@ -84,6 +88,8 @@ def parse(text):
         raise ValueError('kind: ' + ', '.join(sorted(KINDS)))
     if not header.get('title'):
         raise ValueError('нужен title')
+    if len(header.get('summary', '')) > 400:
+        raise ValueError('summary — одна-две фразы, до 400 символов')
     if not body or len(body) > MAX_BODY:
         raise ValueError(f'текст задания пуст или длиннее {MAX_BODY} символов')
     return {**header, 'body': body}
@@ -265,7 +271,7 @@ REPORT_STATUSES = {'done', 'blocked', 'needs_owner'}
 SHA = re.compile(r'\b[0-9a-f]{7,40}\b')
 
 
-def verify_report(task_id, repo, runner=None):
+def verify_report(task_id, repo, runner=None, release=False):
     """Check the developer's claims against GitHub instead of trusting the text.
 
     The report must be on origin/main and every commit it names must exist and
@@ -296,6 +302,16 @@ def verify_report(task_id, repo, runner=None):
     missing = [sha for sha, found in commits.items() if not found]
     if missing:
         problems.append('на GitHub нет коммитов: ' + ', '.join(missing))
+    if not release:
+        # Owner rule (23.10): only a person merges code into main.
+        for sha, found in commits.items():
+            if not found or 'origin/main' not in _git(repo, ['branch', '-r', '--contains', sha], runner).split():
+                continue
+            changed = [p for p in _git(repo, ['show', '--name-only', '--format=', sha], runner).split() if p]
+            outside = [p for p in changed if not p.startswith('handoff/outbox/')]
+            if outside:
+                problems.append(f'коммит {sha} отправил в main не только отчёт ({", ".join(outside[:3])}) — '
+                                'код в main сливает человек')
     return {'ok': not problems, 'status': status, 'commits': commits, 'report': text, 'problems': problems}
 
 
@@ -317,10 +333,36 @@ def verification_text(task_id, verification):
             + '; '.join(verification['problems']) + ". Не считайте задание выполненным без проверки.")
 
 
+KIND_LABELS = {'code': 'исправление кода', 'tests': 'тесты', 'docs': 'документация',
+               'investigation': 'расследование', 'release': 'выпуск на сервер'}
+
+
+def gist(task):
+    """What we are doing and why, in plain words: the owner reads this first."""
+    return task.get('summary') or task.get('title') or task.get('id') or 'задание тестировщика'
+
+
+def tag(task_id, task=None):
+    kind = KIND_LABELS.get((task or {}).get('kind'), '')
+    return f"{task_id}" + (f", {kind}" if kind else '')
+
+
 def owner_card(task):
-    return (f"📨 Задание от AI-тестировщика {task['id']}\n"
-            f"Вид: {task['kind']}; приоритет: {task.get('priority') or 'P2'}\n"
-            f"{task['title']}\n\n{task['body'][:1200]}"
-            + ('…' if len(task['body']) > 1200 else '') +
+    return (f"📨 Тестировщик предлагает: {gist(task)}\n\n"
+            f"Что именно: {task['title']}\n"
+            f"({tag(task['id'], task)}, приоритет {task.get('priority') or 'P2'})\n\n"
+            f"{task['body'][:900]}" + ('…' if len(task['body']) > 900 else '') +
             "\n\nПередать разработчику? Выпуск и действия с рабочими данными выполняются только после вашего решения. "
             "Если кнопок нет — откройте «☰ Ещё → 🧪 Ошибки тестировщика».")
+
+
+def started_text(task):
+    return f"📨 Передал разработчику: {gist(task)}\n({tag(task['id'], task)})"
+
+
+def result_text(task, verification, developer_text):
+    verdict = verification_text(task['id'], verification)
+    head = ('✅ Готово' if verification['ok'] and verification.get('status') == 'done' else
+            '⏸ Остановлено' if verification['ok'] else '⚠️ Не подтверждено')
+    return (f"{head}: {gist(task)}\n{verdict}\n\n"
+            f"Сообщение разработчика:\n{developer_text[-2500:]}")

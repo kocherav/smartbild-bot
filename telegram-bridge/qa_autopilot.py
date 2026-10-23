@@ -93,4 +93,32 @@ def digest(path=qa_handoff.PRODUCTION_STATE, now=None):
             f"Прогонов: {len(runs)}; успешных: {passed}; с дефектами: {failed}.\n"
             f"Активных QA-задач: {len(active)}"
             + ("\n" + "\n".join(f"• {x['id']} — {x.get('status')} ({x.get('severity')})" for x in active[:5])
-               if active else "\nОткрытых технических дефектов нет."))
+               if active else "\nОткрытых технических дефектов нет.")
+            + ideas_text(state, now))
+
+
+VALUE_RANK = {'высокая': 0, 'средняя': 1, 'низкая': 2}
+
+
+def ideas_text(state, now=None, limit=5):
+    """Improvement proposals from the last 24 hours: the owner decides what to build."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    seen, ideas = set(), []
+    for run in state.get('runs') or []:
+        try:
+            recent = now - dt.datetime.fromisoformat(run['at']) <= dt.timedelta(hours=24)
+        except (KeyError, ValueError, TypeError):
+            continue
+        for idea in (run.get('ideas') or []) if recent else []:
+            key = str(idea.get('title') or '').casefold().strip()
+            if key and key not in seen:
+                seen.add(key)
+                ideas.append(idea)
+    if not ideas:
+        return ''
+    ideas.sort(key=lambda idea: VALUE_RANK.get(str(idea.get('value') or '').casefold(), 3))
+    lines = [f"• {idea['title']}" + (f" — {idea['why']}" if idea.get('why') else '')
+             + (f"\n  Как: {idea['how']}" if idea.get('how') else '') for idea in ideas[:limit]]
+    more = f"\n…и ещё {len(ideas) - limit}." if len(ideas) > limit else ''
+    return ("\n\n💡 Идеи тестировщика (на ваше решение):\n" + "\n".join(lines) + more +
+            "\nЧтобы взять идею в работу, перешлите её тестировщику — он оформит задание.")

@@ -31,6 +31,7 @@ HUMAN_FIXTURES = ROOT / 'human-fixtures'
 # A person operating the real bridge: stand suites plus the real-CRM snapshot suite.
 HUMAN_MODULES = ['test_human_operator_journey', 'test_human_journeys', 'test_human_journeys_edge',
                  'test_human_journeys_documents', 'test_human_phrasings', 'test_human_recovery',
+                 'test_human_quick_actions',
                  'human_live_journeys']
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
@@ -234,6 +235,8 @@ class Registry:
         run = {'id': 'RUN-' + hashlib.sha256((utc_now() + str(evidence)).encode()).hexdigest()[:12],
                'at': utc_now(), 'profile': profile, 'evidence': str(evidence),
                'successful': not failures, 'tests': report.get('tests'), 'failures': failures}
+        if report.get('ideas'):
+            run['ideas'] = report['ideas'][:12]
         state['runs'].append(run)
         groups = {'technical': [f for f in failures if not is_external(f)],
                   'external': [f for f in failures if is_external(f)]}
