@@ -14,6 +14,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import sqlite3
@@ -30,9 +31,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 LOG = logging.getLogger("smartbild-kidsbot")
 DB_LOCK = threading.RLock()
+MAC_RE = re.compile(r"^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$")
 STOP = threading.Event()
 
 
@@ -297,20 +299,30 @@ class Store:
             expired = con.execute("DELETE FROM extensions WHERE end_ts<=?", (now,)).rowcount
             if expired:
                 self.bump_state(con=con)
+            # Assigned devices stay managed regardless of DHCP state: a sleeping
+            # device goes to `waiting` but wakes up with the same static lease.
             rows = con.execute(
-                "SELECT DISTINCT ip FROM devices WHERE child_tg_id IS NOT NULL AND ip<>'' "
-                "AND lower(lease_status)='bound' ORDER BY ip"
+                "SELECT DISTINCT ip FROM devices WHERE child_tg_id IS NOT NULL AND ip<>'' ORDER BY ip"
             ).fetchall()
             kids = [str(r[0]) for r in rows]
             ext_rows = con.execute(
                 "SELECT d.ip,e.end_ts FROM extensions e JOIN devices d ON d.id=e.device_id "
-                "WHERE e.end_ts>? AND d.ip<>'' AND lower(d.lease_status)='bound' ORDER BY d.ip",
+                "WHERE e.end_ts>? AND d.ip<>'' ORDER BY d.ip",
                 (now,),
             ).fetchall()
             exts = [(str(r[0]), int(r[1]) - now) for r in ext_rows]
             ver_row = con.execute("SELECT value FROM settings WHERE key='state_version'").fetchone()
             version = int(ver_row[0]) if ver_row else 1
             return version, kids, exts
+
+    def managed_macs(self) -> List[str]:
+        """MACs of all assigned devices; the router blocks them by L2 address,
+        so neither DHCP state nor a manually configured IP lets them out."""
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT DISTINCT upper(mac) FROM devices WHERE child_tg_id IS NOT NULL ORDER BY 1"
+            ).fetchall()
+        return [str(r[0]) for r in rows if MAC_RE.match(str(r[0]))]
 
     def notification_sent(self, key: str) -> bool:
         with self.conn() as con:
@@ -804,7 +816,7 @@ class KidsBot:
             child_id = int(child["tg_id"])
             devices = [
                 d for d in self.store.child_devices(child_id)
-                if str(d["ip"] or "").strip() and str(d["lease_status"] or "").lower() == "bound"
+                if str(d["ip"] or "").strip()
             ]
             if not devices:
                 continue
@@ -864,8 +876,10 @@ class KidsBot:
                         self.send_body(403, b"forbidden\n")
                         return
                     version, kids, exts = bot.store.managed_state()
+                    macs = bot.store.managed_macs()
                     ext_text = ",".join(f"{ip}|{duration_hms(seconds)}" for ip, seconds in exts if seconds > 0)
-                    text = f"VERSION={version}\nKIDS={','.join(kids)}\nEXT={ext_text}\n"
+                    # Routers running the 2.0.0 script read only the first three lines.
+                    text = f"VERSION={version}\nKIDS={','.join(kids)}\nEXT={ext_text}\nMACS={','.join(macs)}\n"
                     self.send_body(200, text.encode("ascii"))
                     return
                 self.send_body(404, b"not found\n")
@@ -945,7 +959,8 @@ def self_test() -> None:
         assert extensions == []
         store.sync_leases([("AA:BB:CC:DD:EE:FF", "192.168.10.50", "kid-phone", "waiting")], complete=True)
         _version, waiting_kids, _extensions = store.managed_state()
-        assert waiting_kids == []
+        assert waiting_kids == ["192.168.10.50"]
+        assert store.managed_macs() == ["AA:BB:CC:DD:EE:FF"]
         store.sync_leases([("AA:BB:CC:DD:EE:FF", "192.168.10.77", "kid-phone", "bound")], complete=True)
         _version, moved_kids, _extensions = store.managed_state()
         assert moved_kids == ["192.168.10.77"]
@@ -957,11 +972,16 @@ def self_test() -> None:
         _version, _kids, active = store.managed_state()
         assert active and active[0][0] == "192.168.10.77"
         assert 1880 <= active[0][1] <= 1920
-        # An offline/waiting lease must not grant the same IP an extension.
+        # A sleeping device keeps both its block and an approved extension.
         store.sync_leases([("AA:BB:CC:DD:EE:FF", "192.168.10.77", "kid-phone", "waiting")], complete=True)
         _version, waiting_kids, waiting_ext = store.managed_state()
-        assert waiting_kids == []
-        assert waiting_ext == []
+        assert waiting_kids == ["192.168.10.77"]
+        assert waiting_ext and waiting_ext[0][0] == "192.168.10.77"
+        # A lease that vanished from the router drops the IP but keeps the MAC block.
+        store.sync_leases([], complete=True)
+        _version, gone_kids, _ext = store.managed_state()
+        assert gone_kids == []
+        assert store.managed_macs() == ["AA:BB:CC:DD:EE:FF"]
 
     print("SELF_TEST_OK")
 

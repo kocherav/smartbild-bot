@@ -18,16 +18,33 @@
         :if ([:pick $line1 0 8] != "VERSION=") do={ :error "bad VERSION" }
         :if ([:pick $line2 0 5] != "KIDS=") do={ :error "bad KIDS" }
         :if ([:pick $line3 0 4] != "EXT=") do={ :error "bad EXT" }
-        :local kidsData ([:pick $line2 5 [:len $line2]] . ",")
-        :local extData ([:pick $line3 4 [:len $line3]] . ",")
-        /ip firewall address-list remove [find where list="kids_devices" and comment="SmartBild KidsBot managed"]
-        /ip firewall address-list remove [find where list="kids_extension" and comment="SmartBild KidsBot managed"]
+        :local rest3 [:pick $rest2 ($n3 + 1) [:len $rest2]]
+        :local n4 [:find $rest3 "\n"]
+        :local line4 $rest3
+        :if ([:typeof $n4] != "nil") do={ :set line4 [:pick $rest3 0 $n4] }
+        :local haveMacs false
+        :if ([:pick $line4 0 5] = "MACS=") do={ :set haveMacs true }
+
+        :local kidsCsv [:pick $line2 5 [:len $line2]]
+        :local kidsWant ("," . $kidsCsv . ",")
+        :foreach e in=[/ip firewall address-list find where list="kids_devices" and comment="SmartBild KidsBot managed"] do={
+            :local a [:tostr [/ip firewall address-list get $e address]]
+            :if ([:typeof [:find $kidsWant ("," . $a . ",")]] = "nil") do={ /ip firewall address-list remove $e }
+        }
+        :local kidsData ($kidsCsv . ",")
         :while ([:len $kidsData] > 0) do={
             :local comma [:find $kidsData ","]
             :local item [:pick $kidsData 0 $comma]
             :set kidsData [:pick $kidsData ($comma + 1) [:len $kidsData]]
-            :if ([:len $item] > 0) do={ /ip firewall address-list add list="kids_devices" address=$item comment="SmartBild KidsBot managed" }
+            :if ([:len $item] > 0) do={
+                :if ([:len [/ip firewall address-list find where list="kids_devices" and address=$item]] = 0) do={
+                    /ip firewall address-list add list="kids_devices" address=$item comment="SmartBild KidsBot managed"
+                }
+            }
         }
+
+        :local extData ([:pick $line3 4 [:len $line3]] . ",")
+        :local extWant ","
         :while ([:len $extData] > 0) do={
             :local comma [:find $extData ","]
             :local item [:pick $extData 0 $comma]
@@ -36,7 +53,42 @@
                 :local sep [:find $item "|"]
                 :local ip [:pick $item 0 $sep]
                 :local ttl [:pick $item ($sep + 1) [:len $item]]
-                :if (([:len $ip] > 0) && ([:len $ttl] > 0)) do={ /ip firewall address-list add list="kids_extension" address=$ip timeout=$ttl comment="SmartBild KidsBot managed" }
+                :if (([:len $ip] > 0) && ([:len $ttl] > 0)) do={
+                    :set extWant ($extWant . $ip . ",")
+                    :if ([:len [/ip firewall address-list find where list="kids_extension" and address=$ip]] = 0) do={
+                        /ip firewall address-list add list="kids_extension" address=$ip timeout=$ttl comment="SmartBild KidsBot managed"
+                    }
+                }
+            }
+        }
+        :foreach e in=[/ip firewall address-list find where list="kids_extension" and comment="SmartBild KidsBot managed"] do={
+            :local a [:tostr [/ip firewall address-list get $e address]]
+            :if ([:typeof [:find $extWant ("," . $a . ",")]] = "nil") do={ /ip firewall address-list remove $e }
+        }
+
+        :if ($haveMacs) do={
+            :local macsCsv [:pick $line4 5 [:len $line4]]
+            :local macWant ("," . $macsCsv . ",")
+            :foreach r in=[/ip firewall filter find where chain=forward and comment~"^SmartBild KidsBot 03 mac "] do={
+                :local m [:tostr [/ip firewall filter get $r src-mac-address]]
+                :if ([:typeof [:find $macWant ("," . $m . ",")]] = "nil") do={ /ip firewall filter remove $r }
+            }
+            :local macData ($macsCsv . ",")
+            :while ([:len $macData] > 0) do={
+                :local comma [:find $macData ","]
+                :local item [:pick $macData 0 $comma]
+                :set macData [:pick $macData ($comma + 1) [:len $macData]]
+                :if ([:len $item] > 0) do={
+                    :local tag ("SmartBild KidsBot 03 mac " . $item)
+                    :if ([:len [/ip firewall filter find where chain=forward and comment=$tag]] = 0) do={
+                        :local fwd [/ip firewall filter find where chain=forward]
+                        :if ([:len $fwd] > 0) do={
+                            /ip firewall filter add chain=forward src-mac-address=$item out-interface-list=WAN action=jump jump-target=sbkb-out place-before=[:pick $fwd 0] comment=$tag
+                        } else={
+                            /ip firewall filter add chain=forward src-mac-address=$item out-interface-list=WAN action=jump jump-target=sbkb-out comment=$tag
+                        }
+                    }
+                }
             }
         }
         :set sbkbLastStateOk ([/system clock get date] . " " . [/system clock get time])

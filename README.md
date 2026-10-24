@@ -20,6 +20,7 @@
 | `megaplan-crm` | API Мегаплана, сделки, договоры, счета, КП, закупки, монтаж и архив | `megaplan_api.py` и специализированные модули |
 | `hogart-scraper` | Каталог Hogart, расчёты КП, веб-пульт и финансовый контур | `hogart_api.py`, `dashboard/server.py` |
 | `daichi-scraper` | API, кэш и поиск каталога Daichi | `daichi_api.py`, `daichi_search.py` |
+| `kids-internet` | Детский интернет по расписанию: KidsBot на VPS и скрипты MikroTik | `vps/app.py`, `mikrotik/sbkb-scripts.rsc.in` |
 
 ## Важные границы
 
