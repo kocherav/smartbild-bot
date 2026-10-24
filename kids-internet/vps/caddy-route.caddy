@@ -1,0 +1,7 @@
+# Этот блок расположен ВНУТРИ сайта claude.smartbild.su {
+
+# BEGIN SMARTBILD KIDSBOT
+handle_path /kidsbot/* {
+    reverse_proxy 127.0.0.1:8765
+}
+# END SMARTBILD KIDSBOT

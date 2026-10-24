@@ -1,0 +1,12 @@
+{
+  "bot_token": "__TELEGRAM_BOT_TOKEN__",
+  "bot_username": "SmartBildHome_bot",
+  "router_secret": "__64_HEX_ROUTER_SECRET__",
+  "owner_token": "__40_HEX_OWNER_TOKEN__",
+  "child_invite": "__CHILD_INVITE_TOKEN__",
+  "bind_host": "127.0.0.1",
+  "bind_port": 8765,
+  "db_path": "/var/lib/smartbild-kidsbot/kidsbot.db",
+  "timezone": "Europe/Moscow",
+  "log_level": "INFO"
+}
