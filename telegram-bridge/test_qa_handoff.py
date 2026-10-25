@@ -159,5 +159,14 @@ class QaHandoffTests(unittest.TestCase):
         developer.assert_not_called()
 
 
+
+class AclSpecTest(unittest.TestCase):
+    def test_owner_as_service_user_is_listed_once(self):
+        from unittest.mock import patch
+        with patch.object(qa_handoff, 'QA_SERVICE_USER', 'kocher.av'):
+            self.assertEqual('u:kocher.av:rw,m:rw', qa_handoff.acl_spec())
+        with patch.object(qa_handoff, 'QA_SERVICE_USER', 'smartbild-projects'):
+            self.assertEqual('u:smartbild-projects:rw,u:kocher.av:rw,m:rw', qa_handoff.acl_spec())
+
 if __name__ == '__main__':
     unittest.main()

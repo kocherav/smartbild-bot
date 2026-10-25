@@ -56,6 +56,12 @@ def load_json(path, default):
     return value
 
 
+def acl_spec():
+    """Both writers once: setfacl rejects a duplicate entry (QA 25.10, service user = owner)."""
+    users = dict.fromkeys([QA_SERVICE_USER, 'kocher.av'])
+    return ','.join(f'u:{user}:rw' for user in users) + ',m:rw'
+
+
 def atomic_save(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +77,7 @@ def atomic_save(path, value):
             # os.access() only describes the current writer.  The previous
             # guard silently removed the *other* writer on every atomic replace.
             completed = subprocess.run(
-                ['setfacl', '-m', f'u:{QA_SERVICE_USER}:rw,u:kocher.av:rw,m:rw', temporary],
+                ['setfacl', '-m', acl_spec(), temporary],
                 capture_output=True, text=True,
             )
             if completed.returncode:

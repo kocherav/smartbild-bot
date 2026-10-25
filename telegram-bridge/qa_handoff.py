@@ -13,11 +13,17 @@ STATE = PRODUCTION_STATE
 QA_SERVICE_USER = os.environ.get('QA_SERVICE_USER', 'smartbild-projects')
 
 
+def acl_spec():
+    """Both writers once: setfacl rejects a duplicate entry (QA 25.10, service user = owner)."""
+    users = dict.fromkeys([QA_SERVICE_USER, 'kocher.av'])
+    return ','.join(f'u:{user}:rw' for user in users) + ',m:rw'
+
+
 def _grant_shared_access(path):
     # Shared QA files inherit a default ACL.  The confined service account is
     # allowed to write data but intentionally cannot rewrite filesystem ACLs.
     completed = subprocess.run(
-        ['setfacl', '-m', f'u:{QA_SERVICE_USER}:rw,u:kocher.av:rw,m:rw', str(path)],
+        ['setfacl', '-m', acl_spec(), str(path)],
         capture_output=True, text=True,
     )
     if completed.returncode:

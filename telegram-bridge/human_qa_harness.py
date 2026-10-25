@@ -328,7 +328,8 @@ class FakeMegaplan:
                     tokens = re.split(r'\W+', haystack(deal).casefold().replace('ё', 'е'))
                     return sum(any(t.startswith(stem) for t in tokens) for stem in stems)
                 found = sorted((d for d in ordered if score(d)), key=score, reverse=True)
-            return {'ok': True, 'deals': [self.summary(d) for d in found[:15]], 'total_count': len(found)}
+            return {'ok': True, 'deals': [self.summary(d) for d in found[:max(1, min(int(spec.get('limit') or 15), 20))]],
+                    'total_count': len(found)}
         if action == 'move_status':
             deal = self._deal(spec)
             if str(spec.get('state_id')) not in self.statuses:
@@ -359,6 +360,18 @@ class FakeMegaplan:
             self.economics[deal['id']] = {'file_id': f"econ-{len(self.writes)}", 'present': True,
                                           'data_fingerprint': spec.get('data_fingerprint')}
             return {'ok': True, 'file_id': self.economics[deal['id']]['file_id']}
+        if action == 'update_contract_fields':
+            # Mirrors deal_browser.update_contract_fields: date and/or object address,
+            # one POST, then the fresh card is read back.
+            deal = self._deal(spec)
+            if not spec.get('contract_date') and not spec.get('address'):
+                raise ValueError('не переданы дата договора или адрес объекта')
+            self._write('deal_browser', action, spec)
+            if spec.get('address'):
+                deal['address'] = str(spec['address']).strip()
+            if spec.get('contract_date'):
+                deal['contract_date'] = str(spec['contract_date'])
+            return {'ok': True, 'deal': self.summary(deal)}
         if action == 'upload_contracts':
             deal = self._deal(spec)
             self._write('deal_browser', action, spec)

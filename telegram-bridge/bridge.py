@@ -3302,7 +3302,8 @@ def handle_explicit_deal_read(token, chat_id, text):
 
 
 DEAL_SEARCH_PHRASE_RE = re.compile(
-    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой|какие|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+"
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой|какие|где)\s+(?:все\s+|мои\s+)?"
+    r"(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?сдел(?:к\w*|ок)\s+"
     r"(?:(?P<client>клиента|по\s+клиенту|у\s+клиента|с\s+клиентом|для)|(?P<address>по\s+адресу|на\s+адресе|адрес))\s+"
     r"(?P<query>[^?!.]{2,80})[?!.]*\s*$"
 )
@@ -3310,7 +3311,8 @@ DEAL_SEARCH_PHRASE_RE = re.compile(
 
 # «Найди сделку по складу в Химках»: no client/address marker — search everything.
 DEAL_FREE_SEARCH_RE = re.compile(
-    r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?"
+    r"сдел(?:к\w*|ок)\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
 )
 # Lists by period/status/payment and deal numbers belong to other handlers.
 DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
@@ -3348,6 +3350,25 @@ def handle_bare_deal_number(token, chat_id, text):
     return handle_deal_ui(token, chat_id, "№" + match.group(1))
 
 
+def _phrase_limit(match):
+    """«Покажи 10 сделок …» — the asked count, within the one-screen limit of 15."""
+    return max(1, min(int(match.group("count") or 15), 15))
+
+
+LISTED_DEAL_RE = re.compile(r"(?m)^\s*(?:\d{1,2}[.)]\s*)?№\s?(\d{3,7})\s*[—–-]\s*(.+?)\s*$")
+
+
+def listed_deals_keyboard(text):
+    """Buttons for deals an assistant answer lists one per line (owner request 25.10):
+    a list of deals must be pressable, not «скажи "открой 858"»."""
+    deals = list(dict.fromkeys(LISTED_DEAL_RE.findall(text or "")))
+    ids = list(dict.fromkeys(deal_id for deal_id, _ in deals))
+    if len(ids) < 2:
+        return None
+    titles = dict(reversed(deals))
+    return deal_selection_keyboard([{"id": deal_id, "description": titles[deal_id]} for deal_id in ids[:15]])
+
+
 def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
@@ -3355,7 +3376,8 @@ def handle_deal_search_phrase(token, chat_id, text):
         free = DEAL_FREE_SEARCH_RE.match(text or "")
         if not free or DEAL_FREE_SEARCH_EXCLUDE_RE.search(free.group("query")):
             return False
-        result = run_deal_browser({"action": "search_any", "query": free.group("query").strip(" «»\""), "limit": 15})
+        result = run_deal_browser({"action": "search_any", "query": free.group("query").strip(" «»\""),
+                                   "limit": _phrase_limit(free)})
         if not result.get("ok") or not result.get("deals"):
             return False  # not a confident search: the usual route answers
         update_deal_ui_state(chat_id, pending=None)
@@ -3364,7 +3386,7 @@ def handle_deal_search_phrase(token, chat_id, text):
     query = match.group("query").strip(" «»\"")
     action = "search_address" if match.group("address") else "search_client"
     update_deal_ui_state(chat_id, pending=None)
-    send_deal_list(token, chat_id, {"action": action, "query": query, "limit": 15})
+    send_deal_list(token, chat_id, {"action": action, "query": query, "limit": _phrase_limit(match)})
     return True
 
 
@@ -8966,15 +8988,47 @@ def ask_developer(prompt, workdir=None, fresh=False):
     return answer or "Задача завершена, но Codex не вернул текстовый отчёт."
 
 
+STALE_RELOAD_NOTICE = {"key": None}
+
+
+def report_stale_reload(token, chat_id):
+    """A released version that cannot load must not stay silent."""
+    changed = safe_reload.stale_request(RELOAD_REQUEST_FILE, __file__)
+    key = "|".join(changed)
+    if not changed or STALE_RELOAD_NOTICE["key"] == key:
+        return False
+    STALE_RELOAD_NOTICE["key"] = key
+    names = ", ".join(os.path.basename(path) for path in changed[:5]) + (f" и ещё {len(changed) - 5}" if len(changed) > 5 else "")
+    send_message(token, chat_id, "⚠️ Выпущенная версия бота НЕ загружена: после выпуска на сервере изменились файлы "
+                 f"({names}). Бот продолжает работать на прежней версии. Нужен повторный выпуск, чтобы код "
+                 "на сервере совпал с проверенным.")
+    return True
+
+
+def reload_snapshot():
+    try:
+        return safe_reload.bundle_manifest(__file__)
+    except (OSError, SyntaxError) as exc:
+        print(f"{LOG_PREFIX} bundle snapshot failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+
+
+def bundle_changed(before):
+    """Any changed module needs a reload, not only bridge.py (QA 25.10: a stand fix
+    after a release silently voided the release's reload request)."""
+    after = reload_snapshot()
+    return after is not None and after != before
+
+
 def process_developer_task(token, chat_id, task_text):
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, "w") as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         result = ask_developer(task_text)
     current = current_deal_ui_state(chat_id)
     if current.get("pending") == "developer_task_running":
         update_deal_ui_state(chat_id, pending=None, developer_task_text=None, developer_task_started_at=None)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE,__file__)
         result+='\n\nОбновление процесса ожидает завершения активных задач; они не будут прерваны перезапуском.'
     send_message(token, chat_id, "✅ Результат задачи разработчику:\n\n" + result, MAIN_KEYBOARD)
@@ -8985,13 +9039,13 @@ def process_qa_developer_task(token, chat_id, task_id):
     if not task:
         send_message(token, chat_id, f"QA-задача {task_id} уже выполняется или была обработана.", MAIN_KEYBOARD)
         return False
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         result = ask_developer(qa_handoff.developer_prompt(task))
     failed = result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     qa_handoff.finish(task_id, result, not failed)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     prefix = '⚠️ Разработчик не завершил' if failed else '✅ Разработчик завершил; QA должен перепроверить'
@@ -9039,7 +9093,7 @@ def process_handoff_task(token, chat_id, task_id):
         handoff_watcher.finish(task_id, 'Файл изменён после решения; будет рассмотрен заново.', False)
         return False
     send_message(token, chat_id, handoff_watcher.started_text(task))
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         repository = handoff_watcher.repository()
@@ -9054,7 +9108,7 @@ def process_handoff_task(token, chat_id, task_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     handoff_watcher.record_verification(task_id, verification)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
@@ -9141,7 +9195,7 @@ def process_idea_task(token, chat_id, idea_id):
         return False
     task = qa_ideas.developer_task(record)
     send_message(token, chat_id, handoff_watcher.started_text(task))
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         repository = handoff_watcher.repository()
@@ -9153,7 +9207,7 @@ def process_idea_task(token, chat_id, idea_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     qa_ideas.finish(idea_id, ok and verification['ok'] and verification.get('status') == 'done', verification)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
@@ -11037,7 +11091,7 @@ def main():
         clean_text = sanitize_service_protocol(clean_text)
         print(f"{LOG_PREFIX} replying: {clean_text[:200]!r} attachments={attachments} image_urls={image_urls} kp={kp_document_path}")
         if clean_text:
-            reply_keyboard = TAX_KEYBOARD if tax_choice_requested else None
+            reply_keyboard = TAX_KEYBOARD if tax_choice_requested else listed_deals_keyboard(clean_text)
             if invoice_apply_spec is not None and not invoice_apply_spec.get("__invalid__"):
                 plan = invoice_apply_spec.get("_distribution_plan") or {}
                 # Any unallocated source line requires an explicit manager
@@ -11124,6 +11178,8 @@ def main():
         safe_reload.apply_if_idle(RELOAD_REQUEST_FILE,__file__,active_children,
                                   lambda:os.execv(sys.executable,[sys.executable,__file__]))
         draining_reload=safe_reload.pending_reviewed(RELOAD_REQUEST_FILE,__file__)
+        if not draining_reload:
+            report_stale_reload(token, authorized_chat_id)
         if not draining_reload and time.time() >= next_qa_check:
             show_qa_findings(token, authorized_chat_id, only_unnotified=True)
             next_qa_check = time.time() + 60

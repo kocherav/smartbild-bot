@@ -71,6 +71,26 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(5, stand.receipt()['actions'], 'от номера до назначения — 5 действий вместо 12+')
         self.assertEqual(0, len(stand.model.prompts))
 
+    def test_counted_deal_list_by_phrase_is_pressable(self):
+        def journey(person):
+            yield say('Покажи 1 сделку с Альфа Климат')
+            person.sees('показаны последние 1 из 2', expected='Бот показал столько сделок, сколько просили')
+            person.sees_button('№990002 · Вентиляция склада', expected='Каждая сделка списка — кнопка')
+            yield press('№990002 · Вентиляция склада')
+            person.sees('Сделка №990002', expected='Нажатие сразу открыло карточку')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(stand.model.prompts), 'Список сделок по фразе не должен уходить в ИИ')
+
+    def test_assistant_list_of_deals_gets_buttons(self):
+        listing = ('Нашёл такие сделки:\n\n1. №990001 — Кондиционирование офиса\n   Этап: Заявка\n\n'
+                   '2. №990002 — Вентиляция склада\n   Этап: Закупка\n\nСчёт №311 — выставлен.')
+        def journey(person):
+            yield say('Какие у нас сейчас интересные объекты?')
+            person.sees_button('№990002 · Вентиляция склада', expected='Список сделок от ассистента — с кнопками')
+            yield press('№990002 · Вентиляция склада')
+            person.sees('Сделка №990002', expected='Кнопка открыла сделку без «открой карточку 990002»')
+        self.play(journey, setup=office, model_rules=[('интересные объекты', listing)])
+
 class EdoOfferJourneys(HumanJourneyCase, unittest.TestCase):
     def issue(self, person):
         yield say('990001')

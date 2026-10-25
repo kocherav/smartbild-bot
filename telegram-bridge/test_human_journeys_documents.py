@@ -44,6 +44,31 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'upload_contracts']))
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create']))
 
+    def test_contract_for_deal_without_address_asks_and_saves_it_once(self):
+        def setup(crm):
+            no_contract(crm)
+            crm.deals[DEAL]['address'] = ''
+        def journey(person):
+            yield from to_contract_menu(person)
+            yield press('👁 Проверить данные договора')
+            for _ in range(5):
+                screen = person.screen_text()
+                if 'Договор №' in screen:
+                    break
+                if 'Устав' in person.visible_buttons():
+                    yield press('Устав')
+                elif 'адрес объекта' in screen:
+                    yield say('Москва, ул. Тестовая, 1')
+                elif 'должность' in screen:
+                    yield say('Генеральный директор')
+                else:
+                    yield say('Петров Иван Сергеевич')
+            person.sees('Договор №990001-Д', expected='После ввода адреса показан предпросмотр договора')
+        stand = self.play(journey, setup=setup)
+        saved = [w for w in stand.crm.writes if w['action'] == 'update_contract_fields']
+        self.assertEqual(1, len(saved), 'Адрес записан в сделку ровно один раз')
+        self.assertEqual('Москва, ул. Тестовая, 1', stand.crm.deals[DEAL]['address'])
+
     def test_menu_button_is_not_taken_as_signatory_name(self):
         def journey(person):
             yield from to_contract_menu(person)

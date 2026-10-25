@@ -750,6 +750,7 @@ def main():
             # fall back to word stems only when nothing matched exactly.
             ranked = [(stem_match_score(query, searchable(deal)), deal) for deal in deals]
             found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
+        total_count = len(found)
         found = found[:max(1, min(int(spec.get("limit", 10)), 20))]
     elif action in ("search_client", "search_address"):
         query = str(spec.get("query") or "").strip().casefold()

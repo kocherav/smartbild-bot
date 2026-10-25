@@ -66,4 +66,38 @@ class ReloadTests(unittest.TestCase):
             self.assertFalse(safe_reload.apply_if_idle(request,str(code),False,restart))
             restart.assert_not_called();self.assertTrue(Path(request).exists())
 
+    def test_stale_request_names_the_changed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code=Path(tmp)/'app.py'; code.write_text('import helper')
+            helper=Path(tmp)/'helper.py'; helper.write_text('value=1')
+            request=str(Path(tmp)/'reload.json')
+            self.assertEqual([], safe_reload.stale_request(request,str(code)))
+            safe_reload.request(request,str(code))
+            self.assertEqual([], safe_reload.stale_request(request,str(code)))
+            helper.write_text('value=2')
+            self.assertEqual([str(helper.resolve())], safe_reload.stale_request(request,str(code)))
+
+
+class BridgeReloadAfterDeveloperTest(unittest.TestCase):
+    """QA 25.10: a stand fix after a release voided the release's reload request."""
+
+    def test_change_of_any_module_is_detected(self):
+        import bridge
+        from unittest.mock import patch
+        with patch.object(bridge.safe_reload, 'bundle_manifest', side_effect=[{'a.py': '1', 'b.py': '1'},
+                                                                               {'a.py': '1', 'b.py': '2'}]):
+            before = bridge.reload_snapshot()
+            self.assertTrue(bridge.bundle_changed(before))
+
+    def test_stale_release_is_reported_once(self):
+        import bridge
+        from unittest.mock import patch
+        with patch.object(bridge.safe_reload, 'stale_request', return_value=['/srv/x/human_qa_harness.py']), \
+             patch.object(bridge, 'STALE_RELOAD_NOTICE', {'key': None}), \
+             patch.object(bridge, 'send_message') as send:
+            self.assertTrue(bridge.report_stale_reload('t', 'owner'))
+            self.assertFalse(bridge.report_stale_reload('t', 'owner'))
+        self.assertIn('НЕ загружена', send.call_args.args[2])
+        self.assertIn('human_qa_harness.py', send.call_args.args[2])
+
 if __name__=='__main__': unittest.main()
