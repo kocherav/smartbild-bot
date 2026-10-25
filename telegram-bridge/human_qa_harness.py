@@ -321,6 +321,13 @@ class FakeMegaplan:
                 return ' '.join([summary['name'] or '', summary['client'], summary['address']])
             words = [w for w in re.split(r'\W+', query) if len(w) > 2] or [query]
             found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
+            if action == 'search_any' and not found:
+                # Mirrors deal_browser.stem_match_score: case endings ignored.
+                stems = {w[:max(4, len(w) - 2)] for w in words if len(w) >= 4}
+                def score(deal):
+                    tokens = re.split(r'\W+', haystack(deal).casefold().replace('ё', 'е'))
+                    return sum(any(t.startswith(stem) for t in tokens) for stem in stems)
+                found = sorted((d for d in ordered if score(d)), key=score, reverse=True)
             return {'ok': True, 'deals': [self.summary(d) for d in found[:15]], 'total_count': len(found)}
         if action == 'move_status':
             deal = self._deal(spec)

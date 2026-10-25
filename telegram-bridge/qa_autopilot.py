@@ -79,22 +79,96 @@ def defer_external(task):
     )
 
 
-def digest(path=qa_handoff.PRODUCTION_STATE, now=None):
+JOURNEYS = ROOT / 'docs' / 'architecture' / 'HUMAN_JOURNEYS.json'
+
+# What a task is about and who acts, in the owner's words (owner request 23.10:
+# «не бездушные номера, а суть вкратце»).
+STATUS_WORDS = {
+    'ready': 'ждёт передачи разработчику', 'approved': 'передаётся разработчику',
+    'fixing': 'разработчик чинит', 'awaiting_verification': 'исправлено, тестировщик перепроверит',
+    'waiting_input': 'ждёт внешних данных',
+}
+INFRA_WORDS = {
+    'infra:playwright-browser': 'на сервере не запускается браузер для browser-проверок',
+    'infra:crm-snapshot': 'нет свежего снимка CRM для живых маршрутов (только чтение)',
+    'infra:explore-no-receipt': 'AI-исследователь не вернул результат (модель не ответила вовремя)',
+    'infra:explore-judge': 'AI-судья не оценил миссию исследователя',
+}
+
+
+def _journey_titles(path=None):
+    try:
+        registry = json.loads(Path(path or JOURNEYS).read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return {str(item.get('id')): str(item.get('title') or '') for item in registry.get('journeys') or []}
+
+
+def failure_gist(failure, titles=None):
+    """One failure in plain words: the judge's title, a journey name, or a known infra gap."""
+    if failure.get('title'):
+        return str(failure['title'])
+    ident = str(failure.get('id') or 'неизвестная проверка')
+    if ident.startswith('coverage:'):
+        journey = ident.removeprefix('coverage:').split(':', 1)[0]
+        name = (titles or {}).get(journey)
+        return f"маршрут «{name or journey}» не подтверждён прогоном на снимке CRM"
+    if ident.startswith('decision:'):
+        return 'нужно ваше решение: ' + ident.removeprefix('decision:')
+    for prefix, words in INFRA_WORDS.items():
+        if ident.startswith(prefix):
+            return words
+    if ident.startswith('isolation:'):
+        return 'проверка попыталась обратиться к рабочим данным и была остановлена'
+    return 'не прошла проверка ' + ident.rsplit('.', 1)[-1]
+
+
+def task_gist(task, titles=None):
+    failures = task.get('failures') or []
+    words = list(dict.fromkeys(failure_gist(item, titles) for item in failures))
+    more = f' (+ ещё {len(words) - 2})' if len(words) > 2 else ''
+    return '; '.join(words[:2]) + more if words else 'причина не записана'
+
+
+def _task_lines(tasks, titles, limit):
+    lines = [f"• {task_gist(task, titles)} — {STATUS_WORDS.get(task.get('status'), task.get('status'))}"
+             f" ({task.get('severity') or 'P2'}, {task['id']})" for task in tasks[:limit]]
+    if len(tasks) > limit:
+        lines.append(f"…и ещё {len(tasks) - limit}.")
+    return lines
+
+
+def digest(path=qa_handoff.PRODUCTION_STATE, now=None, journeys=None, limit=5):
     state = qa_handoff._read(path)
+    titles = _journey_titles(journeys)
     today = (now or dt.datetime.now(dt.timezone.utc)).date()
     runs = [x for x in state.get('runs') or []
             if dt.datetime.fromisoformat(x['at']).date() == today]
     tasks = state.get('tasks') or []
-    active = [x for x in tasks if x.get('status') in
-              {'ready', 'approved', 'fixing', 'awaiting_verification', 'waiting_input'}]
+    severity = lambda task: (str(task.get('severity') or 'P2'), task.get('created_at') or '')
+    active = sorted((x for x in tasks if x.get('status') in STATUS_WORDS), key=severity)
+    code = [x for x in active if x.get('status') != 'waiting_input']
+    waiting = [x for x in active if x.get('status') == 'waiting_input']
     passed = sum(bool(x.get('successful')) for x in runs)
-    failed = len(runs) - passed
-    return (f"🧪 AI-тестировщик за сегодня\n"
-            f"Прогонов: {len(runs)}; успешных: {passed}; с дефектами: {failed}.\n"
-            f"Активных QA-задач: {len(active)}"
-            + ("\n" + "\n".join(f"• {x['id']} — {x.get('status')} ({x.get('severity')})" for x in active[:5])
-               if active else "\nОткрытых технических дефектов нет.")
-            + ideas_text(state, now))
+    lines = ["🧪 AI-тестировщик за сегодня",
+             f"Прогонов: {len(runs)}; успешных: {passed}; с замечаниями: {len(runs) - passed}."]
+    failed = {}
+    for run in runs:
+        if not run.get('successful'):
+            failed.setdefault(run.get('profile') or 'проверка', []).extend(run.get('failures') or [])
+    for profile, failures in failed.items():
+        words = list(dict.fromkeys(failure_gist(item, titles) for item in failures))
+        lines.append(f"• {profile}: " + ('; '.join(words[:2]) + (f' (+ ещё {len(words) - 2})' if len(words) > 2 else '')
+                                         if words else 'прогон не завершился'))
+    if code:
+        lines += [f"\nДефекты кода ({len(code)}) — их ведут тестировщик и разработчик, от вас ничего не нужно:"]
+        lines += _task_lines(code, titles, limit)
+    else:
+        lines.append("\nОткрытых дефектов кода нет.")
+    if waiting:
+        lines += [f"\nНе код, ждут данных или решения ({len(waiting)}):"]
+        lines += _task_lines(waiting, titles, limit)
+    return "\n".join(lines) + ideas_text(state, now)
 
 
 VALUE_RANK = {'высокая': 0, 'средняя': 1, 'низкая': 2}
