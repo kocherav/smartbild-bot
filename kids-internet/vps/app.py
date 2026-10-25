@@ -291,7 +291,21 @@ class Store:
     def assign_device(self, device_id: int, child_id: Optional[int]) -> None:
         with DB_LOCK, self.conn() as con:
             con.execute("UPDATE devices SET child_tg_id=? WHERE id=?", (child_id, device_id))
+            if child_id is None:
+                con.execute("DELETE FROM extensions WHERE device_id=?", (device_id,))
             self.bump_state(con=con)
+
+    def unassign_device(self, device_id: int, child_id: int) -> bool:
+        """Remove a device from this child only; False if it is not theirs."""
+        with DB_LOCK, self.conn() as con:
+            cur = con.execute(
+                "UPDATE devices SET child_tg_id=NULL WHERE id=? AND child_tg_id=?", (device_id, child_id)
+            )
+            if not cur.rowcount:
+                return False
+            con.execute("DELETE FROM extensions WHERE device_id=?", (device_id,))
+            self.bump_state(con=con)
+            return True
 
     def managed_state(self) -> Tuple[int, List[str], List[Tuple[str, int]]]:
         now = int(time.time())
@@ -685,6 +699,17 @@ class KidsBot:
             self.store.assign_device(device_id, new_owner)
             self.telegram.answer_callback(cb_id, "Назначение обновлено")
             self.show_assignment(chat_id, child_id)
+        elif action == "remove" and len(parts) == 3:
+            self.telegram.answer_callback(cb_id)
+            self.show_removal(chat_id, int(parts[2]))
+        elif action == "unassign" and len(parts) == 4:
+            child_id, device_id = int(parts[2]), int(parts[3])
+            device = self.store.device(device_id)
+            if device is not None and self.store.unassign_device(device_id, child_id):
+                self.telegram.answer_callback(cb_id, f"Снято: {device_name(device)}")
+            else:
+                self.telegram.answer_callback(cb_id, "Устройство уже не назначено этому ребёнку.")
+            self.show_removal(chat_id, child_id)
         elif action == "approve" and len(parts) == 3:
             request_id = int(parts[2])
             state, row = self.store.decide_request(request_id, approve=True)
@@ -727,6 +752,8 @@ class KidsBot:
         if not devices:
             self.telegram.send(chat_id, "MikroTik ещё не передал DHCP-устройства. Подождите около минуты.")
             return
+        # This child's devices go first so they are never cut off by the limit.
+        devices = sorted(devices, key=lambda d: 0 if d["child_tg_id"] == child_id else 1)
         keyboard: List[List[Dict[str, str]]] = []
         for d in devices[:45]:
             if d["child_tg_id"] == child_id:
@@ -737,11 +764,37 @@ class KidsBot:
                 mark = "▫️"
             title = f"{mark} {device_name(d)} • {d['ip']}"
             keyboard.append([{"text": title[:60], "callback_data": f"p:toggle:{child_id}:{d['id']}"}])
+        keyboard.append([{"text": "🗑 Снять устройства", "callback_data": f"p:remove:{child_id}"}])
         keyboard.append([{"text": "Готово", "callback_data": "p:children"}])
         self.telegram.send(
             chat_id,
             f"Назначение устройств: {child['first_name'] or child_id}\n"
             "✅ — назначено этому ребёнку; 👤 — назначено другому. Нажатие переключает назначение.",
+            keyboard,
+        )
+
+    def show_removal(self, chat_id: int, child_id: int) -> None:
+        child = self.store.user(child_id)
+        if child is None or child["role"] != "child":
+            self.telegram.send(chat_id, "Ребёнок не найден.")
+            return
+        name = child["first_name"] or child_id
+        devices = self.store.child_devices(child_id)
+        back = [{"text": "⬅️ К назначению", "callback_data": f"p:assign:{child_id}"}]
+        if not devices:
+            self.telegram.send(chat_id, f"У ребёнка {name} не осталось назначенных устройств.", [back])
+            return
+        keyboard = [
+            [{"text": f"❌ {device_name(d)} • {d['ip'] or 'нет IP'} • {d['mac']}"[:60],
+              "callback_data": f"p:unassign:{child_id}:{d['id']}"}]
+            for d in devices
+        ]
+        keyboard.append(back)
+        self.telegram.send(
+            chat_id,
+            f"🗑 Устройства ребёнка {name}\n"
+            "Нажмите на устройство, чтобы снять его с контроля. "
+            "Роутер уберёт блокировку примерно через 15 секунд.",
             keyboard,
         )
 
@@ -982,6 +1035,12 @@ def self_test() -> None:
         _version, gone_kids, _ext = store.managed_state()
         assert gone_kids == []
         assert store.managed_macs() == ["AA:BB:CC:DD:EE:FF"]
+        # Unassigning is scoped to the child and drops the device everywhere.
+        assert not store.unassign_device(int(device["id"]), 9999)
+        assert store.unassign_device(int(device["id"]), 2002)
+        assert not store.unassign_device(int(device["id"]), 2002)
+        assert store.managed_macs() == []
+        assert store.health_stats()["active_extensions"] == 0
 
     print("SELF_TEST_OK")
 
