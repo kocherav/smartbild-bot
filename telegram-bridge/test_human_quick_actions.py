@@ -58,6 +58,19 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office)
 
 
+    def test_executor_from_the_deal_card(self):
+        def journey(person):
+            yield say('990001')
+            yield press('👤 Назначить исполнителя')
+            person.sees('Кого назначить исполнителем сделки №990001', expected='Кнопка в карточке спросила, кого назначить')
+            yield say('Смирнов')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            yield press('✅ Назначить исполнителя')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(['Алексей Смирнов'], stand.crm.deals[DEAL]['executors'])
+        self.assertEqual(5, stand.receipt()['actions'], 'от номера до назначения — 5 действий вместо 12+')
+        self.assertEqual(0, len(stand.model.prompts))
+
 class EdoOfferJourneys(HumanJourneyCase, unittest.TestCase):
     def issue(self, person):
         yield say('990001')

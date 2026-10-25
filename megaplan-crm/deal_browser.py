@@ -292,6 +292,13 @@ def natural_match_score(query, value):
     return exact_bonus + coverage + sum(min(len(token), 20) for token in overlap)
 
 
+def stem_match_score(query, value):
+    """How many query words share a stem with the value (case endings ignored)."""
+    stems = {token[:max(4, len(token) - 2)] for token in meaningful_contractor_tokens(query) if len(token) >= 4}
+    value_tokens = meaningful_contractor_tokens(value)
+    return sum(any(token.startswith(stem) for token in value_tokens) for stem in stems)
+
+
 def comparable_client_name(value):
     """Normalize Russian/Latin spelling used for the same brand (e.g. Джеткар/JetCar)."""
     return comparable_contractor_name(value)
@@ -738,6 +745,11 @@ def main():
             return " ".join(str(value or "") for value in values).casefold().replace("ё", "е")
         ranked = [(natural_match_score(query, searchable(deal)), deal) for deal in deals]
         found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
+        if not found:
+            # «по складу в Химках»: Russian case endings defeat exact tokens, so
+            # fall back to word stems only when nothing matched exactly.
+            ranked = [(stem_match_score(query, searchable(deal)), deal) for deal in deals]
+            found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
         found = found[:max(1, min(int(spec.get("limit", 10)), 20))]
     elif action in ("search_client", "search_address"):
         query = str(spec.get("query") or "").strip().casefold()

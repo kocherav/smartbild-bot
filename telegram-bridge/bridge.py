@@ -496,6 +496,8 @@ DEAL_ACTIONS_KEYBOARD = {
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
+        # QA explorer 24.10: assigning an executor was reachable only by a phrase.
+        [{"text": "👤 Назначить исполнителя"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
         [{"text": "⬅️ К списку сделок"}],
@@ -3138,7 +3140,7 @@ def check_external_procurement_transitions(token, chat_id):
 
 
 def format_deal_card(deal):
-    executors = ", ".join(deal.get("executors") or []) or "не назначен"
+    executors = ", ".join(deal.get("executors") or []) or "не назначен — кнопка «👤 Назначить исполнителя»"
     address = deal.get("address") or "не указан"
     price = deal.get("price")
     price_text = f"{bank_money(price)} ₽" if isinstance(price, (int, float)) else "не указана"
@@ -3175,8 +3177,8 @@ def deal_selection_keyboard(deals):
     return {"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": True}
 
 
-def send_deal_list(token, chat_id, spec):
-    result = run_deal_browser(spec)
+def send_deal_list(token, chat_id, spec, result=None):
+    result = result if result is not None else run_deal_browser(spec)
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось получить сделки: {result.get('error')}", DEALS_KEYBOARD)
         return
@@ -3305,6 +3307,16 @@ DEAL_SEARCH_PHRASE_RE = re.compile(
 )
 
 
+# «Найди сделку по складу в Химках»: no client/address marker — search everything.
+DEAL_FREE_SEARCH_RE = re.compile(
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
+)
+# Lists by period/status/payment and deal numbers belong to other handlers.
+DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
+    r"(?i)\b\d{3,}\b|статус|недел|месяц|сегодн|вчера|последн|открыт|оплат|долг|сч[её]т|работе"
+)
+
+
 BARE_DEAL_NUMBER_RE = re.compile(r"^\s*№?\s*(\d{3,7})\s*$")
 ASSISTANT_CONTEXT_SECONDS = 600
 
@@ -3339,7 +3351,15 @@ def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
     if not match:
-        return False
+        free = DEAL_FREE_SEARCH_RE.match(text or "")
+        if not free or DEAL_FREE_SEARCH_EXCLUDE_RE.search(free.group("query")):
+            return False
+        result = run_deal_browser({"action": "search_any", "query": free.group("query").strip(" «»\""), "limit": 15})
+        if not result.get("ok") or not result.get("deals"):
+            return False  # not a confident search: the usual route answers
+        update_deal_ui_state(chat_id, pending=None)
+        send_deal_list(token, chat_id, None, result)
+        return True
     query = match.group("query").strip(" «»\"")
     action = "search_address" if match.group("address") else "search_client"
     update_deal_ui_state(chat_id, pending=None)
@@ -5623,6 +5643,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if value == "🏢 Сменить плательщика" and deal_id:
         return _start_human_payer(token, chat_id, deal_id)
+    if value == "👤 Назначить исполнителя" and deal_id:
+        return _start_human_executor(token, chat_id, deal_id)
     if value == "📤 Отправить по ЭДО":
         return send_offered_edo(token, chat_id, state)
     if value in ("🧾 Работа со счетами", "🧾 Выставить счёт") and deal_id:

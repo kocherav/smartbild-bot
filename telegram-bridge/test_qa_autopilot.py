@@ -125,5 +125,27 @@ class AutopilotTest(unittest.TestCase):
         self.assertIn('Прогонов: 1', text)
 
 
+    def test_digest_tells_what_each_task_is_about_and_who_acts(self):
+        now = dt.datetime(2026, 10, 24, 15, 0, tzinfo=dt.timezone.utc)
+        tasks = [{'id': f'QA-W{n}', 'status': 'waiting_input', 'severity': 'P1',
+                  'failures': [{'id': f'coverage:HUMAN-DEAL-READ:{n}'}]} for n in range(6)]
+        tasks.append({'id': 'QA-C', 'status': 'awaiting_verification', 'severity': 'P2',
+                      'failures': [{'id': 'explore:assign', 'title': 'Нет кнопки назначения исполнителя'}]})
+        state = {'runs': [{'at': '2026-10-24T01:00:00+00:00', 'profile': 'browser', 'successful': False,
+                           'failures': [{'id': 'infra:playwright-browser'}]}], 'tasks': tasks}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'qa.json'
+            path.write_text(json.dumps(state, ensure_ascii=False))
+            journeys = Path(temporary) / 'journeys.json'
+            journeys.write_text(json.dumps({'journeys': [
+                {'id': 'HUMAN-DEAL-READ', 'title': 'Найти сделку и прочитать из неё информацию'}]}, ensure_ascii=False))
+            text = qa_autopilot.digest(path, now, journeys)
+        self.assertIn('browser: на сервере не запускается браузер', text)
+        self.assertIn('Нет кнопки назначения исполнителя — исправлено, тестировщик перепроверит', text)
+        self.assertIn('«Найти сделку и прочитать из неё информацию» не подтверждён', text)
+        self.assertIn('…и ещё 1.', text)
+        self.assertNotIn('waiting_input', text)
+
+
 if __name__ == '__main__':
     unittest.main()

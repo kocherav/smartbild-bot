@@ -68,6 +68,21 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office)
 
 
+    def test_free_phrase_finds_deal_by_object_and_city(self):
+        def journey(person):
+            yield say('Найди сделку по складу в Химках')
+            person.sees('№990002', expected='Одна фраза нашла сделку по объекту и городу, падежи не мешают')
+            person.not_sees('№990001', '№990003', expected='Чужие сделки не попали в выдачу')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(stand.model.prompts), 'Поиск сделки фразой не должен уходить в ИИ')
+
+    def test_free_phrase_without_matches_goes_the_usual_way(self):
+        def journey(person):
+            yield say('Найди сделку по бассейну в Сочи')
+            person.not_sees('Подходящих сделок не найдено', expected='Неуверенный поиск не перехватил разговор')
+        stand = self.play(journey, setup=office, model_rules=[('', 'Сделок по бассейну в Сочи я не нашёл. Уточните клиента?')])
+        self.assertEqual(1, len(stand.model.prompts))
+
 class UnsupportedInputJourneys(HumanJourneyCase, unittest.TestCase):
     def test_voice_message_gets_an_honest_answer(self):
         def journey(person):
