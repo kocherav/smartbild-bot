@@ -271,5 +271,29 @@ class DealCreationVariants(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office, model_rules=[('Монтаж сплит-системы 1 шт', block)])
 
 
+    def test_client_in_the_title_is_offered_without_asking(self):
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('➕ Создать сделку')
+            yield say('Монтаж для ООО Альфа Климат')
+            person.sees('В названии указан клиент «ООО Альфа Климат»', expected='Бот узнал клиента в названии (И-11)')
+            person.not_sees('Укажите клиента', expected='Второй раз клиента не спрашивают')
+            person.sees_button('Клиент ID 501 — ООО «Альфа Климат»', expected='Предложена найденная карточка для подтверждения')
+            person.sees_button('🔍 Другой клиент', expected='Можно выбрать другого клиента')
+            yield press('Клиент ID 501 — ООО «Альфа Климат»')
+            person.sees('спецификацию', expected='Дальше — обычные позиции')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+        self.assertEqual(0, len(stand.model.prompts))
+        self.assertEqual(4, stand.receipt()['actions'], 'до позиций — 4 действия вместо 5')
+
+    def test_title_without_legal_form_still_asks_for_client(self):
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('➕ Создать сделку')
+            yield say('Кондиционер на дачу')
+            person.sees('Укажите клиента')
+        self.play(journey, setup=office)
+
 if __name__ == '__main__':
     unittest.main()
