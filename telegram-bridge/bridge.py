@@ -26,6 +26,7 @@ import durable_json
 import safe_reload
 import qa_handoff
 import qa_autopilot
+import qa_ideas
 import supplier_completion
 import model_recovery
 import invoice_tasks
@@ -541,7 +542,7 @@ MANAGER_INSTALLATION_KEYBOARD = {"keyboard": [
 MORE_KEYBOARD = {"keyboard": [
     [{"text": "📦 Нераспределённые закупки"}, {"text": "📄 Создать КП"}],
     [{"text": "🛠 Задача разработчику"}, {"text": "🧪 Ошибки тестировщика"}],
-    [{"text": "❓ Помощь"}],
+    [{"text": "💡 Идеи тестировщика"}, {"text": "❓ Помощь"}],
     [{"text": "⬅️ Главное меню"}],
 ], "resize_keyboard": True}
 PROCUREMENT_KEYBOARD = {
@@ -3970,6 +3971,28 @@ def handle_global_navigation(token, chat_id, text):
             run_background_job(lambda: process_qa_developer_task(token, chat_id, task['id']), token, chat_id,
                                operation='QA→разработчик:' + task['id'], allow_stale=True)
         return True
+    idea_decision = re.fullmatch(r"(✅ Берём|🚫 Не надо) (IDEA-[0-9A-F]{8})", value)
+    if idea_decision:
+        record = qa_ideas.decide(idea_decision.group(2), idea_decision.group(1).startswith('✅'))
+        if not record:
+            send_message(token, chat_id, "По этой идее решение уже принято.", MAIN_KEYBOARD)
+        elif record['status'] == 'declined':
+            send_message(token, chat_id, f"Не берём: «{record['title']}». Больше не предлагается.", MAIN_KEYBOARD)
+        else:
+            send_message(token, chat_id, f"Берём: «{record['title']}». Передаю разработчику; код — только в ветке "
+                         f"handoff/{record['id']}, в рабочий бот попадёт после проверки тестировщиком и вашего выпуска.",
+                         MAIN_KEYBOARD)
+            run_background_job(lambda: process_idea_task(token, chat_id, record['id']), token, chat_id,
+                               operation='идея→разработчик:' + record['id'], allow_stale=True)
+        return True
+    if value == "💡 Идеи тестировщика":
+        waiting = qa_ideas.pending()
+        if waiting:
+            text, keyboard = qa_ideas.card(waiting)
+            send_message(token, chat_id, text, keyboard)
+        else:
+            send_message(token, chat_id, "Нерешённых идей нет.\n\n" + qa_ideas.weekly_text(), MORE_KEYBOARD)
+        return True
     handoff_decision = re.fullmatch(r"(✅ Выполнить|🚫 Отклонить) (TASK-\d{8}-\d{2})", value)
     if handoff_decision:
         record = handoff_watcher.decide(handoff_decision.group(2), handoff_decision.group(1).startswith('✅'))
@@ -4245,6 +4268,12 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if creation_pending == 'deal_create_title':
             draft['description'] = value
             update_deal_ui_state(chat_id, deal_create_spec=draft, pending='deal_create_client')
+            organization = deal_title_organization(value)
+            if organization:
+                # Idea И-11: «Монтаж для ООО Альфа Климат» already names the client.
+                send_message(token, chat_id, f'В названии указан клиент «{organization}» — ищу его карточку. '
+                             'Если клиент другой, нажмите «🔍 Другой клиент».')
+                return handle_deal_ui(token, chat_id, organization, _background=_background)
             send_message(token, chat_id, 'Укажите клиента: название организации или ФИО. Перед созданием бот проверит существующие карточки.', PAYER_UPLOAD_KEYBOARD)
         else:
             if not _background:
@@ -7426,6 +7455,17 @@ def price_install_addons(items):
     return parsed.get("addons") or [], parsed.get("equipment_costs") or {}, parsed.get("errors") or []
 
 
+DEAL_TITLE_ORGANIZATION_RE = re.compile(
+    r"(?<![\w-])(ООО|ОАО|ЗАО|ПАО|АО|ИП)\s+([«\"“][^»\"”\n]{2,60}[»\"”]|[А-ЯЁA-Z][\w-]*(?:\s+[А-ЯЁA-Z][\w-]*){0,3})"
+)
+
+
+def deal_title_organization(title):
+    """A client named with its legal form inside a new deal title, else None."""
+    match = DEAL_TITLE_ORGANIZATION_RE.search(title or "")
+    return f"{match.group(1)} {match.group(2).strip()}" if match else None
+
+
 def search_creation_clients(name):
     try:
         result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, 'megaplan_api.py'), 'search-contractors'],
@@ -9077,6 +9117,47 @@ def qa_night_plan(schedule=None):
         missions = ()
     tonight = qa_schedule.moscow().date() + timedelta(days=1)
     return qa_schedule.plan_text(tonight, schedule, missions)
+
+
+def send_owner_digest(token, chat_id, schedule=None, now=None):
+    """Evening digest; then new ideas with decision buttons; on Fridays the week's ideas."""
+    send_message(token, chat_id, qa_autopilot.digest(now=now) + "\n\n" + qa_night_plan(schedule), MAIN_KEYBOARD)
+    try:
+        waiting = qa_ideas.register(qa_ideas.recent(qa_handoff._read(qa_handoff.PRODUCTION_STATE), now), now=now)
+        if waiting:
+            text, keyboard = qa_ideas.card(waiting)
+            send_message(token, chat_id, text, keyboard)
+        if qa_schedule.moscow(now).weekday() == 4:
+            send_message(token, chat_id, qa_ideas.weekly_text(now=now), MAIN_KEYBOARD)
+    except (OSError, ValueError) as exc:
+        print(f"{LOG_PREFIX} tester ideas unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        send_message(token, chat_id, "⚠️ Идеи тестировщика не показаны: реестр идей не прочитан.", MAIN_KEYBOARD)
+
+
+def process_idea_task(token, chat_id, idea_id):
+    """A taken idea goes to the developer under the handoff rules and GitHub verification."""
+    record = qa_ideas.start(idea_id)
+    if not record:
+        return False
+    task = qa_ideas.developer_task(record)
+    send_message(token, chat_id, handoff_watcher.started_text(task))
+    bridge_mtime_before = os.path.getmtime(__file__)
+    with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
+        fcntl.flock(model_lock, fcntl.LOCK_EX)
+        repository = handoff_watcher.repository()
+        result = ask_developer(handoff_watcher.developer_prompt(task), workdir=str(repository), fresh=True)
+    ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
+    try:
+        verification = handoff_watcher.verify_report(idea_id, handoff_watcher.repository())
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
+                        'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
+    qa_ideas.finish(idea_id, ok and verification['ok'] and verification.get('status') == 'done', verification)
+    if os.path.getmtime(__file__) != bridge_mtime_before:
+        safe_reload.request(RELOAD_REQUEST_FILE, __file__)
+        result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
+    send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
+    return ok and verification['ok']
 
 
 def run_nightly_qa(token, chat_id):
@@ -11081,7 +11162,7 @@ def main():
             # One concise owner digest per Moscow day, with the coming night's plan.
             if (qa_schedule.digest_due(datetime.now(timezone.utc), qa_plan)
                     and periodic_schedule.claim(os.path.join(BASE_DIR, 'watcher_schedule.json'), 'qa-owner-digest', 20 * 3600)):
-                send_message(token, authorized_chat_id, qa_autopilot.digest() + "\n\n" + qa_night_plan(qa_plan), MAIN_KEYBOARD)
+                send_owner_digest(token, authorized_chat_id, qa_plan)
             next_qa_autopilot_check = time.time() + 60
         if not draining_reload and time.time() >= next_procurement_check:
             run_singleton_background_job(
