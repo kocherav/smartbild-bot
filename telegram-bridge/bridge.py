@@ -9035,22 +9035,40 @@ def process_developer_task(token, chat_id, task_text):
 
 
 def process_qa_developer_task(token, chat_id, task_id):
+    """Owner rule 25.10: a QA repair takes the same route as every task — branch
+    handoff/QA-…, report in GitHub, tester review, owner release.  Nothing is
+    edited or reloaded in the deployed bot."""
     task = qa_handoff.claim(task_id)
     if not task:
         send_message(token, chat_id, f"QA-задача {task_id} уже выполняется или была обработана.", MAIN_KEYBOARD)
         return False
+    handoff = qa_handoff.handoff_task(task)
+    send_message(token, chat_id, handoff_watcher.started_text(handoff))
     bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
-        result = ask_developer(qa_handoff.developer_prompt(task))
+        repository = handoff_watcher.repository()
+        result = ask_developer(handoff_watcher.developer_prompt(handoff), workdir=str(repository), fresh=True)
     failed = result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
-    qa_handoff.finish(task_id, result, not failed)
+    try:
+        verification = handoff_watcher.verify_report(task_id, handoff_watcher.repository())
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
+                        'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
+    outcome = ('awaiting_release' if not failed and verification['ok'] and verification.get('status') == 'done'
+               else 'waiting_input' if verification['ok'] and verification.get('status') in ('blocked', 'needs_owner')
+               else 'approved')
+    qa_handoff.finish(task_id, result, outcome == 'awaiting_release', status=outcome)
+    text = handoff_watcher.result_text(handoff, verification, result)
+    if outcome == 'awaiting_release':
+        text += (f"\n\nДальше: тестировщик проверит ветку handoff/{task_id}, затем выпуск вашей кнопкой. "
+                 "В работающем боте пока ничего не изменилось.")
     if bundle_changed(bundle_before):
-        safe_reload.request(RELOAD_REQUEST_FILE, __file__)
-        result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
-    prefix = '⚠️ Разработчик не завершил' if failed else '✅ Разработчик завершил; QA должен перепроверить'
-    send_message(token, chat_id, f"{prefix} {task_id}:\n\n{result}", MAIN_KEYBOARD)
-    return not failed
+        # The rules forbid it; never load such an edit silently.
+        text += ("\n\n⚠️ Разработчик изменил файлы работающего бота в обход ветки. Перезагрузка НЕ запрошена; "
+                 "следующий выпуск вернёт версию из GitHub.")
+    send_message(token, chat_id, text, MAIN_KEYBOARD)
+    return outcome == 'awaiting_release'
 
 
 def handoff_keyboard(task_id):
@@ -9144,13 +9162,9 @@ def run_qa_autopilot(token, chat_id, profile='human'):
             return False
         repairs += 1
         send_message(token, chat_id, f"🧪 {approved['id']} передана разработчику автоматически.")
-        if not process_qa_developer_task(token, chat_id, approved['id']):
-            return False
-        # The developer may have changed an imported QA module without touching
-        # bridge.py.  Do not immediately verify with stale in-memory code; yield
-        # to the polling boundary where the reviewed bundle is safely reloaded.
-        if safe_reload.pending_reviewed(RELOAD_REQUEST_FILE, __file__):
-            return False
+        # The repair lands in a branch; it is verified by the run after its release.
+        process_qa_developer_task(token, chat_id, approved['id'])
+        return False
 
 
 def nightly_qa_window(moment=None):

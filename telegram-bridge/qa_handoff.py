@@ -1,6 +1,7 @@
 """Human-approved handoff from QA findings to the existing developer agent."""
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -108,6 +109,19 @@ ID: {task['id']}; приоритет: {task.get('severity')}; профиль: {t
 """
 
 
+def handoff_task(task):
+    """The QA repair as a handoff task: branch handoff/<id>, report in handoff/outbox."""
+    body = developer_prompt(task) + """
+Маршрут (решение владельца 25.10): исправление — только в ветке handoff/{id}; в работающий бот
+ничего не копируй и службу не перезагружай. Тестировщик проверит ветку, выпуск — кнопкой владельца.
+Если QA-реестр и стенд не воспроизводят дефект из служебного клона — status: blocked с причиной.""".replace('{id}', task['id'])
+    names = [str(item.get('title') or item.get('id') or '') for item in task.get('failures') or []]
+    title = 'Исправить по QA: ' + ('; '.join(names[:2]) or task['id'])
+    return {'id': task['id'], 'kind': 'code', 'priority': task.get('severity') or 'P2', 'title': title,
+            'summary': title, 'ref': 'qa-agent', 'path': 'qa-agent-state.json',
+            'sha256': hashlib.sha256(body.encode()).hexdigest(), 'body': body}
+
+
 def mark_notified(task_id, message_id, path=None):
     path = STATE if path is None else path
     def change(state):
@@ -137,12 +151,12 @@ def claim(task_id, path=None):
     return _mutate(path, change)
 
 
-def finish(task_id, report, ok, path=None):
+def finish(task_id, report, ok, path=None, status=None):
     path = STATE if path is None else path
     def change(state):
         task = next((item for item in state['tasks'] if item.get('id') == task_id), None)
         if not task or task.get('status') != 'fixing': return None
-        task.update(status='awaiting_verification' if ok else 'approved', developer_finished_at=now(),
+        task.update(status=status or ('awaiting_verification' if ok else 'approved'), developer_finished_at=now(),
                     developer_report=str(report or '')[-20000:]); return dict(task)
     return _mutate(path, change)
 

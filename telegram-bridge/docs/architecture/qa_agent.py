@@ -253,14 +253,14 @@ class Registry:
                 # that were waiting for exactly this verification.
                 for candidate in state['tasks']:
                     if (candidate.get('profile') == profile and task_kind(candidate) == kind and
-                            candidate.get('status') in {'awaiting_verification', 'waiting_input'}):
+                            candidate.get('status') in {'awaiting_verification', 'awaiting_release', 'waiting_input'}):
                         candidate.update(status='closed', verified_at=run['at'],
                                          verification_run=run['id'], verification_evidence=str(evidence))
                 continue
             digest = fingerprint(profile, group)
             task = next((item for item in state['tasks'] if item['fingerprint'] == digest and
                          item['status'] in {'ready', 'approved', 'dispatched', 'fixing',
-                                            'awaiting_verification', 'waiting_input'}), None)
+                                            'awaiting_verification', 'awaiting_release', 'waiting_input'}), None)
             if task:
                 task['occurrences'] += 1
                 task['last_seen_at'] = run['at']
