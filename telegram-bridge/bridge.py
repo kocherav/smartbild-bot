@@ -3302,7 +3302,8 @@ def handle_explicit_deal_read(token, chat_id, text):
 
 
 DEAL_SEARCH_PHRASE_RE = re.compile(
-    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой|какие|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+"
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой|какие|где)\s+(?:все\s+|мои\s+)?"
+    r"(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?сдел(?:к\w*|ок)\s+"
     r"(?:(?P<client>клиента|по\s+клиенту|у\s+клиента|с\s+клиентом|для)|(?P<address>по\s+адресу|на\s+адресе|адрес))\s+"
     r"(?P<query>[^?!.]{2,80})[?!.]*\s*$"
 )
@@ -3310,7 +3311,8 @@ DEAL_SEARCH_PHRASE_RE = re.compile(
 
 # «Найди сделку по складу в Химках»: no client/address marker — search everything.
 DEAL_FREE_SEARCH_RE = re.compile(
-    r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?сделк\w*\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?"
+    r"сдел(?:к\w*|ок)\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
 )
 # Lists by period/status/payment and deal numbers belong to other handlers.
 DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
@@ -3348,6 +3350,25 @@ def handle_bare_deal_number(token, chat_id, text):
     return handle_deal_ui(token, chat_id, "№" + match.group(1))
 
 
+def _phrase_limit(match):
+    """«Покажи 10 сделок …» — the asked count, within the one-screen limit of 15."""
+    return max(1, min(int(match.group("count") or 15), 15))
+
+
+LISTED_DEAL_RE = re.compile(r"(?m)^\s*(?:\d{1,2}[.)]\s*)?№\s?(\d{3,7})\s*[—–-]\s*(.+?)\s*$")
+
+
+def listed_deals_keyboard(text):
+    """Buttons for deals an assistant answer lists one per line (owner request 25.10):
+    a list of deals must be pressable, not «скажи "открой 858"»."""
+    deals = list(dict.fromkeys(LISTED_DEAL_RE.findall(text or "")))
+    ids = list(dict.fromkeys(deal_id for deal_id, _ in deals))
+    if len(ids) < 2:
+        return None
+    titles = dict(reversed(deals))
+    return deal_selection_keyboard([{"id": deal_id, "description": titles[deal_id]} for deal_id in ids[:15]])
+
+
 def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
@@ -3355,7 +3376,8 @@ def handle_deal_search_phrase(token, chat_id, text):
         free = DEAL_FREE_SEARCH_RE.match(text or "")
         if not free or DEAL_FREE_SEARCH_EXCLUDE_RE.search(free.group("query")):
             return False
-        result = run_deal_browser({"action": "search_any", "query": free.group("query").strip(" «»\""), "limit": 15})
+        result = run_deal_browser({"action": "search_any", "query": free.group("query").strip(" «»\""),
+                                   "limit": _phrase_limit(free)})
         if not result.get("ok") or not result.get("deals"):
             return False  # not a confident search: the usual route answers
         update_deal_ui_state(chat_id, pending=None)
@@ -3364,7 +3386,7 @@ def handle_deal_search_phrase(token, chat_id, text):
     query = match.group("query").strip(" «»\"")
     action = "search_address" if match.group("address") else "search_client"
     update_deal_ui_state(chat_id, pending=None)
-    send_deal_list(token, chat_id, {"action": action, "query": query, "limit": 15})
+    send_deal_list(token, chat_id, {"action": action, "query": query, "limit": _phrase_limit(match)})
     return True
 
 
@@ -11037,7 +11059,7 @@ def main():
         clean_text = sanitize_service_protocol(clean_text)
         print(f"{LOG_PREFIX} replying: {clean_text[:200]!r} attachments={attachments} image_urls={image_urls} kp={kp_document_path}")
         if clean_text:
-            reply_keyboard = TAX_KEYBOARD if tax_choice_requested else None
+            reply_keyboard = TAX_KEYBOARD if tax_choice_requested else listed_deals_keyboard(clean_text)
             if invoice_apply_spec is not None and not invoice_apply_spec.get("__invalid__"):
                 plan = invoice_apply_spec.get("_distribution_plan") or {}
                 # Any unallocated source line requires an explicit manager

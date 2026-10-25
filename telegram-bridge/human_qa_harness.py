@@ -328,7 +328,8 @@ class FakeMegaplan:
                     tokens = re.split(r'\W+', haystack(deal).casefold().replace('ё', 'е'))
                     return sum(any(t.startswith(stem) for t in tokens) for stem in stems)
                 found = sorted((d for d in ordered if score(d)), key=score, reverse=True)
-            return {'ok': True, 'deals': [self.summary(d) for d in found[:15]], 'total_count': len(found)}
+            return {'ok': True, 'deals': [self.summary(d) for d in found[:max(1, min(int(spec.get('limit') or 15), 20))]],
+                    'total_count': len(found)}
         if action == 'move_status':
             deal = self._deal(spec)
             if str(spec.get('state_id')) not in self.statuses:
