@@ -8988,15 +8988,47 @@ def ask_developer(prompt, workdir=None, fresh=False):
     return answer or "Задача завершена, но Codex не вернул текстовый отчёт."
 
 
+STALE_RELOAD_NOTICE = {"key": None}
+
+
+def report_stale_reload(token, chat_id):
+    """A released version that cannot load must not stay silent."""
+    changed = safe_reload.stale_request(RELOAD_REQUEST_FILE, __file__)
+    key = "|".join(changed)
+    if not changed or STALE_RELOAD_NOTICE["key"] == key:
+        return False
+    STALE_RELOAD_NOTICE["key"] = key
+    names = ", ".join(os.path.basename(path) for path in changed[:5]) + (f" и ещё {len(changed) - 5}" if len(changed) > 5 else "")
+    send_message(token, chat_id, "⚠️ Выпущенная версия бота НЕ загружена: после выпуска на сервере изменились файлы "
+                 f"({names}). Бот продолжает работать на прежней версии. Нужен повторный выпуск, чтобы код "
+                 "на сервере совпал с проверенным.")
+    return True
+
+
+def reload_snapshot():
+    try:
+        return safe_reload.bundle_manifest(__file__)
+    except (OSError, SyntaxError) as exc:
+        print(f"{LOG_PREFIX} bundle snapshot failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+
+
+def bundle_changed(before):
+    """Any changed module needs a reload, not only bridge.py (QA 25.10: a stand fix
+    after a release silently voided the release's reload request)."""
+    after = reload_snapshot()
+    return after is not None and after != before
+
+
 def process_developer_task(token, chat_id, task_text):
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, "w") as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         result = ask_developer(task_text)
     current = current_deal_ui_state(chat_id)
     if current.get("pending") == "developer_task_running":
         update_deal_ui_state(chat_id, pending=None, developer_task_text=None, developer_task_started_at=None)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE,__file__)
         result+='\n\nОбновление процесса ожидает завершения активных задач; они не будут прерваны перезапуском.'
     send_message(token, chat_id, "✅ Результат задачи разработчику:\n\n" + result, MAIN_KEYBOARD)
@@ -9007,13 +9039,13 @@ def process_qa_developer_task(token, chat_id, task_id):
     if not task:
         send_message(token, chat_id, f"QA-задача {task_id} уже выполняется или была обработана.", MAIN_KEYBOARD)
         return False
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         result = ask_developer(qa_handoff.developer_prompt(task))
     failed = result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     qa_handoff.finish(task_id, result, not failed)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     prefix = '⚠️ Разработчик не завершил' if failed else '✅ Разработчик завершил; QA должен перепроверить'
@@ -9061,7 +9093,7 @@ def process_handoff_task(token, chat_id, task_id):
         handoff_watcher.finish(task_id, 'Файл изменён после решения; будет рассмотрен заново.', False)
         return False
     send_message(token, chat_id, handoff_watcher.started_text(task))
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         repository = handoff_watcher.repository()
@@ -9076,7 +9108,7 @@ def process_handoff_task(token, chat_id, task_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     handoff_watcher.record_verification(task_id, verification)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
@@ -9163,7 +9195,7 @@ def process_idea_task(token, chat_id, idea_id):
         return False
     task = qa_ideas.developer_task(record)
     send_message(token, chat_id, handoff_watcher.started_text(task))
-    bridge_mtime_before = os.path.getmtime(__file__)
+    bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
         repository = handoff_watcher.repository()
@@ -9175,7 +9207,7 @@ def process_idea_task(token, chat_id, idea_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     qa_ideas.finish(idea_id, ok and verification['ok'] and verification.get('status') == 'done', verification)
-    if os.path.getmtime(__file__) != bridge_mtime_before:
+    if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
     send_message(token, chat_id, handoff_watcher.result_text(task, verification, result), MAIN_KEYBOARD)
@@ -11146,6 +11178,8 @@ def main():
         safe_reload.apply_if_idle(RELOAD_REQUEST_FILE,__file__,active_children,
                                   lambda:os.execv(sys.executable,[sys.executable,__file__]))
         draining_reload=safe_reload.pending_reviewed(RELOAD_REQUEST_FILE,__file__)
+        if not draining_reload:
+            report_stale_reload(token, authorized_chat_id)
         if not draining_reload and time.time() >= next_qa_check:
             show_qa_findings(token, authorized_chat_id, only_unnotified=True)
             next_qa_check = time.time() + 60

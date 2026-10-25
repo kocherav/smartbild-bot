@@ -30,6 +30,16 @@ def pending_reviewed(path,source):
                 and expected.get('manifest')==bundle_manifest(source))
     except (OSError,SyntaxError,ValueError,TypeError):return False
 
+def stale_request(path,source):
+    """Files that differ from a pending reload request; [] when there is none or it is valid."""
+    if not Path(path).exists():return []
+    try:
+        expected=durable_json.read(path,dict).get('manifest') or {}
+        current=bundle_manifest(source)
+    except (OSError,SyntaxError,ValueError,TypeError):
+        return [str(source)]
+    return sorted(p for p in set(expected)|set(current) if expected.get(p)!=current.get(p))
+
 def apply_if_idle(path,source,active_children,restart):
     if active_children or not pending_reviewed(path,source): return False
     expected=durable_json.read(path,dict)
