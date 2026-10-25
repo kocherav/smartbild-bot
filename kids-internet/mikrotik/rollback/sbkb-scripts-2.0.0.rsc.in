@@ -1,0 +1,87 @@
+/system script remove [find where name="sbkb-state-poll"]
+/system script remove [find where name="sbkb-lease-sync"]
+
+/system script add name="sbkb-state-poll" policy=ftp,read,write,test source={
+    :global sbkbLastStateOk
+    :do {
+        :local result [/tool fetch url="https://claude.smartbild.su/kidsbot/router/state" http-header-field="X-SmartBild-Key:__ROUTER_SECRET__" check-certificate=__CERT_CHECK__ output=user as-value]
+        :if (($result->"status") != "finished") do={ :error "state fetch not finished" }
+        :local data ($result->"data")
+        :local n1 [:find $data "\n"]
+        :local line1 [:pick $data 0 $n1]
+        :local rest1 [:pick $data ($n1 + 1) [:len $data]]
+        :local n2 [:find $rest1 "\n"]
+        :local line2 [:pick $rest1 0 $n2]
+        :local rest2 [:pick $rest1 ($n2 + 1) [:len $rest1]]
+        :local n3 [:find $rest2 "\n"]
+        :local line3 [:pick $rest2 0 $n3]
+        :if ([:pick $line1 0 8] != "VERSION=") do={ :error "bad VERSION" }
+        :if ([:pick $line2 0 5] != "KIDS=") do={ :error "bad KIDS" }
+        :if ([:pick $line3 0 4] != "EXT=") do={ :error "bad EXT" }
+        :local kidsData ([:pick $line2 5 [:len $line2]] . ",")
+        :local extData ([:pick $line3 4 [:len $line3]] . ",")
+        /ip firewall address-list remove [find where list="kids_devices" and comment="SmartBild KidsBot managed"]
+        /ip firewall address-list remove [find where list="kids_extension" and comment="SmartBild KidsBot managed"]
+        :while ([:len $kidsData] > 0) do={
+            :local comma [:find $kidsData ","]
+            :local item [:pick $kidsData 0 $comma]
+            :set kidsData [:pick $kidsData ($comma + 1) [:len $kidsData]]
+            :if ([:len $item] > 0) do={ /ip firewall address-list add list="kids_devices" address=$item comment="SmartBild KidsBot managed" }
+        }
+        :while ([:len $extData] > 0) do={
+            :local comma [:find $extData ","]
+            :local item [:pick $extData 0 $comma]
+            :set extData [:pick $extData ($comma + 1) [:len $extData]]
+            :if ([:len $item] > 0) do={
+                :local sep [:find $item "|"]
+                :local ip [:pick $item 0 $sep]
+                :local ttl [:pick $item ($sep + 1) [:len $item]]
+                :if (([:len $ip] > 0) && ([:len $ttl] > 0)) do={ /ip firewall address-list add list="kids_extension" address=$ip timeout=$ttl comment="SmartBild KidsBot managed" }
+            }
+        }
+        :set sbkbLastStateOk ([/system clock get date] . " " . [/system clock get time])
+    } on-error={
+        :log warning "SmartBild KidsBot: state poll failed"
+        :error "SmartBild KidsBot state poll failed"
+    }
+}
+
+/system script add name="sbkb-lease-sync" policy=ftp,read,write,test source={
+    :global sbkbLastLeaseOk
+    :do {
+        :local body ""
+        :local count 0
+        :local complete 1
+        :local leases [/ip dhcp-server lease find]
+        :local total [:len $leases]
+        :foreach lease in=$leases do={
+            :if ($count >= 100) do={
+                :set complete 0
+            } else={
+                :local mac [/ip dhcp-server lease get $lease mac-address]
+                :local ip [/ip dhcp-server lease get $lease address]
+                :local host [/ip dhcp-server lease get $lease host-name]
+                :local status [/ip dhcp-server lease get $lease status]
+                :if ([:len $host] = 0) do={ :set host "-" }
+                :if ([:len $mac] > 0) do={
+                    :local row ($mac . "|" . $ip . "|" . $host . "|" . $status . "\n")
+                    :if (([:len $body] + [:len $row]) < 12000) do={
+                        :set body ($body . $row)
+                        :set count ($count + 1)
+                    } else={
+                        :set complete 0
+                    }
+                }
+            }
+        }
+        :if ($count < $total) do={ :set complete 0 }
+        :local payload ("#COMPLETE=" . $complete . "\n" . $body)
+        :local result [/tool fetch url="https://claude.smartbild.su/kidsbot/router/leases" http-method=post http-header-field="Content-Type:text/plain,X-SmartBild-Key:__ROUTER_SECRET__" http-data=$payload check-certificate=__CERT_CHECK__ output=user as-value]
+        :if (($result->"status") != "finished") do={ :error "lease fetch not finished" }
+        :if ([:pick ($result->"data") 0 3] != "OK ") do={ :error "bad lease response" }
+        :set sbkbLastLeaseOk ([/system clock get date] . " " . [/system clock get time])
+    } on-error={
+        :log warning "SmartBild KidsBot: DHCP lease sync failed"
+        :error "SmartBild KidsBot lease sync failed"
+    }
+}

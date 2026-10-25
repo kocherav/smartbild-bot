@@ -1,0 +1,232 @@
+#!/bin/bash
+# SmartBild KidsBot @@VERSION@@ — обновление VPS и MikroTik одной командой.
+# Собран tools/build_update_command.py; вручную не редактировать.
+set -Eeuo pipefail
+umask 077
+
+TARGET_VERSION="@@VERSION@@"
+VPS_ALIAS="${VPS_ALIAS:-smartbild}"
+MT_IP="${MT_IP:-192.168.10.1}"
+MT_USER="${MT_USER:-admin}"
+APP_DIR="/opt/smartbild-kidsbot"
+CONFIG="/etc/smartbild-kidsbot/config.json"
+DB="/var/lib/smartbild-kidsbot/kidsbot.db"
+SERVICE="smartbild-kidsbot.service"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$HOME/Downloads/SmartBild_KidsBot_update_${STAMP}"
+LOG_FILE="$OUT_DIR/update.log"
+VPS_BACKUP="/root/smartbild-kidsbot-backup-${STAMP}"
+WORK="$(mktemp -d /tmp/sbkb-update.XXXXXX)"
+MT_PASSWORD=""
+ROUTER_SECRET=""
+STAGE="подготовка"
+VPS_CHANGED=0
+ROUTER_CHANGED=0
+
+mkdir -p "$OUT_DIR"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+APP_B64='@@APP_B64@@'
+APP_SHA256="@@APP_SHA256@@"
+RSC_NEW_B64='@@RSC_NEW_B64@@'
+RSC_OLD_B64='@@RSC_OLD_B64@@'
+
+say() { printf '\n== %s ==\n' "$*"; STAGE="$*"; }
+die() { echo; echo "СТОП: $*"; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "на Mac не найдена команда $1"; }
+for cmd in ssh scp python3 sed grep tee; do need "$cmd"; done
+
+SSH_COMMON=(-o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o LogLevel=ERROR -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new)
+if ssh -G -o WarnWeakCrypto=no 127.0.0.1 >/dev/null 2>&1; then SSH_COMMON+=(-o WarnWeakCrypto=no); fi
+ASKPASS="$WORK/mt-askpass.sh"
+printf '#!/bin/sh\nprintf "%%s\\n" "$SBKB_MT_PASSWORD"\n' > "$ASKPASS"
+chmod 700 "$ASKPASS"
+
+vps() { ssh "${SSH_COMMON[@]}" "$VPS_ALIAS" "$@"; }
+mt_ssh() {
+    DISPLAY="${DISPLAY:-:0}" SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force SBKB_MT_PASSWORD="$MT_PASSWORD" \
+    ssh "${SSH_COMMON[@]}" -o BatchMode=no -o PubkeyAuthentication=no \
+        -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+        "${MT_USER}@${MT_IP}" "$@" </dev/null | tr -d '\r'
+}
+mt_scp() {
+    DISPLAY="${DISPLAY:-:0}" SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force SBKB_MT_PASSWORD="$MT_PASSWORD" \
+    scp -q -O "${SSH_COMMON[@]}" -o BatchMode=no -o PubkeyAuthentication=no \
+        -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+        "$@" </dev/null
+}
+redact() { if [ -n "$ROUTER_SECRET" ]; then sed "s/${ROUTER_SECRET}/[REDACTED]/g"; else cat; fi; }
+val() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -n1; }
+
+render_rsc() {  # $1 = base64 template, $2 = output file
+    python3 -I -c '
+import base64, sys
+src = base64.b64decode(sys.argv[1]).decode("utf-8")
+out = src.replace("__ROUTER_SECRET__", sys.argv[3]).replace("__CERT_CHECK__", "no")
+assert "__ROUTER_SECRET__" not in out and "__CERT_CHECK__" not in out
+open(sys.argv[2], "w", encoding="utf-8").write(out)
+' "$1" "$2" "$ROUTER_SECRET"
+    chmod 600 "$2"
+}
+import_rsc() {  # $1 = local file
+    local remote="sbkb-update-${STAMP}.rsc" output rc
+    mt_scp "$1" "${MT_USER}@${MT_IP}:${remote}"
+    set +e
+    output="$(mt_ssh "/import file-name=${remote}" 2>&1)"
+    rc=$?
+    set -e
+    printf '%s\n' "$output" | redact
+    mt_ssh "/file remove [find where name=\"${remote}\"]" >/dev/null 2>&1 || true
+    [ "$rc" -eq 0 ] || return "$rc"
+    ! printf '%s\n' "$output" | grep -qiE 'failure|error|expected'
+}
+
+rollback_vps() {
+    echo "Возвращаю прежний app.py на VPS из $VPS_BACKUP ..."
+    vps "sudo -n bash -c 'install -m 0755 -o root -g root $VPS_BACKUP/app.py $APP_DIR/app.py && systemctl restart $SERVICE'" \
+        && echo "VPS: прежняя версия восстановлена." \
+        || echo "VPS: откат НЕ удался — прежний файл лежит в $VPS_BACKUP/app.py"
+}
+rollback_router() {
+    echo "Возвращаю прежний скрипт MikroTik ..."
+    if render_rsc "$RSC_OLD_B64" "$WORK/rollback.rsc" && import_rsc "$WORK/rollback.rsc"; then
+        mt_ssh ':do { /ip firewall filter remove [find where comment~"^SmartBild KidsBot 03 mac "] } on-error={}; :do { /system script run sbkb-state-poll } on-error={}' >/dev/null 2>&1 || true
+        echo "MikroTik: прежний скрипт восстановлен."
+    else
+        echo "MikroTik: откат НЕ удался — полный export лежит в $OUT_DIR"
+    fi
+}
+on_exit() {
+    local rc=$?
+    trap - EXIT
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "ОШИБКА на этапе: $STAGE"
+        [ "$ROUTER_CHANGED" -eq 1 ] && rollback_router
+        if [ "$VPS_CHANGED" -eq 1 ] && [ "$ROUTER_CHANGED" -eq 0 ]; then rollback_vps; fi
+        [ "$ROUTER_CHANGED" -eq 1 ] && echo "VPS оставлен на $TARGET_VERSION: он совместим со старым скриптом MikroTik."
+        echo "Лог: $LOG_FILE"
+    fi
+    unset MT_PASSWORD SBKB_MT_PASSWORD ROUTER_SECRET || true
+    rm -rf "$WORK"
+    exit "$rc"
+}
+trap on_exit EXIT
+
+printf '\nSmartBild KidsBot — обновление до %s\n' "$TARGET_VERSION"
+printf 'Скрипт сам сделает бэкап, обновит VPS и MikroTik, проверит результат,\n'
+printf 'а при любой ошибке вернёт всё как было. Папка с логом и бэкапом:\n  %s\n\n' "$OUT_DIR"
+read -r -s -p "Пароль $MT_USER на MikroTik (ввод не отображается): " MT_PASSWORD
+echo
+[ -n "$MT_PASSWORD" ] || die "пароль MikroTik не введён"
+
+# ---------------------------------------------------------------- проверки
+say "1/6 Проверяю VPS (ничего не меняю)"
+VPS_META="$(vps "sudo -n python3 -I -c '
+import json, urllib.request
+cfg = json.load(open(\"$CONFIG\"))
+print(\"ROUTER_SECRET=\" + cfg[\"router_secret\"])
+h = json.load(urllib.request.urlopen(\"http://127.0.0.1:8765/health\", timeout=10))
+print(\"VERSION=\" + str(h.get(\"version\")))
+print(\"OK=\" + str(h.get(\"ok\")))
+'")" || die "не удалось подключиться к VPS ($VPS_ALIAS) или выполнить sudo без пароля"
+ROUTER_SECRET="$(val "$VPS_META" ROUTER_SECRET)"
+OLD_VERSION="$(val "$VPS_META" VERSION)"
+[[ "$ROUTER_SECRET" =~ ^[0-9a-fA-F]{64}$ ]] || die "router_secret в $CONFIG имеет неожиданный формат"
+[ "$(val "$VPS_META" OK)" = "True" ] || die "бот на VPS не отвечает на /health"
+echo "Бот работает, версия сейчас: $OLD_VERSION"
+
+say "2/6 Проверяю MikroTik (ничего не меняю)"
+MT_PRE="$(mt_ssh ':put ("AUTH=OK"); :put ("ROS=" . [/system resource get version]); :put ("SCRIPTS=" . [:len [/system script find where name~"^sbkb-"]]); :put ("SCHEDULERS=" . [:len [/system scheduler find where name~"^sbkb-"]]); :put ("ALL=" . [:len [/ip firewall filter find where comment~"SmartBild KidsBot "]]); :put ("MAC=" . [:len [/ip firewall filter find where comment~"^SmartBild KidsBot 03 mac "]]); :put ("DISABLED=" . [:len [/ip firewall filter find where comment~"SmartBild KidsBot " and disabled=yes]])')" \
+    || die "не удалось войти на MikroTik $MT_USER@$MT_IP — проверьте пароль и что Mac в домашней сети"
+printf '%s\n' "$MT_PRE"
+[ "$(val "$MT_PRE" AUTH)" = "OK" ] || die "вход на MikroTik не подтверждён"
+[[ "$(val "$MT_PRE" ROS)" == 6.49.22* ]] || die "ожидался RouterOS 6.49.22"
+[ "$(val "$MT_PRE" SCRIPTS)" = "2" ] || die "на MikroTik не найдены 2 скрипта sbkb-* — это не та установка, которую обновляет скрипт"
+[ "$(val "$MT_PRE" SCHEDULERS)" = "2" ] || die "на MikroTik не найдены 2 планировщика sbkb-*"
+BASE_RULES=$(( $(val "$MT_PRE" ALL) - $(val "$MT_PRE" MAC) ))
+[ "$BASE_RULES" -eq 12 ] || die "ожидалось 12 базовых правил firewall, найдено $BASE_RULES"
+[ "$(val "$MT_PRE" DISABLED)" = "0" ] || die "часть правил KidsBot отключена — разберитесь вручную перед обновлением"
+
+# ---------------------------------------------------------------- бэкап
+say "3/6 Делаю резервные копии"
+vps "sudo -n bash -s" <<REMOTE || die "не удалось сделать бэкап на VPS"
+set -Eeuo pipefail
+mkdir -p "$VPS_BACKUP"
+chmod 700 "$VPS_BACKUP"
+cp -a "$APP_DIR/app.py" "$VPS_BACKUP/app.py"
+cp -a "$CONFIG" "$VPS_BACKUP/config.json"
+python3 -I -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' "$DB" "$VPS_BACKUP/kidsbot.db"
+test -s "$VPS_BACKUP/app.py" && test -s "$VPS_BACKUP/kidsbot.db"
+REMOTE
+echo "VPS: копия app.py, config и базы → $VPS_BACKUP (на сервере)"
+MT_EXPORT="mikrotik-before-${STAMP}"
+mt_ssh "/export hide-sensitive file=${MT_EXPORT}" >/dev/null
+sleep 2
+mt_scp "${MT_USER}@${MT_IP}:${MT_EXPORT}.rsc" "$OUT_DIR/${MT_EXPORT}.rsc"
+mt_ssh "/file remove [find where name=\"${MT_EXPORT}.rsc\"]" >/dev/null 2>&1 || true
+[ -s "$OUT_DIR/${MT_EXPORT}.rsc" ] || die "export MikroTik не скачан"
+chmod 600 "$OUT_DIR/${MT_EXPORT}.rsc"
+echo "MikroTik: полный export → $OUT_DIR/${MT_EXPORT}.rsc"
+
+# ---------------------------------------------------------------- VPS
+say "4/6 Обновляю бота на VPS"
+printf '%s' "$APP_B64" | vps "sudo -n bash -c 'base64 -d > /tmp/sbkb-app-new.py'" || die "не удалось загрузить app.py на VPS"
+VPS_TEST="$(vps "sudo -n bash -c 'sha256sum /tmp/sbkb-app-new.py; python3 -m py_compile /tmp/sbkb-app-new.py && python3 -I /tmp/sbkb-app-new.py --self-test'")" || die "новая версия не прошла самопроверку на VPS — ничего не заменено"
+printf '%s\n' "$VPS_TEST"
+printf '%s\n' "$VPS_TEST" | grep -q "^$APP_SHA256 " || die "файл на VPS повреждён при передаче — ничего не заменено"
+printf '%s\n' "$VPS_TEST" | grep -q '^SELF_TEST_OK$' || die "самопроверка не прошла — ничего не заменено"
+VPS_CHANGED=1
+vps "sudo -n bash -c 'install -m 0755 -o root -g root /tmp/sbkb-app-new.py $APP_DIR/app.py && rm -f /tmp/sbkb-app-new.py && systemctl restart $SERVICE'"
+NEW_VERSION=""
+for _ in $(seq 1 15); do
+    sleep 2
+    NEW_VERSION="$(vps "curl -fsS --max-time 5 http://127.0.0.1:8765/health" 2>/dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)"
+    [ "$NEW_VERSION" = "$TARGET_VERSION" ] && break
+done
+[ "$NEW_VERSION" = "$TARGET_VERSION" ] || die "после перезапуска бот не ответил версией $TARGET_VERSION"
+EXPECT="$(vps "sudo -n python3 -I -c '
+import json, urllib.request
+cfg = json.load(open(\"$CONFIG\"))
+r = urllib.request.Request(\"http://127.0.0.1:8765/router/state\", headers={\"X-SmartBild-Key\": cfg[\"router_secret\"]})
+data = urllib.request.urlopen(r, timeout=10).read().decode()
+for line in data.splitlines():
+    k, _, v = line.partition(\"=\")
+    if k in (\"KIDS\", \"MACS\"):
+        print(k + \"_N=\" + str(len([x for x in v.split(\",\") if x])))
+        print(k + \"=\" + v)
+'")" || die "не удалось прочитать состояние для роутера"
+printf '%s\n' "$EXPECT"
+EXPECT_MACS="$(val "$EXPECT" MACS_N)"
+EXPECT_KIDS="$(val "$EXPECT" KIDS_N)"
+[ -n "$EXPECT_MACS" ] || die "сервер не отдаёт строку MACS"
+echo "VPS обновлён: $OLD_VERSION → $NEW_VERSION"
+
+# ---------------------------------------------------------------- MikroTik
+say "5/6 Обновляю скрипт на MikroTik"
+render_rsc "$RSC_NEW_B64" "$WORK/new.rsc"
+ROUTER_CHANGED=1
+import_rsc "$WORK/new.rsc" || die "импорт скрипта на MikroTik завершился ошибкой"
+MT_CHECK_CMD=':local ok 1; :do { /system script run sbkb-state-poll } on-error={ :set ok 0 }; :do { /system script run sbkb-state-poll } on-error={ :set ok 0 }; :put ("POLL=" . $ok); :put ("SCRIPTS=" . [:len [/system script find where name~"^sbkb-"]]); :put ("ALL=" . [:len [/ip firewall filter find where comment~"SmartBild KidsBot "]]); :put ("MAC=" . [:len [/ip firewall filter find where comment~"^SmartBild KidsBot 03 mac "]]); :put ("KIDS=" . [:len [/ip firewall address-list find where list="kids_devices" and comment="SmartBild KidsBot managed"]]); :local fw [/ip firewall filter find where chain=forward]; :put ("TOP=" . [/ip firewall filter get [:pick $fw 0] comment])'
+MT_POST="$(mt_ssh "$MT_CHECK_CMD")" || die "не удалось проверить MikroTik после импорта"
+printf '%s\n' "$MT_POST"
+[ "$(val "$MT_POST" POLL)" = "1" ] || die "новый скрипт sbkb-state-poll выполнился с ошибкой"
+[ "$(val "$MT_POST" SCRIPTS)" = "2" ] || die "после импорта на MikroTik не 2 скрипта"
+[ "$(val "$MT_POST" MAC)" = "$EXPECT_MACS" ] || die "MAC-правил $(val "$MT_POST" MAC), ожидалось $EXPECT_MACS"
+[ $(( $(val "$MT_POST" ALL) - $(val "$MT_POST" MAC) )) -eq 12 ] || die "изменилось число базовых правил firewall"
+[ "$(val "$MT_POST" KIDS)" = "$EXPECT_KIDS" ] || die "в kids_devices $(val "$MT_POST" KIDS) адресов, ожидалось $EXPECT_KIDS"
+if [ "$EXPECT_MACS" -gt 0 ]; then
+    [[ "$(val "$MT_POST" TOP)" == "SmartBild KidsBot 0"* ]] || die "правила KidsBot оказались не в начале forward"
+fi
+ROUTER_CHANGED=0
+VPS_CHANGED=0
+
+# ---------------------------------------------------------------- итог
+say "6/6 Готово"
+echo "VPS:      $OLD_VERSION → $NEW_VERSION, сервис перезапущен"
+echo "MikroTik: новый скрипт, MAC-правил: $EXPECT_MACS, адресов в kids_devices: $EXPECT_KIDS"
+echo "Бэкап VPS:      $VPS_BACKUP (на сервере)"
+echo "Бэкап MikroTik: $OUT_DIR/${MT_EXPORT}.rsc"
+echo "Лог:            $LOG_FILE"
+echo
+echo "В Telegram: «Дети и устройства → ребёнок → 🗑 Снять устройства»."

@@ -68,7 +68,26 @@ firewall на MikroTik hAP ac² (RouterOS 6.49.22). Полный handoff с ин
 Если сервер недоступен, скрипт падает до любых изменений и роутер продолжает работать
 с последним известным состоянием (как и раньше).
 
-## Установка
+## Установка одной командой (рекомендуется)
+
+Скачать `SmartBild_KidsBot_Update_2.1.0.command` в «Загрузки» на Mac (из домашней сети,
+где работают `ssh smartbild` и `ssh admin@192.168.10.1`) и выполнить в Терминале:
+
+```bash
+bash ~/Downloads/SmartBild_KidsBot_Update_2.1.0.command
+```
+
+Скрипт спросит только пароль MikroTik и дальше сам: проверит VPS и роутер, ничего не
+меняя; сделает бэкап (`/root/smartbild-kidsbot-backup-<время>` на VPS, export роутера
+в `~/Downloads/SmartBild_KidsBot_update_<время>/`); обновит и проверит бота; обновит и
+проверит скрипт MikroTik. При ошибке на VPS возвращает прежний `app.py`, при ошибке на
+роутере — прежний скрипт (VPS 2.1.0 совместим со старым скриптом). Повторный запуск
+безопасен.
+
+Файл собирается из исходников: `python3 kids-internet/tools/build_update_command.py`
+(после любого изменения `vps/app.py` или `mikrotik/sbkb-scripts.rsc.in`).
+
+## Установка вручную
 
 Сначала VPS, потом MikroTik. Перед этим — backup (`operations/backup_sensitive.command`
 из handoff) и проверка, что у всех назначенных устройств статический lease, а на
