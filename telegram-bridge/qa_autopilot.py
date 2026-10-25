@@ -86,6 +86,7 @@ JOURNEYS = ROOT / 'docs' / 'architecture' / 'HUMAN_JOURNEYS.json'
 STATUS_WORDS = {
     'ready': 'ждёт передачи разработчику', 'approved': 'передаётся разработчику',
     'fixing': 'разработчик чинит', 'awaiting_verification': 'исправлено, тестировщик перепроверит',
+    'awaiting_release': 'исправлено в ветке, ждёт проверки тестировщика и выпуска',
     'waiting_input': 'ждёт внешних данных',
 }
 INFRA_WORDS = {

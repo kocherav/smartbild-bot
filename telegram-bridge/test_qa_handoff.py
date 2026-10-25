@@ -71,31 +71,42 @@ class QaHandoffTests(unittest.TestCase):
         send.assert_not_called()
         self.assertIn('PermissionError', log.call_args.args[0])
 
-    def test_autopilot_repairs_then_immediately_verifies_and_closes(self):
+    def test_autopilot_sends_a_repair_to_a_branch_once_and_does_not_reverify(self):
+        # Owner rule 25.10: the fix waits for tester review and release; the same
+        # cycle neither repeats the run nor dispatches a second repair.
         broken = {'ok': True, 'task': {'id': 'QA-A1', 'status': 'ready',
                   'failures': [{'id': 'test:x', 'status': 'failed'}]}}
-        green = {'ok': True, 'task': None}
-        with patch.object(bridge.qa_autopilot, 'run', side_effect=[broken, green]) as run, \
+        with patch.object(bridge.qa_autopilot, 'run', return_value=broken) as run, \
              patch.object(bridge.qa_autopilot, 'approve_technical', return_value={
                  'id': 'QA-A1', 'status': 'approved'}), \
              patch.object(bridge, 'process_qa_developer_task', return_value=True) as developer, \
-             patch.object(bridge.safe_reload, 'pending_reviewed', return_value=False), \
-             patch.object(bridge, 'send_message'):
-            self.assertTrue(bridge.run_qa_autopilot('token', 'owner', 'human'))
-        self.assertEqual([unittest.mock.call('human'), unittest.mock.call('human')], run.call_args_list)
-        developer.assert_called_once_with('token', 'owner', 'QA-A1')
-
-    def test_autopilot_bounds_failed_repairs_and_leaves_work_for_next_cycle(self):
-        task = {'ok': True, 'task': {'id': 'QA-A1', 'status': 'ready',
-                'failures': [{'id': 'test:x', 'status': 'failed'}]}}
-        with patch.object(bridge.qa_autopilot, 'run', side_effect=[task, task, task]), \
-             patch.object(bridge.qa_autopilot, 'approve_technical', return_value={
-                 'id': 'QA-A1', 'status': 'approved'}), \
-             patch.object(bridge, 'process_qa_developer_task', return_value=True) as developer, \
-             patch.object(bridge.safe_reload, 'pending_reviewed', return_value=False), \
              patch.object(bridge, 'send_message'):
             self.assertFalse(bridge.run_qa_autopilot('token', 'owner', 'human'))
-        self.assertEqual(2, developer.call_count)
+        run.assert_called_once_with('human')
+        developer.assert_called_once_with('token', 'owner', 'QA-A1')
+
+    def test_repair_goes_to_branch_with_github_check_and_never_reloads_the_bot(self):
+        task = {'id': 'QA-B2', 'status': 'fixing', 'severity': 'P1', 'profile': 'human',
+                'failures': [{'id': 'test_x.Case.test_contract', 'status': 'failed'}]}
+        report = {'ok': True, 'status': 'done', 'commits': {'abc1234': True}, 'report': 'status: done', 'problems': []}
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(bridge.qa_handoff, 'claim', return_value=task), \
+             patch.object(bridge.qa_handoff, 'finish') as finish, \
+             patch.object(bridge.handoff_watcher, 'repository', return_value=Path(folder)), \
+             patch.object(bridge.handoff_watcher, 'verify_report', return_value=report), \
+             patch.object(bridge, 'DEVELOPER_LOCK_FILE', str(Path(folder) / 'dev.lock')), \
+             patch.object(bridge, 'reload_snapshot', side_effect=[{'a.py': '1'}, {'a.py': '2'}]), \
+             patch.object(bridge.safe_reload, 'request') as reload_request, \
+             patch.object(bridge, 'ask_developer', return_value='Сделано') as developer, \
+             patch.object(bridge, 'send_message') as send:
+            self.assertTrue(bridge.process_qa_developer_task('token', 'owner', 'QA-B2'))
+        prompt = developer.call_args.args[0]
+        self.assertIn('handoff/QA-B2', prompt)
+        self.assertEqual(folder, developer.call_args.kwargs['workdir'])
+        self.assertTrue(developer.call_args.kwargs['fresh'])
+        self.assertEqual('awaiting_release', finish.call_args.kwargs['status'])
+        reload_request.assert_not_called()
+        self.assertIn('в обход ветки', send.call_args.args[2])
 
     def test_autopilot_yields_before_verification_when_reload_is_pending(self):
         task = {'ok': True, 'task': {'id': 'QA-A1', 'status': 'ready',
