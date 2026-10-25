@@ -25,6 +25,17 @@ class ProposalTests(unittest.TestCase):
         self.patch = patch.object(kp, 'ROOT', self.root)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        # The company letterhead lives only on the server; the layout and totals
+        # are checked on a blank A4 of the same size.
+        from pypdf import PdfWriter
+        letterhead = self.root / 'letterhead.pdf'
+        writer = PdfWriter()
+        writer.add_blank_page(width=595.28, height=841.89)
+        with open(letterhead, 'wb') as target:
+            writer.write(target)
+        letterhead_patch = patch.object(kp, 'LETTERHEAD', letterhead)
+        letterhead_patch.start()
+        self.addCleanup(letterhead_patch.stop)
 
     def test_discount_and_fractional_price(self):
         data = kp.snapshot(example())
