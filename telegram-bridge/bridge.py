@@ -73,6 +73,7 @@ MODEL_LOCK_FILE = os.path.join(BASE_DIR, "model_worker.lock")
 DEVELOPER_LOCK_FILE = os.path.join(BASE_DIR, "developer_worker.lock")
 WORKFLOW_DB_FILE = os.path.join(BASE_DIR, "workflow_runtime.sqlite3")
 RELOAD_REQUEST_FILE = os.path.join(BASE_DIR, "reload_request.json")
+RELOAD_NOTICE_FILE = os.path.join(BASE_DIR, "reload_notice_state.json")
 RUNTIME_ACTIVE = False  # enabled by main; imports/tests do not alter live state
 UI_CONTEXT = None
 BACKGROUND_LOCK_DIR = os.path.join(BASE_DIR, ".background-locks")
@@ -8988,6 +8989,43 @@ def ask_developer(prompt, workdir=None, fresh=False):
     return answer or "Задача завершена, но Codex не вернул текстовый отчёт."
 
 
+CHANGELOG_FILE = os.path.join(BASE_DIR, "docs", "architecture", "CHANGELOG.md")
+
+
+def changelog_headings(path=None):
+    try:
+        with open(path or CHANGELOG_FILE, encoding="utf-8") as source:
+            return [line[3:].strip() for line in source if line.startswith("## ")]
+    except OSError:
+        return []
+
+
+def announce_reload(token, chat_id):
+    """Owner request 25.10: say when the bot came back on a new version and what it brings.
+    A restart on the same code stays silent."""
+    try:
+        with open(__file__, "rb") as source:
+            version = hashlib.sha256(source.read()).hexdigest()[:12]
+    except OSError:
+        return False
+    state = durable_json.read(RELOAD_NOTICE_FILE, dict)
+    if state.get("version") == version:
+        return False
+    headings = changelog_headings()
+    known = state.get("last_heading")
+    fresh = headings[:headings.index(known)] if known in headings else headings[:3]
+    lines = [f"🔄 Бот перезапущен на новой версии ({version[:8]}) и работает."]
+    if fresh:
+        lines.append("Что нового:")
+        lines += ["• " + heading.split(" — ", 1)[-1] for heading in fresh[:5]]
+        if len(fresh) > 5:
+            lines.append(f"…и ещё {len(fresh) - 5} — в журнале изменений.")
+    send_message(token, chat_id, "\n".join(lines))
+    durable_json.save(RELOAD_NOTICE_FILE, {"version": version, "last_heading": headings[0] if headings else known,
+                                           "announced_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    return True
+
+
 STALE_RELOAD_NOTICE = {"key": None}
 
 
@@ -9727,6 +9765,7 @@ def main():
     configure_bot_commands(token)
 
     print(f"{LOG_PREFIX} started, session_id={session_id}, offset={offset}")
+    announce_reload(token, authorized_chat_id)
     report_interrupted_operations(token, interrupted_operations)
 
     for job in recover_interrupted_document_jobs():
