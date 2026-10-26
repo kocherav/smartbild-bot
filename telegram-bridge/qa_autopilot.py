@@ -97,6 +97,23 @@ INFRA_WORDS = {
 }
 
 
+COVERAGE_WORDS = {
+    '': 'маршрут {name} ещё не автоматизирован — в плане тестировщика',
+    'case-not-passed': 'маршрут {name} не прошёл на снимке CRM',
+    'unverified-fixture': 'для маршрута {name} нет подтверждённого снимка CRM',
+    'evidence-missing': 'для маршрута {name} нет файла снимка CRM',
+    'evidence-hash-mismatch': 'снимок CRM для маршрута {name} изменился после записи',
+    'dialogue-missing': 'у маршрута {name} нет записи диалога',
+    'readback-missing': 'у маршрута {name} нет проверки результата чтением',
+}
+
+
+def planned(failure):
+    """A journey not automated yet is the tester's planned work, not a wait for data."""
+    ident = str(failure.get('id') or '')
+    return ident.startswith('coverage:') and ':' not in ident.removeprefix('coverage:')
+
+
 def _journey_titles(path=None):
     try:
         registry = json.loads(Path(path or JOURNEYS).read_text(encoding='utf-8'))
@@ -111,9 +128,9 @@ def failure_gist(failure, titles=None):
         return str(failure['title'])
     ident = str(failure.get('id') or 'неизвестная проверка')
     if ident.startswith('coverage:'):
-        journey = ident.removeprefix('coverage:').split(':', 1)[0]
-        name = (titles or {}).get(journey)
-        return f"маршрут «{name or journey}» не подтверждён прогоном на снимке CRM"
+        journey, _, reason = ident.removeprefix('coverage:').partition(':')
+        name = f"«{(titles or {}).get(journey) or journey}»"
+        return COVERAGE_WORDS.get(reason, 'маршрут {name} не подтверждён прогоном на снимке CRM').format(name=name)
     if ident.startswith('decision:'):
         return 'нужно ваше решение: ' + ident.removeprefix('decision:')
     for prefix, words in INFRA_WORDS.items():
@@ -166,7 +183,13 @@ def digest(path=qa_handoff.PRODUCTION_STATE, now=None, journeys=None, limit=5):
         lines += _task_lines(code, titles, limit)
     else:
         lines.append("\nОткрытых дефектов кода нет.")
+    plan = list(dict.fromkeys((titles or {}).get(str(f['id']).removeprefix('coverage:')) or str(f['id']).removeprefix('coverage:')
+                              for task in waiting for f in task.get('failures') or [] if planned(f)))
+    waiting = [dict(task, failures=[f for f in task.get('failures') or [] if not planned(f)]) for task in waiting]
+    waiting = [task for task in waiting if task['failures']]
     if waiting:
         lines += [f"\nНе код, ждут данных или решения ({len(waiting)}):"]
         lines += _task_lines(waiting, titles, limit)
+    if plan:
+        lines.append("\nЕщё не автоматизированы (в плане тестировщика): " + ', '.join(f'«{name}»' for name in plan) + '.')
     return "\n".join(lines)

@@ -91,6 +91,7 @@ def register(ideas, path=None, now=None):
                 'how': str(idea.get('how') or ''), 'value': str(idea.get('value') or ''),
                 'mission': str(idea.get('mission') or ''), 'status': 'proposed',
                 'first_seen': now, 'seen': 0}
+        _numbered(state)
         record['seen'] = int(record.get('seen') or 0) + 1
         record['last_seen'] = now
         if record['status'] == 'proposed':
@@ -99,8 +100,31 @@ def register(ideas, path=None, now=None):
     return waiting
 
 
+def _numbered(state):
+    """A permanent short number per idea: buttons say «✅ 7. …», never a hash."""
+    taken = [int(x['num']) for x in state['ideas'].values() if x.get('num')]
+    following = max(taken, default=0) + 1
+    changed = False
+    for record in sorted(state['ideas'].values(), key=lambda x: x.get('first_seen', '')):
+        if not record.get('num'):
+            record['num'] = following
+            following += 1
+            changed = True
+    return changed
+
+
+def by_number(number, path=None):
+    state = read(path)
+    if _numbered(state):
+        save(state, path)
+    return next((dict(x) for x in state['ideas'].values() if str(x.get('num')) == str(number)), None)
+
+
 def pending(path=None):
-    ideas = [x for x in read(path)['ideas'].values() if x.get('status') == 'proposed']
+    state = read(path)
+    if _numbered(state):
+        save(state, path)
+    ideas = [x for x in state['ideas'].values() if x.get('status') == 'proposed']
     return sorted(ideas, key=lambda x: (VALUE_RANK.get(x.get('value', '').casefold(), 3), x.get('first_seen', '')))
 
 
@@ -109,24 +133,35 @@ def _short(title, limit=60):
     return title if len(title) <= limit else title[:limit - 1] + '…'
 
 
+def _button_title(title, limit=24):
+    """Cut at a word so a phone shows the beginning of the idea, not «Берём I…ED»."""
+    title = ' '.join(str(title or '').split())
+    if len(title) <= limit:
+        return title
+    cut = title[:limit - 1].rsplit(' ', 1)[0] if ' ' in title[:limit - 1] else title[:limit - 1]
+    return cut.rstrip(' ,.;:—-') + '…'
+
+
 def card(ideas, limit=5):
-    """Owner message and buttons for ideas waiting for a decision."""
+    """Owner message and buttons for ideas waiting for a decision (owner design 26.10):
+    left «✅ N. суть» takes the idea, right «✖ N» declines it."""
     shown = ideas[:limit]
-    lines = ['💡 Идеи тестировщика — решите одной кнопкой:']
-    for number, idea in enumerate(shown, 1):
-        lines.append(f"\n{number}. {idea['title']} ({idea['id']}"
-                     + (f", ценность {idea['value']}" if idea.get('value') else '') + ')')
+    lines = ['💡 Идеи тестировщика — решите кнопками под сообщением:']
+    for idea in shown:
+        lines.append(f"\n{idea['num']}. {idea['title']}" + (f" (ценность {idea['value']})" if idea.get('value') else ''))
         if idea.get('why'):
             lines.append('Что мешает: ' + idea['why'])
         if idea.get('how'):
             lines.append('Как: ' + idea['how'])
     if len(ideas) > limit:
-        lines.append(f"\n…и ещё {len(ideas) - limit} — откройте «☰ Ещё → 💡 Идеи тестировщика».")
-    lines.append('\n«✅ Берём» — разработчик сделает в отдельной ветке, в рабочий бот попадёт только после '
-                 'проверки тестировщиком и вашего выпуска. «🚫 Не надо» — идея больше не предлагается.')
-    keyboard = [[{'text': f"✅ Берём {idea['id']}"}, {'text': f"🚫 Не надо {idea['id']}"}] for idea in shown]
+        lines.append(f"\n…и ещё {len(ideas) - limit} — появятся здесь, когда решите эти.")
+    lines.append('\n«✅ N» — берём: разработчик сделает в отдельной ветке, в рабочий бот попадёт только после '
+                 'проверки тестировщиком и вашего выпуска. «✖ N» — не берём, идея больше не предлагается. '
+                 'После каждого решения придёт обновлённый список.')
+    keyboard = [[{'text': f"✅ {idea['num']}. {_button_title(idea['title'])}"}, {'text': f"✖ {idea['num']}"}]
+                for idea in shown]
     keyboard.append([{'text': '⬅️ Главное меню'}])
-    return '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True, 'one_time_keyboard': True}
+    return '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True}
 
 
 def _update(ident, allowed, path=None, **fields):
@@ -201,5 +236,5 @@ def weekly_text(path=None, now=None, days=7):
              f"{sum(counts.get(s, 0) for s in ('taken', 'running', 'done', 'failed'))}; "
              f"не берём: {counts.get('declined', 0)}."]
     for record in week:
-        lines.append(f"• {_short(record['title'], 90)} — {STATUS_WORDS.get(record.get('status'), record.get('status'))}")
+        lines.append(f"• {record.get('num', '')}. {_short(record['title'], 90)} — {STATUS_WORDS.get(record.get('status'), record.get('status'))}")
     return '\n'.join(lines)

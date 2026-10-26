@@ -282,6 +282,15 @@ class Registry:
                         'evidence': str(evidence), 'created_at': run['at'], 'last_seen_at': run['at'],
                         'occurrences': 1, 'protocol': str(protocol) if protocol else None}
                 state['tasks'].append(task)
+            if kind == 'external':
+                # Every run recomputes all coverage gaps of the profile: older gap
+                # sets are superseded, not kept as separate «waiting» tasks (QA 26.10:
+                # six overlapping tasks, none of which could ever close).
+                for other in state['tasks']:
+                    if (other is not task and other.get('profile') == profile and task_kind(other) == 'external'
+                            and other.get('status') in {'ready', 'approved', 'awaiting_verification', 'waiting_input'}):
+                        other.update(status='closed', closed_reason='superseded', superseded_by=task['id'],
+                                     verified_at=run['at'], verification_run=run['id'])
             tasks.append(task)
         atomic_save(self.path, state)
         return run, tasks
