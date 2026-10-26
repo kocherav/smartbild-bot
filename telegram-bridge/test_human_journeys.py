@@ -220,6 +220,30 @@ class DealStatusJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class DealCreationJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_create_deal_from_one_message(self):
+        block = ('Черновик готов.\nCREATE_MEGAPLAN_DEAL_BEGIN\n'
+                 '{"client_name": "ООО «Альфа Климат»", "description": "Переговорная", '
+                 '"selling_company_id": "cliwell", "tax_mode": "5", '
+                 '"items": [{"name": "Сплит-система Haier AS35", "qty": 2, "unit_price": 52000}, '
+                 '{"name": "Монтаж сплит-системы", "qty": 2, "unit_price": 14000}]}\n'
+                 'CREATE_MEGAPLAN_DEAL_END')
+
+        def journey(person):
+            yield say('Создай сделку для клиента Альфа Климат: Сплит-система Haier AS35 — 2 шт по 52000; монтаж — 2 шт по 14000')
+            person.sees('Проверьте новую сделку', 'ID 501', 'Haier AS35', '132 000,00',
+                        expected='Одна команда нашла клиента и показала единый предпросмотр')
+            person.sees_button('✅ Создать подтверждённую сделку')
+            person.check('До подтверждения CRM не изменена', person.stand.crm.writes,
+                         not person.stand.crm.writes)
+            yield press('✅ Создать подтверждённую сделку')
+            person.sees('Сделка создана', expected='Сделка создана только после кнопки')
+
+        stand = self.play(journey, setup=office, model_rules=[('Сплит-система Haier AS35', block)])
+        created = [w for w in stand.crm.writes if w['script'] == 'megaplan_api']
+        self.assertEqual(1, len(created))
+        self.assertEqual('501', str(created[0]['spec'].get('client_id')))
+        self.assertEqual(2, stand.receipt()['actions'], '2 действия вместо 8 в пошаговом мастере')
+
     def test_create_deal_with_wizard_and_text_specification(self):
         spec_block = ('Черновик готов.\nCREATE_MEGAPLAN_DEAL_BEGIN\n'
                       '{"client_name": "ООО «Альфа Климат»", "description": "Кондиционеры для переговорной", '
