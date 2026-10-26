@@ -273,6 +273,13 @@ HELP_TEXT = """Что я умею:
 /deals — работа со сделками
 /help — показать эту подсказку ещё раз."""
 
+WELCOME_TEXT = """Главное меню.
+
+💬 Можно написать задачу своими словами, например:
+«найди сделку по складу в Химках».
+
+Или выберите действие кнопкой."""
+
 DASHBOARD_URL = "https://claude.smartbild.su/deal-dashboard/"
 DASHBOARD_INLINE = {"inline_keyboard": [[{"text": "📊 Открыть пульт сделок", "web_app": {"url": DASHBOARD_URL}}]]}
 
@@ -4055,7 +4062,11 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены." if value=='❌ Отмена' else "Главное меню.", MAIN_KEYBOARD)
+        text = (
+            "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены."
+            if value == '❌ Отмена' else WELCOME_TEXT if value == '/start' else "Главное меню."
+        )
+        send_message(token, chat_id, text, MAIN_KEYBOARD)
         return True
     return False
 

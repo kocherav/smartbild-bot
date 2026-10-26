@@ -8,6 +8,30 @@ from test_human_journeys import DEAL, office
 
 
 class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_welcome_offers_one_input_free_deal_search(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('📍 Найти по адресу')
+            yield say('Химки')
+            person.sees('№990002', 'Склад', expected='Кнопочный маршрут нашёл сделку')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(4, before.receipt()['actions'], 'до результата через меню — 4 действия')
+
+        def free_text_journey(person):
+            yield say('/start')
+            person.sees('Можно написать задачу своими словами',
+                        'найди сделку по складу в Химках',
+                        expected='На старте видна подсказка о свободном вводе с примером')
+            yield say('найди сделку по складу в Химках')
+            person.sees('№990002', 'Склад', expected='Свободный запрос нашёл ту же сделку')
+
+        after = self.play(free_text_journey, setup=office)
+        self.assertEqual(1, after.receipt()['actions'] - 1,
+                         'после приветствия до результата — один свободный ввод')
+        self.assertEqual(0, len(after.model.prompts), 'Поиск сделки не должен уходить в ИИ')
+
     def test_number_alone_opens_the_deal_and_invoice_takes_four_actions(self):
         def journey(person):
             yield say('990001')
