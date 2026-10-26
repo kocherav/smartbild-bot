@@ -56,6 +56,19 @@ class ProtocolTest(unittest.TestCase):
         self.assertLessEqual(len(label),len('№901 · ')+38)
         self.assertNotIn('<p>',label)
 
+    def test_deal_list_shows_total_price_without_opening_card(self):
+        deal = {'id':'901','client':'Автосалон JetCar','description':'Поставка светильников',
+                'status':'Заявка','address':'','price':150000}
+        with mock.patch.object(bridge,'run_deal_browser',return_value={'ok':True,'deals':[deal]}), \
+             mock.patch.object(bridge,'send_message') as send:
+            bridge.send_deal_list('token','chat',{'action':'search_any','query':'светильники'})
+        self.assertIn('Сумма: 150 000 ₽',send.call_args.args[2])
+
+    def test_deal_list_price_preserves_kopecks_and_rejects_unknown_values(self):
+        self.assertEqual('150 000,50 ₽',bridge.deal_list_price('150000.50'))
+        self.assertEqual('не указана',bridge.deal_list_price(None))
+        self.assertEqual('не указана',bridge.deal_list_price('NaN'))
+
     def test_deal_essence_falls_back_to_address_then_client(self):
         self.assertEqual(bridge.deal_essence({'address':'Подвойского 5/19','client':'JetCar'}),'Подвойского 5/19')
         self.assertEqual(bridge.deal_essence({'client':'JetCar'}),'JetCar')

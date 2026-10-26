@@ -32,6 +32,17 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
                          'после приветствия до результата — один свободный ввод')
         self.assertEqual(0, len(after.model.prompts), 'Поиск сделки не должен уходить в ИИ')
 
+    def test_search_result_shows_amount_without_opening_deal(self):
+        def journey(person):
+            yield say('найди сделку по складу в Химках')
+            person.sees('№990002', 'Статус: Закупка', 'Сумма: 150 000 ₽',
+                        expected='В результате поиска сразу видны статус и сумма сделки')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, stand.receipt()['actions'],
+                         'после изменения сумма видна за одно действие без открытия карточки')
+        self.assertEqual([], stand.crm.writes, 'Поиск и просмотр суммы не изменяют CRM')
+
     def test_number_alone_opens_the_deal_and_invoice_takes_four_actions(self):
         def journey(person):
             yield say('990001')
