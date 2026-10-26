@@ -9742,6 +9742,11 @@ def handle_human_workflow(token,chat_id,text):
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
         return _start_human_invoice(token,chat_id,match.group(),saved.get('name') or human_intents.ISSUE_INVOICE)
+    elif pending=='human_economics_deal':
+        match=re.search(r'\d{2,}',value)
+        if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
+        update_deal_ui_state(chat_id,pending=None,human_intent=None)
+        send_current_profitability(token,chat_id,match.group());return True
     else:intent=human_intents.classify(value)
     if not intent:return False
     if intent.name!=human_intents.CREATE_DEAL and not intent.deal_id and state.get('current_deal_id') and not re.search(r'(?i)друг\w*\s+сделк|не\s+в\s+этой',value):
@@ -9759,6 +9764,11 @@ def handle_human_workflow(token,chat_id,text):
             update_deal_ui_state(chat_id,pending='human_invoice_deal',human_intent={'name':intent.name})
             send_message(token,chat_id,'По какой сделке? Укажите номер.');return True
         return _start_human_invoice(token,chat_id,intent.deal_id,intent.name)
+    if intent.name==human_intents.GET_ECONOMICS:
+        if not intent.deal_id:
+            update_deal_ui_state(chat_id,pending='human_economics_deal',human_intent={'name':intent.name})
+            send_message(token,chat_id,'По какой сделке рассчитать прибыль и маржу? Укажите номер.');return True
+        send_current_profitability(token,chat_id,intent.deal_id);return True
     if intent.name==human_intents.CREATE_DEAL:
         active = current_deal_ui_state(chat_id)
         if active.get('deal_creation_active') and active.get('deal_create_spec'):

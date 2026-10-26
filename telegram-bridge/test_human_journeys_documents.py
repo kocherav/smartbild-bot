@@ -91,6 +91,17 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_deal_economics_in_one_plain_language_action(self):
+        def journey(person):
+            yield say('Покажи прибыль и маржу по сделке 990001 и пришли расчёт')
+            person.sees('выручка 114 000,00 ₽', 'себестоимость 72 000,00 ₽',
+                        'прибыль 42 000,00 ₽', '36,8%',
+                        expected='Экономика рассчитана одним сообщением менеджера')
+            person.got_document('Рентабельность', expected='Расчётный Excel пришёл одним маршрутом')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, stand.receipt()['actions'], 'После улучшения нужен один шаг менеджера')
+        self.assertEqual(0, len(stand.model.prompts), 'Точный запрос экономики не должен уходить в ИИ')
+
     def test_deal_economics_button(self):
         def journey(person):
             yield from open_deal_by_number(person)
@@ -99,7 +110,9 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('выручка 114 000,00 ₽', 'себестоимость 72 000,00 ₽', 'прибыль 42 000,00 ₽', '36,8%',
                         expected='Экономика сделки в понятном формате')
             person.got_document('Рентабельность')
-        self.play(journey, setup=office)
+        stand = self.play(journey, setup=office)
+        self.assertEqual(6, stand.receipt()['actions'],
+                         'Контрольный маршрут через меню требует шесть действий на стенде')
 
 
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):

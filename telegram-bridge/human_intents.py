@@ -16,6 +16,7 @@ CHECK_PAYMENT = "check_payment"
 MOVE_STATUS = "move_status"
 ISSUE_INVOICE = "issue_invoice"
 GET_INVOICE = "get_invoice"
+GET_ECONOMICS = "get_economics"
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,13 @@ def classify(text):
     invoice = _invoice_intent(folded, deal_id)
     if invoice:
         return invoice
+
+    # Route an explicit economics question before the payment rule below:
+    # «пришли расчёт» otherwise looks like «пришли деньги» by its word stem.
+    if (re.search(r"\b(?:экономик|рентабельн|прибыл|марж)\w*", folded)
+            and (re.search(r"\bсделк", folded) or deal_id)):
+        return Intent(GET_ECONOMICS, deal_id=deal_id,
+                      missing=(() if deal_id else ("deal",)))
 
     if (re.search(r"\b(?:оплачен|оплат|поступил|пришл|долг|остаток)\w*", folded)
             and (re.search(r"\bсделк", folded) or (deal_id and len(deal_id) >= 3 and not re.search(r"сч[её]т", folded)))):
