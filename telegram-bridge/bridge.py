@@ -300,6 +300,7 @@ PAYER_TARGET_CONFIRM_KEYBOARD = {
 }
 BANK_MENU_KEYBOARD = {
     "keyboard": [
+        [{"text": "🔎 Найти сделку"}],
         [{"text": "📤 Загрузить выписку"}],
         [{"text": "📩 Банковские уведомления"}],
         [{"text": "🔗 Найти соответствия"}],
@@ -4059,7 +4060,13 @@ def handle_global_navigation(token, chat_id, text):
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
-        send_message(token, chat_id, "Деньги и платежи — выберите действие.", BANK_MENU_KEYBOARD)
+        send_message(
+            token,
+            chat_id,
+            "Деньги и платежи — выберите действие.\n\n"
+            "Нужен уже выставленный счёт? Найдите сделку по клиенту или адресу.",
+            BANK_MENU_KEYBOARD,
+        )
         return True
     if value == "🧰 Монтаж":
         send_message(token, chat_id, "Монтаж — выберите действие.", MANAGER_INSTALLATION_KEYBOARD)
