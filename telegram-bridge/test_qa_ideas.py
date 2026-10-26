@@ -37,13 +37,23 @@ class IdeasRegistryTest(unittest.TestCase):
         self.assertEqual(['Подсказывать счёт после статуса'], [i['title'] for i in again])
         self.assertIsNone(qa_ideas.decide(first[0]['id'], True, self.path), 'Повторное решение не меняет первое')
 
-    def test_card_has_two_buttons_per_idea_and_counts_the_rest(self):
-        ideas = [{'id': f'IDEA-0000000{n}', 'title': f'Идея {n}', 'value': 'средняя'} for n in range(7)]
+    def test_card_buttons_say_number_and_gist_and_a_cross(self):
+        ideas = [{'id': f'IDEA-0000000{n}', 'num': n + 1, 'title': f'Создание сделки одной командой {n}',
+                  'value': 'средняя'} for n in range(7)]
         text, keyboard = qa_ideas.card(ideas)
         self.assertIn('…и ещё 2', text)
-        self.assertEqual(['✅ Берём IDEA-00000000', '🚫 Не надо IDEA-00000000'],
-                         [b['text'] for b in keyboard['keyboard'][0]])
+        self.assertEqual(['✅ 1. Создание сделки одной…', '✖ 1'], [b['text'] for b in keyboard['keyboard'][0]])
         self.assertEqual(6, len(keyboard['keyboard']))
+
+    def test_numbers_are_permanent(self):
+        first = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)
+        numbers = {i['title']: i['num'] for i in first}
+        self.assertEqual({1, 2}, set(numbers.values()))
+        qa_ideas.decide(first[0]['id'], False, self.path)
+        later = {'runs': [{'at': '2026-10-30T03:00:00+00:00', 'ideas': [{'title': 'Новая идея'}]}]}
+        added = qa_ideas.register(qa_ideas.recent(later, NOW), self.path, NOW)
+        self.assertEqual(3, added[0]['num'])
+        self.assertEqual(first[1]['id'], qa_ideas.by_number(numbers[first[1]['title']], self.path)['id'])
 
     def test_taken_idea_becomes_a_handoff_task_once(self):
         record = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)[0]
@@ -92,7 +102,8 @@ class IdeasOwnerFlowTest(unittest.TestCase):
         self.assertIn('Кнопка счёта в карточке', texts[1])
         self.assertIn('Идеи тестировщика за неделю', texts[2])
         ident = qa_ideas.idea_id('Кнопка счёта в карточке')
-        self.assertIn('✅ Берём ' + ident, self.telegram.events[1]['keyboard'])
+        self.assertIn('✅ 1. Кнопка счёта в карточке', self.telegram.events[1]['keyboard'])
+        self.assertIn('✖ 1', self.telegram.events[1]['keyboard'])
 
     def test_take_button_hands_the_idea_to_the_developer_once(self):
         bridge.send_owner_digest('qa', 'owner', now=NOW)
@@ -102,8 +113,8 @@ class IdeasOwnerFlowTest(unittest.TestCase):
               patch.object(bridge.handoff_watcher, 'repository', return_value=Path(self.temp.name)),
               patch.object(bridge.handoff_watcher, 'verify_report', return_value=report) as verify,
               patch.object(bridge, 'ask_developer', return_value='Сделано в ветке') as developer):
-            self.assertTrue(bridge.handle_global_navigation('qa', 'owner', '✅ Берём ' + ident))
-            bridge.handle_global_navigation('qa', 'owner', '✅ Берём ' + ident)
+            self.assertTrue(bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке'))
+            bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке')
         developer.assert_called_once()
         self.assertIn('handoff/' + ident, developer.call_args.args[0])
         verify.assert_called_once()
@@ -113,9 +124,22 @@ class IdeasOwnerFlowTest(unittest.TestCase):
     def test_decline_button(self):
         bridge.send_owner_digest('qa', 'owner', now=NOW)
         ident = qa_ideas.idea_id('Подсказывать счёт после статуса')
-        bridge.handle_global_navigation('qa', 'owner', '🚫 Не надо ' + ident)
+        bridge.handle_global_navigation('qa', 'owner', '✖ 2')
         self.assertEqual('declined', qa_ideas.read()['ideas'][ident]['status'])
-        self.assertIn('Больше не предлагается', self.texts()[-1])
+        self.assertIn('Больше не предлагается', self.texts()[-2])
+        self.assertNotIn('✖ 2', self.telegram.events[-1]['keyboard'], 'Решённая идея ушла из списка')
+        self.assertIn('✖ 1', self.telegram.events[-1]['keyboard'], 'Остальные идеи по-прежнему можно решить')
+
+    def test_two_ideas_one_after_another_without_reopening_the_menu(self):
+        bridge.send_owner_digest('qa', 'owner', now=NOW)
+        with patch.object(bridge, 'run_background_job'):
+            bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке')
+            pressable = self.telegram.events[-1]['keyboard']
+            self.assertEqual(['✅ 2. Подсказывать счёт…', '✖ 2', '⬅️ Главное меню'], pressable)
+            bridge.handle_global_navigation('qa', 'owner', '✅ 2. Подсказывать счёт…')
+        statuses = {r['num']: r['status'] for r in qa_ideas.read()['ideas'].values()}
+        self.assertEqual({1: 'taken', 2: 'taken'}, statuses)
+        self.assertEqual('Все идеи разобраны.', self.texts()[-1])
 
 
 if __name__ == '__main__':

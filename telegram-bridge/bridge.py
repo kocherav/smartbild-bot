@@ -3994,19 +3994,29 @@ def handle_global_navigation(token, chat_id, text):
             run_background_job(lambda: process_qa_developer_task(token, chat_id, task['id']), token, chat_id,
                                operation='QA→разработчик:' + task['id'], allow_stale=True)
         return True
-    idea_decision = re.fullmatch(r"(✅ Берём|🚫 Не надо) (IDEA-[0-9A-F]{8})", value)
+    idea_decision = (re.fullmatch(r"(✅) (\d{1,4})\. .+", value) or re.fullmatch(r"(✖) (\d{1,4})", value)
+                     or re.fullmatch(r"(✅ Берём|🚫 Не надо) (IDEA-[0-9A-F]{8})", value))
     if idea_decision:
-        record = qa_ideas.decide(idea_decision.group(2), idea_decision.group(1).startswith('✅'))
+        mark, ref = idea_decision.groups()
+        target = qa_ideas.by_number(ref) if ref.isdigit() else {'id': ref}
+        record = qa_ideas.decide(target['id'], mark.startswith('✅')) if target else None
         if not record:
             send_message(token, chat_id, "По этой идее решение уже принято.", MAIN_KEYBOARD)
         elif record['status'] == 'declined':
-            send_message(token, chat_id, f"Не берём: «{record['title']}». Больше не предлагается.", MAIN_KEYBOARD)
+            send_message(token, chat_id, f"✖ Не берём идею {record.get('num')}: «{record['title']}». Больше не предлагается.")
         else:
-            send_message(token, chat_id, f"Берём: «{record['title']}». Передаю разработчику; код — только в ветке "
-                         f"handoff/{record['id']}, в рабочий бот попадёт после проверки тестировщиком и вашего выпуска.",
-                         MAIN_KEYBOARD)
+            send_message(token, chat_id, f"✅ Берём идею {record.get('num')}: «{record['title']}». Передаю разработчику; "
+                         f"код — только в ветке handoff/{record['id']}, в рабочий бот попадёт после проверки "
+                         "тестировщиком и вашего выпуска.")
             run_background_job(lambda: process_idea_task(token, chat_id, record['id']), token, chat_id,
                                operation='идея→разработчик:' + record['id'], allow_stale=True)
+        # Owner design 26.10: the list shrinks after each decision instead of dying.
+        waiting = qa_ideas.pending()
+        if waiting:
+            text, keyboard = qa_ideas.card(waiting)
+            send_message(token, chat_id, text, keyboard)
+        elif record:
+            send_message(token, chat_id, "Все идеи разобраны.", MAIN_KEYBOARD)
         return True
     if value == "💡 Идеи тестировщика":
         waiting = qa_ideas.pending()
