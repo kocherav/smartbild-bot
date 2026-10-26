@@ -94,10 +94,10 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
     def test_deal_economics_button(self):
         def journey(person):
             yield from open_deal_by_number(person)
-            yield press('📋 Основное')
+            person.sees_button('💰 Экономика')
             yield press('💰 Экономика')
             person.sees('выручка 114 000,00 ₽', 'себестоимость 72 000,00 ₽', 'прибыль 42 000,00 ₽', '36,8%',
-                        expected='Экономика сделки в понятном формате')
+                        expected='Экономика сделки открылась одним нажатием с карточки')
             person.got_document('Рентабельность')
         self.play(journey, setup=office)
 
@@ -107,7 +107,6 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
 
     @staticmethod
     def economics(person):
-        yield press('📋 Основное')
         yield press('💰 Экономика')
 
     def writes(self, stand):

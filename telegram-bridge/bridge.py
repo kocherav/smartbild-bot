@@ -505,6 +505,7 @@ DEAL_ACTIONS_KEYBOARD = {
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
+        [{"text": "💰 Экономика"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
         [{"text": "👤 Назначить исполнителя"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
