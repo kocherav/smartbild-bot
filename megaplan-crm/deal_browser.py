@@ -752,6 +752,46 @@ def main():
             found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
         total_count = len(found)
         found = found[:max(1, min(int(spec.get("limit", 10)), 20))]
+    elif action == "search_combined":
+        client_query = str(spec.get("client_query") or "").strip()
+        object_query = str(spec.get("object_query") or "").strip()
+        if not client_query or not object_query:
+            raise ValueError("пустые условия поиска")
+
+        names_by_id = {}
+        for deal in deals:
+            contractor = deal.get("contractor") or {}
+            name = contractor.get("name") or " ".join(filter(None, [
+                contractor.get("firstName"), contractor.get("lastName"),
+            ]))
+            if contractor.get("id") is not None and name:
+                names_by_id[str(contractor["id"])] = name
+
+        def client_value(deal):
+            contractor = deal.get("contractor") or {}
+            return contractor.get("name") or " ".join(filter(None, [
+                contractor.get("firstName"), contractor.get("lastName"),
+            ])) or names_by_id.get(str(contractor.get("id")), "")
+
+        def object_value(deal):
+            return " ".join(str(value or "") for value in [
+                deal.get("name"), deal.get("Category1000068CustomFieldAdresObEkta"),
+                (deal.get("program") or {}).get("name"),
+            ])
+
+        matched_client_ids = {
+            str((deal.get("contractor") or {}).get("id")) for deal in deals
+            if natural_match_score(client_query, client_value(deal))
+        }
+        if not matched_client_ids:
+            for fragment in natural_name_fragments(client_query):
+                matched_client_ids.update(contractor_ids(api, fragment))
+        found = [deal for deal in deals
+                 if str((deal.get("contractor") or {}).get("id")) in matched_client_ids
+                 and (natural_match_score(object_query, object_value(deal))
+                      or stem_match_score(object_query, object_value(deal)))]
+        total_count = len(found)
+        found = found[:max(1, min(int(spec.get("limit", 15)), 15))]
     elif action in ("search_client", "search_address"):
         query = str(spec.get("query") or "").strip().casefold()
         if not query:

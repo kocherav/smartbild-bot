@@ -2797,7 +2797,7 @@ def cleanup_generated_contract(state):
 
 
 def run_deal_browser(spec, timeout=45):
-    cached_actions = {"list", "search_any", "search_client", "search_address",
+    cached_actions = {"list", "search_any", "search_client", "search_address", "search_combined",
                       "get_cached", "get_many_cached"}
     if str(spec.get("action") or "") not in cached_actions:
         try:
@@ -3186,7 +3186,7 @@ def deal_selection_keyboard(deals):
     return {"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": True}
 
 
-def send_deal_list(token, chat_id, spec, result=None):
+def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     result = result if result is not None else run_deal_browser(spec)
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось получить сделки: {result.get('error')}", DEALS_KEYBOARD)
@@ -3194,6 +3194,9 @@ def send_deal_list(token, chat_id, spec, result=None):
     deals = result.get("deals") or []
     if not deals:
         send_message(token, chat_id, "Подходящих сделок не найдено.", DEALS_KEYBOARD)
+        return
+    if open_unique and len(deals) == 1 and int(result.get("total_count") or 1) == 1:
+        select_deal(token, chat_id, deals[0]["id"])
         return
     lines = [
         f"№{d['id']} — {d.get('client') or 'без клиента'}\n"
@@ -3322,6 +3325,11 @@ DEAL_FREE_SEARCH_RE = re.compile(
     r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?"
     r"сдел(?:к\w*|ок)\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
 )
+DEAL_COMBINED_SEARCH_RE = re.compile(
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой)\s+сдел(?:ку|ки)\s+"
+    r"(?:клиента|по\s+клиенту|у\s+клиента|с\s+клиентом|для)\s+"
+    r"(?P<client>.{2,60}?)\s+по\s+(?P<object>.{3,80}?)[?!.]*\s*$"
+)
 # Lists by period/status/payment and deal numbers belong to other handlers.
 DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
     r"(?i)\b\d{3,}\b|статус|недел|месяц|сегодн|вчера|последн|открыт|оплат|долг|сч[её]т|работе"
@@ -3379,6 +3387,19 @@ def listed_deals_keyboard(text):
 
 def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
+    combined = DEAL_COMBINED_SEARCH_RE.match(text or "")
+    if combined:
+        result = run_deal_browser({
+            "action": "search_combined",
+            "client_query": combined.group("client").strip(" «»\""),
+            "object_query": combined.group("object").strip(" «»\""),
+            "limit": 15,
+        })
+        if not result.get("ok") or not result.get("deals"):
+            return False
+        update_deal_ui_state(chat_id, pending=None)
+        send_deal_list(token, chat_id, None, result, open_unique=True)
+        return True
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
     if not match:
         free = DEAL_FREE_SEARCH_RE.match(text or "")
@@ -3389,7 +3410,7 @@ def handle_deal_search_phrase(token, chat_id, text):
         if not result.get("ok") or not result.get("deals"):
             return False  # not a confident search: the usual route answers
         update_deal_ui_state(chat_id, pending=None)
-        send_deal_list(token, chat_id, None, result)
+        send_deal_list(token, chat_id, None, result, open_unique=True)
         return True
     query = match.group("query").strip(" «»\"")
     action = "search_address" if match.group("address") else "search_client"
@@ -4160,7 +4181,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                operation=f"сделка:открыть:{current_id}")
         return True
     local_menus = {
-        "🔎 Найти сделку": ("Как найти сделку?", DEAL_SEARCH_KEYBOARD),
+        "🔎 Найти сделку": (
+            "Как найти сделку?\n\nМожно одной фразой, например:\n"
+            "«найди сделку клиента Альфа Климат по офису на Тверской»",
+            DEAL_SEARCH_KEYBOARD,
+        ),
         "🕘 Последние сделки": ("Сколько последних сделок показать?", DEAL_RECENT_KEYBOARD),
         "📋 Основное": ("Основные действия со сделкой.", DEAL_BASIC_KEYBOARD),
         "📄 Документы сделки": ("Документы сделки.", DEAL_DOCUMENTS_KEYBOARD),

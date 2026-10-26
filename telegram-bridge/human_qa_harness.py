@@ -308,9 +308,13 @@ class FakeMegaplan:
         if action == 'list':
             found = ordered[:max(1, min(int(spec.get('limit', 5)), 15))]
             return {'ok': True, 'deals': [self.summary(d) for d in found], 'total_count': len(found)}
-        if action in ('search_any', 'search_client', 'search_address'):
+        if action in ('search_any', 'search_client', 'search_address', 'search_combined'):
             query = str(spec.get('query') or '').strip().casefold().replace('ё', 'е')
-            if not query:
+            client_query = str(spec.get('client_query') or '').strip().casefold().replace('ё', 'е')
+            object_query = str(spec.get('object_query') or '').strip().casefold().replace('ё', 'е')
+            if action == 'search_combined' and (not client_query or not object_query):
+                raise ValueError('пустые условия поиска')
+            if action != 'search_combined' and not query:
                 raise ValueError('пустая строка поиска')
             def haystack(deal):
                 summary = self.summary(deal)
@@ -320,7 +324,16 @@ class FakeMegaplan:
                     return summary['address']
                 return ' '.join([summary['name'] or '', summary['client'], summary['address']])
             words = [w for w in re.split(r'\W+', query) if len(w) > 2] or [query]
-            found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
+            if action == 'search_combined':
+                client_words = [w for w in re.split(r'\W+', client_query) if len(w) > 2]
+                object_words = [w for w in re.split(r'\W+', object_query) if len(w) > 2]
+                found = [d for d in ordered
+                         if all(w in self.summary(d)['client'].casefold().replace('ё', 'е') for w in client_words)
+                         and any(w[:max(4, len(w) - 2)] in ' '.join([
+                             self.summary(d)['name'] or '', self.summary(d)['address']
+                         ]).casefold().replace('ё', 'е') for w in object_words)]
+            else:
+                found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
             if action == 'search_any' and not found:
                 # Mirrors deal_browser.stem_match_score: case endings ignored.
                 stems = {w[:max(4, len(w) - 2)] for w in words if len(w) >= 4}
