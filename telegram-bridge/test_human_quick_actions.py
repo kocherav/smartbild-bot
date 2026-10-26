@@ -115,6 +115,25 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('Сделка №990002', expected='Кнопка открыла сделку без «открой карточку 990002»')
         self.play(journey, setup=office, model_rules=[('интересные объекты', listing)])
 
+    def test_deal_found_by_the_assistant_opens_in_the_bot(self):
+        answer = ('Нашёл точное соответствие:\n\n**Сделка №990002 — «Вентиляция склада»**\n- Этап: Закупка\n'
+                  '- [Открыть сделку №990002 в Мегаплане](https://cclimat.megaplan.ru/deals/990002/card/)\n'
+                  'Ничего в сделке не изменял.')
+        def journey(person):
+            yield say('Найди мне сделку вентиляции склада у Альфа Климат')
+            person.sees('Сделка №990002\nСуть', expected='После ответа ассистента открыта карточка сделки в боте')
+            person.sees_button('🧾 Выставить счёт', expected='Меню действий сделки доступно сразу')
+            yield press('🧾 Выставить счёт')
+            person.sees('Работа со счетами', expected='Работа со сделкой продолжается в боте, а не в Мегаплане')
+        stand = self.play(journey, setup=office, model_rules=[('вентиляции склада', answer)])
+        self.assertEqual([], stand.crm.writes)
+
+    def test_assistant_answer_without_a_find_request_does_not_open_cards(self):
+        def journey(person):
+            yield say('Расскажи, что было по сделке вчера')
+            person.not_sees('Сделка №990002\nСуть', expected='Карточка не открывается без просьбы найти сделку')
+        self.play(journey, setup=office, model_rules=[('Расскажи', 'Вчера по сделке №990002 пришла оплата.')])
+
 class EdoOfferJourneys(HumanJourneyCase, unittest.TestCase):
     def issue(self, person):
         yield say('990001')

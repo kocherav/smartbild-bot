@@ -290,6 +290,21 @@ def finish(task_id, report, ok, path=None):
     return record
 
 
+def retire_older_releases(task_id, path=None):
+    """A done release ships the whole branch: earlier releases still waiting for the
+    owner are obsolete (26.10: TASK-20261026-04 arrived after -05 had shipped it)."""
+    state = read_state(path)
+    retired = []
+    for other_id, record in sorted(state['tasks'].items()):
+        if (other_id < task_id and record.get('kind') == 'release'
+                and record.get('status') in ('awaiting_owner', 'failed')):
+            record.update(status='superseded', superseded_by=task_id, decided_at=utc_now())
+            retired.append(other_id)
+    if retired:
+        save_state(state, path)
+    return retired
+
+
 def load_task(task_id, repo, runner=None, path=None):
     """Re-read the approved version from Git; a changed file is a new decision."""
     record = read_state(path).get('tasks', {}).get(task_id) or {}

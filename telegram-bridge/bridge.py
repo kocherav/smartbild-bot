@@ -3366,6 +3366,18 @@ def _phrase_limit(match):
 LISTED_DEAL_RE = re.compile(r"(?m)^\s*(?:\d{1,2}[.)]\s*)?№\s?(\d{3,7})\s*[—–-]\s*(.+?)\s*$")
 
 
+DEAL_FIND_REQUEST_RE = re.compile(r"(?i)\b(?:найди|найти|покажи|открой|где|поищи|какая)\b[^\n]*\bсдел")
+ANSWER_DEAL_RE = re.compile(r"(?i)\bсделк[аиуе]\W{0,3}№\s?(\d{3,7})\b")
+
+
+def deal_to_open(request, answer):
+    """The single deal an assistant found for a «найди/открой сделку …» request, else None."""
+    if not DEAL_FIND_REQUEST_RE.search(request or ""):
+        return None
+    found = set(ANSWER_DEAL_RE.findall(answer or ""))
+    return found.pop() if len(found) == 1 else None
+
+
 def listed_deals_keyboard(text):
     """Buttons for deals an assistant answer lists one per line (owner request 25.10):
     a list of deals must be pressable, not «скажи "открой 858"»."""
@@ -9207,6 +9219,11 @@ def process_handoff_task(token, chat_id, task_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     handoff_watcher.record_verification(task_id, verification)
+    if task['kind'] == 'release' and ok and verification['ok'] and verification.get('status') == 'done':
+        retired = handoff_watcher.retire_older_releases(task_id)
+        if retired:
+            send_message(token, chat_id, "Более ранние выпуски " + ", ".join(retired) + f" уже вошли в {task_id} — "
+                         "нажимать их не нужно, их кнопки больше не действуют.")
     if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
@@ -11206,6 +11223,11 @@ def main():
                     os._exit(0)
                 invoice_tasks.history(chat_id, "assistant", clean_text, task_doc["sha256"])
             send_message(token, chat_id, clean_text, reply_keyboard)
+            # Owner 26.10: «найди сделку электроснабжения…» answered with text and a Megaplan
+            # link; work continues in the bot, so the one found deal opens with its menu.
+            found_deal = deal_to_open(raw_user_text, clean_text) if reply_keyboard is None else None
+            if found_deal:
+                select_deal(token, chat_id, found_deal)
         if document_job:
             # A preview is a durable checkpoint: the user can confirm or
             # edit it later.  Any other model outcome remains visible in
