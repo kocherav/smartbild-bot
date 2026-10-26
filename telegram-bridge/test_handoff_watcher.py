@@ -305,5 +305,23 @@ class WaitingCardsTest(unittest.TestCase):
         self.assertEqual(2, len(cards))
         self.assertIn('✅ Выполнить TASK-20261026-04', cards[1])
 
+
+class RetireOlderReleasesTest(unittest.TestCase):
+    def test_done_release_retires_earlier_waiting_releases_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'handoff_state.json'
+            hw.save_state({'version': 1, 'problems': {}, 'tasks': {
+                'TASK-20261026-01': {'kind': 'release', 'status': 'awaiting_owner'},
+                'TASK-20261026-02': {'kind': 'code', 'status': 'awaiting_owner'},
+                'TASK-20261026-04': {'kind': 'release', 'status': 'awaiting_owner'},
+                'TASK-20261026-05': {'kind': 'release', 'status': 'done'},
+                'TASK-20261026-06': {'kind': 'release', 'status': 'awaiting_owner'}}}, path)
+            self.assertEqual(['TASK-20261026-01', 'TASK-20261026-04'], hw.retire_older_releases('TASK-20261026-05', path))
+            tasks = hw.read_state(path)['tasks']
+            self.assertEqual('superseded', tasks['TASK-20261026-04']['status'])
+            self.assertEqual('awaiting_owner', tasks['TASK-20261026-02']['status'], 'не выпуск — не трогаем')
+            self.assertEqual('awaiting_owner', tasks['TASK-20261026-06']['status'], 'более поздний — не трогаем')
+            self.assertIsNone(hw.decide('TASK-20261026-04', True, path), 'старая кнопка больше не действует')
+
 if __name__ == '__main__':
     unittest.main()

@@ -9207,6 +9207,11 @@ def process_handoff_task(token, chat_id, task_id):
         verification = {'ok': False, 'status': None, 'commits': {}, 'report': None,
                         'problems': [f'GitHub не прочитан ({type(exc).__name__})']}
     handoff_watcher.record_verification(task_id, verification)
+    if task['kind'] == 'release' and ok and verification['ok'] and verification.get('status') == 'done':
+        retired = handoff_watcher.retire_older_releases(task_id)
+        if retired:
+            send_message(token, chat_id, "Более ранние выпуски " + ", ".join(retired) + f" уже вошли в {task_id} — "
+                         "нажимать их не нужно, их кнопки больше не действуют.")
     if bundle_changed(bundle_before):
         safe_reload.request(RELOAD_REQUEST_FILE, __file__)
         result += '\n\nОбновление ожидает безопасной перезагрузки после завершения активных задач.'
