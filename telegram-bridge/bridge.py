@@ -4089,20 +4089,26 @@ def qa_task_keyboard(task_id):
 
 
 def show_handoff_waiting(token, chat_id):
-    """Re-show a tester task that still waits for the owner (its card may have lost buttons)."""
+    """Re-show every tester task that still waits for the owner, one card each
+    (26.10: only the oldest was shown, a newer release card stayed hidden behind it)."""
     try:
         waiting = sorted(task_id for task_id, record in handoff_watcher.read_state()['tasks'].items()
                          if record.get('status') == 'awaiting_owner')
-        if not waiting:
-            return False
-        task = handoff_watcher.load_task(waiting[0], handoff_watcher.repository())
+        repo = handoff_watcher.repository() if waiting else None
     except (RuntimeError, ValueError, OSError, KeyError) as exc:
         print(f"{LOG_PREFIX} handoff card unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
         return False
-    if not task:
-        return False
-    send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
-    return True
+    shown = 0
+    for task_id in waiting:
+        try:
+            task = handoff_watcher.load_task(task_id, repo)
+        except (RuntimeError, ValueError, OSError, KeyError) as exc:
+            print(f"{LOG_PREFIX} handoff card {task_id} unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        if task:
+            send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
+            shown += 1
+    return bool(shown)
 
 
 def show_qa_findings(token, chat_id, only_unnotified=False):

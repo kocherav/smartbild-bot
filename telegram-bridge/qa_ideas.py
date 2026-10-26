@@ -156,11 +156,13 @@ def card(ideas, limit=5):
             lines.append('Как: ' + idea['how'])
     if len(ideas) > limit:
         lines.append(f"\n…и ещё {len(ideas) - limit} — появятся здесь, когда решите эти.")
-    lines.append('\n«✅ N» — берём: разработчик сделает в отдельной ветке, в рабочий бот попадёт только после '
-                 'проверки тестировщиком и вашего выпуска. «✖ N» — не берём, идея больше не предлагается. '
-                 'После каждого решения придёт обновлённый список.')
-    keyboard = [[{'text': f"✅ {idea['num']}. {_button_title(idea['title'])}"}, {'text': f"✖ {idea['num']}"}]
-                for idea in shown]
+    lines.append('\nВерхние кнопки «✅ N» — берём: разработчик сделает в отдельной ветке, в рабочий бот попадёт '
+                 'только после проверки тестировщиком и вашего выпуска. Нижний ряд «✖ N» — не берём, идея больше не '
+                 'предлагается. После каждого решения придёт обновлённый список.')
+    # Telegram splits a row equally and has no per-button width (owner 26.10: «левую шире»):
+    # each «✅» gets a full row, all small «✖ N» share one row below.
+    keyboard = [[{'text': f"✅ {idea['num']}. {_button_title(idea['title'], 36)}"}] for idea in shown]
+    keyboard.append([{'text': f"✖ {idea['num']}"} for idea in shown])
     keyboard.append([{'text': '⬅️ Главное меню'}])
     return '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True}
 

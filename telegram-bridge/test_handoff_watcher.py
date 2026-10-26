@@ -288,5 +288,22 @@ class TaskWorkspaceTest(unittest.TestCase):
                           ['fetch', '--quiet', 'origin'],
                           ['checkout', '--quiet', '-B', 'main', 'origin/main']], on_clone)
 
+
+class WaitingCardsTest(unittest.TestCase):
+    def test_every_waiting_task_gets_its_own_card(self):
+        import bridge
+        state = {'tasks': {'TASK-20261026-01': {'status': 'awaiting_owner'}, 'TASK-20261026-03': {'status': 'rejected'},
+                           'TASK-20261026-04': {'status': 'awaiting_owner'}}}
+        def load(task_id, repo):
+            return {'id': task_id, 'kind': 'release', 'title': 'Выпуск ' + task_id, 'body': 'b', 'summary': 's'}
+        with patch.object(hw, 'read_state', return_value=state), \
+             patch.object(hw, 'repository', return_value=Path('/repo')), \
+             patch.object(hw, 'load_task', side_effect=load), \
+             patch.object(bridge, 'send_message') as send:
+            self.assertTrue(bridge.show_handoff_waiting('t', 'owner'))
+        cards = [json.dumps(call.args[3], ensure_ascii=False) for call in send.call_args_list]
+        self.assertEqual(2, len(cards))
+        self.assertIn('✅ Выполнить TASK-20261026-04', cards[1])
+
 if __name__ == '__main__':
     unittest.main()

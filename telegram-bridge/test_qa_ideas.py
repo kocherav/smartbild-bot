@@ -42,8 +42,9 @@ class IdeasRegistryTest(unittest.TestCase):
                   'value': 'средняя'} for n in range(7)]
         text, keyboard = qa_ideas.card(ideas)
         self.assertIn('…и ещё 2', text)
-        self.assertEqual(['✅ 1. Создание сделки одной…', '✖ 1'], [b['text'] for b in keyboard['keyboard'][0]])
-        self.assertEqual(6, len(keyboard['keyboard']))
+        self.assertEqual(['✅ 1. Создание сделки одной командой 0'], [b['text'] for b in keyboard['keyboard'][0]])
+        self.assertEqual(['✖ 1', '✖ 2', '✖ 3', '✖ 4', '✖ 5'], [b['text'] for b in keyboard['keyboard'][5]])
+        self.assertEqual(7, len(keyboard['keyboard']))
 
     def test_numbers_are_permanent(self):
         first = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)
@@ -146,8 +147,8 @@ class IdeasOwnerFlowTest(unittest.TestCase):
         with patch.object(bridge, 'run_background_job'):
             bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке')
             pressable = self.telegram.events[-1]['keyboard']
-            self.assertEqual(['✅ 2. Подсказывать счёт…', '✖ 2', '⬅️ Главное меню'], pressable)
-            bridge.handle_global_navigation('qa', 'owner', '✅ 2. Подсказывать счёт…')
+            self.assertEqual(['✅ 2. Подсказывать счёт после статуса', '✖ 2', '⬅️ Главное меню'], pressable)
+            bridge.handle_global_navigation('qa', 'owner', '✅ 2. Подсказывать счёт после статуса')
         statuses = {r['num']: r['status'] for r in qa_ideas.read()['ideas'].values()}
         self.assertEqual({1: 'taken', 2: 'taken'}, statuses)
         self.assertEqual('Все идеи разобраны.', self.texts()[-1])
