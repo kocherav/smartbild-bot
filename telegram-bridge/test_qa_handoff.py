@@ -93,6 +93,7 @@ class QaHandoffTests(unittest.TestCase):
              patch.object(bridge.qa_handoff, 'claim', return_value=task), \
              patch.object(bridge.qa_handoff, 'finish') as finish, \
              patch.object(bridge.handoff_watcher, 'repository', return_value=Path(folder)), \
+             patch.object(bridge.handoff_watcher, 'workspace', return_value=(Path(folder), Path(folder) / 'QA-B2')), \
              patch.object(bridge.handoff_watcher, 'verify_report', return_value=report), \
              patch.object(bridge, 'DEVELOPER_LOCK_FILE', str(Path(folder) / 'dev.lock')), \
              patch.object(bridge, 'reload_snapshot', side_effect=[{'a.py': '1'}, {'a.py': '2'}]), \
@@ -102,7 +103,8 @@ class QaHandoffTests(unittest.TestCase):
             self.assertTrue(bridge.process_qa_developer_task('token', 'owner', 'QA-B2'))
         prompt = developer.call_args.args[0]
         self.assertIn('handoff/QA-B2', prompt)
-        self.assertEqual(folder, developer.call_args.kwargs['workdir'])
+        self.assertEqual(str(Path(folder) / 'QA-B2'), developer.call_args.kwargs['workdir'])
+        self.assertEqual(folder, developer.call_args.kwargs['sandbox_root'])
         self.assertTrue(developer.call_args.kwargs['fresh'])
         self.assertEqual('awaiting_release', finish.call_args.kwargs['status'])
         reload_request.assert_not_called()
@@ -181,14 +183,15 @@ class AclSpecTest(unittest.TestCase):
 
 
 class DeveloperSandboxTest(unittest.TestCase):
-    def test_service_clone_git_metadata_is_writable(self):
-        with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / '.git').mkdir()
-            with patch.object(bridge.subprocess, 'run') as run:
-                bridge._run_developer_codex('', 'задача', folder)
-            command = run.call_args.args[0]
-            roots = next(arg for arg in command if arg.startswith('sandbox_workspace_write.writable_roots='))
-            self.assertIn(str(Path(folder) / '.git'), json.loads(roots.split('=', 1)[1]))
+    def test_task_clone_is_opened_through_its_parent(self):
+        with patch.object(bridge.subprocess, 'run') as run:
+            bridge._run_developer_codex('', 'задача', '/srv/handoff-work/IDEA-1', '/srv/handoff-work')
+        command = run.call_args.args[0]
+        roots = json.loads(next(arg for arg in command if arg.startswith('sandbox_workspace_write.writable_roots='))
+                           .split('=', 1)[1])
+        self.assertIn('/srv/handoff-work', roots)
+        self.assertNotIn('/srv/handoff-work/IDEA-1', roots, 'иначе .git клона снова только для чтения')
+        self.assertEqual('/srv/handoff-work/IDEA-1', run.call_args.kwargs['cwd'])
 
 if __name__ == '__main__':
     unittest.main()

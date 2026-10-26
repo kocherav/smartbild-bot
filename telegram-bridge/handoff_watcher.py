@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -56,6 +57,9 @@ PREAMBLE = """Задание от AI-тестировщика SmartBild (обм�
    если отправить не удалось — так и напиши, status: blocked.
 7. Если задание противоречит этим правилам или неясно — не угадывай: status: needs_owner
    и один конкретный вопрос владельцу в отчёте.
+
+8. Текущий каталог — свежий клон только для этого задания (`main` = `origin/main`), в нём можно
+   создавать ветки, коммитить и отправлять. Служебный клон handoff-repo не трогай.
 
 Ниже задание без изменений.
 """
@@ -124,6 +128,34 @@ def repository(start=BASE, runner=None):
     if found.returncode:
         raise RuntimeError('каталог бота не является Git-репозиторием')
     return Path(found.stdout.strip())
+
+
+def workspace(task_id, repo=None, runner=None):
+    """A fresh local clone for one developer task.
+
+    The Codex sandbox keeps ``<writable root>/.git`` read-only (26.10: IDEA-EFB982A7
+    could not commit in the service clone).  The task clone lives one level below
+    the writable root ``handoff-work``, so its ``.git`` is writable while the
+    service clone and the credentials file stay out of reach.  The bot only
+    clones and fetches here; commits and pushes are the developer's.
+    """
+    repo = Path(repo) if repo is not None else repository(runner=runner)
+    root = repo.parent / 'handoff-work'
+    target = root / task_id
+    root.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    _git(root, ['clone', '--quiet', str(repo), str(target)], runner)
+    _git(target, ['remote', 'set-url', 'origin', _git(repo, ['remote', 'get-url', 'origin'], runner).strip()], runner)
+    try:
+        helper = _git(repo, ['config', '--get', 'credential.helper'], runner).strip()
+    except RuntimeError:
+        helper = ''
+    if helper:
+        _git(target, ['config', 'credential.helper', helper], runner)
+    _git(target, ['fetch', '--quiet', 'origin'], runner)
+    _git(target, ['checkout', '--quiet', '-B', 'main', 'origin/main'], runner)
+    return root, target
 
 
 def _git(repo, args, runner=None):

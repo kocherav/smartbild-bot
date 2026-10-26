@@ -273,6 +273,13 @@ HELP_TEXT = """Что я умею:
 /deals — работа со сделками
 /help — показать эту подсказку ещё раз."""
 
+WELCOME_TEXT = """Главное меню.
+
+💬 Можно написать задачу своими словами, например:
+«найди сделку по складу в Химках».
+
+Или выберите действие кнопкой."""
+
 DASHBOARD_URL = "https://claude.smartbild.su/deal-dashboard/"
 DASHBOARD_INLINE = {"inline_keyboard": [[{"text": "📊 Открыть пульт сделок", "web_app": {"url": DASHBOARD_URL}}]]}
 
@@ -4065,7 +4072,11 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены." if value=='❌ Отмена' else "Главное меню.", MAIN_KEYBOARD)
+        text = (
+            "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены."
+            if value == '❌ Отмена' else WELCOME_TEXT if value == '/start' else "Главное меню."
+        )
+        send_message(token, chat_id, text, MAIN_KEYBOARD)
         return True
     return False
 
@@ -4078,20 +4089,26 @@ def qa_task_keyboard(task_id):
 
 
 def show_handoff_waiting(token, chat_id):
-    """Re-show a tester task that still waits for the owner (its card may have lost buttons)."""
+    """Re-show every tester task that still waits for the owner, one card each
+    (26.10: only the oldest was shown, a newer release card stayed hidden behind it)."""
     try:
         waiting = sorted(task_id for task_id, record in handoff_watcher.read_state()['tasks'].items()
                          if record.get('status') == 'awaiting_owner')
-        if not waiting:
-            return False
-        task = handoff_watcher.load_task(waiting[0], handoff_watcher.repository())
+        repo = handoff_watcher.repository() if waiting else None
     except (RuntimeError, ValueError, OSError, KeyError) as exc:
         print(f"{LOG_PREFIX} handoff card unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
         return False
-    if not task:
-        return False
-    send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
-    return True
+    shown = 0
+    for task_id in waiting:
+        try:
+            task = handoff_watcher.load_task(task_id, repo)
+        except (RuntimeError, ValueError, OSError, KeyError) as exc:
+            print(f"{LOG_PREFIX} handoff card {task_id} unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        if task:
+            send_message(token, chat_id, handoff_watcher.owner_card(task), handoff_keyboard(task['id']))
+            shown += 1
+    return bool(shown)
 
 
 def show_qa_findings(token, chat_id, only_unnotified=False):
@@ -8955,12 +8972,14 @@ DEVELOPER_SYSTEM_PROMPT = """Разрешены только проекты tele
 отчёт и только после этого сам выполнит необходимый перезапуск."""
 
 
-def _run_developer_codex(session_id, prompt, workdir=None):
+def _run_developer_codex(session_id, prompt, workdir=None, sandbox_root=None):
     workdir = str(workdir or BASE_DIR)
     writable = ["/home/kocher.av/telegram-bridge", "/home/kocher.av/megaplan-crm",
                 "/home/kocher.av/hogart-scraper", "/home/kocher.av/daichi-scraper"]
-    if workdir not in writable:
-        writable.append(workdir)
+    # A task clone is opened through its parent: Codex keeps <root>/.git read-only.
+    root = str(sandbox_root or workdir)
+    if root not in writable:
+        writable.append(root)
     # Newer Codex sandboxes keep <root>/.git read-only inside a writable root
     # (26.10: «.git/index.lock: Read-only file system»). Handoff work must commit
     # in its service clone, so its metadata is named explicitly.
@@ -8982,17 +9001,27 @@ def _run_developer_codex(session_id, prompt, workdir=None):
                           capture_output=True, text=True, timeout=DEVELOPER_TIMEOUT_SEC)
 
 
-def ask_developer(prompt, workdir=None, fresh=False):
+def ask_task_developer(task):
+    """Fresh developer session in a task clone (see handoff_watcher.workspace)."""
+    try:
+        root, clone = handoff_watcher.workspace(task['id'])
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        print(f"{LOG_PREFIX} task workspace failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return f"Не удалось выполнить задачу: рабочая копия репозитория не подготовлена ({type(exc).__name__})."
+    return ask_developer(handoff_watcher.developer_prompt(task), workdir=str(clone), fresh=True, sandbox_root=str(root))
+
+
+def ask_developer(prompt, workdir=None, fresh=False, sandbox_root=None):
     session_id = (open(DEVELOPER_SESSION_FILE).read().strip()
                   if not fresh and os.path.exists(DEVELOPER_SESSION_FILE) else "")
     try:
-        result = _run_developer_codex(session_id, prompt, workdir)
+        result = _run_developer_codex(session_id, prompt, workdir, sandbox_root)
     except subprocess.TimeoutExpired:
         return "Задача не завершилась за 30 минут. Напишите её повторно или разбейте на несколько этапов."
     if result.returncode != 0:
         print(f"{LOG_PREFIX} developer Codex failed, retrying fresh: {(result.stderr or '')[-1500:]}", file=sys.stderr)
         try:
-            result = _run_developer_codex("", prompt, workdir)
+            result = _run_developer_codex("", prompt, workdir, sandbox_root)
         except subprocess.TimeoutExpired:
             return "Задача не завершилась за 30 минут. Напишите её повторно или разбейте на несколько этапов."
     if result.returncode != 0:
@@ -9101,8 +9130,7 @@ def process_qa_developer_task(token, chat_id, task_id):
     bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
-        repository = handoff_watcher.repository()
-        result = ask_developer(handoff_watcher.developer_prompt(handoff), workdir=str(repository), fresh=True)
+        result = ask_task_developer(handoff)
     failed = result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     try:
         verification = handoff_watcher.verify_report(task_id, handoff_watcher.repository())
@@ -9168,8 +9196,7 @@ def process_handoff_task(token, chat_id, task_id):
     bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
-        repository = handoff_watcher.repository()
-        result = ask_developer(handoff_watcher.developer_prompt(task), workdir=str(repository), fresh=True)
+        result = ask_task_developer(task)
     ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     handoff_watcher.finish(task_id, result, ok)
     # The developer's own words are a claim; GitHub is the receipt.
@@ -9266,8 +9293,7 @@ def process_idea_task(token, chat_id, idea_id):
     bundle_before = reload_snapshot()
     with open(DEVELOPER_LOCK_FILE, 'w') as model_lock:
         fcntl.flock(model_lock, fcntl.LOCK_EX)
-        repository = handoff_watcher.repository()
-        result = ask_developer(handoff_watcher.developer_prompt(task), workdir=str(repository), fresh=True)
+        result = ask_task_developer(task)
     ok = not result.startswith(('Не удалось выполнить', 'Задача не завершилась'))
     try:
         verification = handoff_watcher.verify_report(idea_id, handoff_watcher.repository())

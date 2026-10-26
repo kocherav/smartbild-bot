@@ -42,8 +42,9 @@ class IdeasRegistryTest(unittest.TestCase):
                   'value': 'средняя'} for n in range(7)]
         text, keyboard = qa_ideas.card(ideas)
         self.assertIn('…и ещё 2', text)
-        self.assertEqual(['✅ 1. Создание сделки одной…', '✖ 1'], [b['text'] for b in keyboard['keyboard'][0]])
-        self.assertEqual(6, len(keyboard['keyboard']))
+        self.assertEqual(['✅ 1. Создание сделки одной командой 0'], [b['text'] for b in keyboard['keyboard'][0]])
+        self.assertEqual(['✖ 1', '✖ 2', '✖ 3', '✖ 4', '✖ 5'], [b['text'] for b in keyboard['keyboard'][5]])
+        self.assertEqual(7, len(keyboard['keyboard']))
 
     def test_numbers_are_permanent(self):
         first = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)
@@ -65,6 +66,16 @@ class IdeasRegistryTest(unittest.TestCase):
         prompt = bridge.handoff_watcher.developer_prompt(task)
         self.assertIn('handoff/' + record['id'], prompt)
         self.assertIn('8 нажатий', prompt)
+
+    def test_failed_attempt_is_offered_again(self):
+        record = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)[0]
+        qa_ideas.decide(record['id'], True, self.path)
+        qa_ideas.start(record['id'], self.path)
+        qa_ideas.finish(record['id'], False, {'ok': False, 'status': 'blocked', 'problems': []}, self.path)
+        again = [x for x in qa_ideas.pending(self.path) if x['id'] == record['id']]
+        self.assertEqual(1, len(again))
+        self.assertIn('можно взять снова', qa_ideas.card(again)[0])
+        self.assertEqual('taken', qa_ideas.decide(record['id'], True, self.path)['status'])
 
     def test_weekly_review_lists_every_idea_with_its_fate(self):
         records = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)
@@ -111,6 +122,7 @@ class IdeasOwnerFlowTest(unittest.TestCase):
         report = {'ok': True, 'status': 'done', 'commits': {'abc1234': True}, 'report': 'status: done', 'problems': []}
         with (patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()),
               patch.object(bridge.handoff_watcher, 'repository', return_value=Path(self.temp.name)),
+              patch.object(bridge.handoff_watcher, 'workspace', return_value=(Path(self.temp.name), Path(self.temp.name) / 'clone')),
               patch.object(bridge.handoff_watcher, 'verify_report', return_value=report) as verify,
               patch.object(bridge, 'ask_developer', return_value='Сделано в ветке') as developer):
             self.assertTrue(bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке'))
@@ -135,8 +147,8 @@ class IdeasOwnerFlowTest(unittest.TestCase):
         with patch.object(bridge, 'run_background_job'):
             bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке')
             pressable = self.telegram.events[-1]['keyboard']
-            self.assertEqual(['✅ 2. Подсказывать счёт…', '✖ 2', '⬅️ Главное меню'], pressable)
-            bridge.handle_global_navigation('qa', 'owner', '✅ 2. Подсказывать счёт…')
+            self.assertEqual(['✅ 2. Подсказывать счёт после статуса', '✖ 2', '⬅️ Главное меню'], pressable)
+            bridge.handle_global_navigation('qa', 'owner', '✅ 2. Подсказывать счёт после статуса')
         statuses = {r['num']: r['status'] for r in qa_ideas.read()['ideas'].values()}
         self.assertEqual({1: 'taken', 2: 'taken'}, statuses)
         self.assertEqual('Все идеи разобраны.', self.texts()[-1])

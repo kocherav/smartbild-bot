@@ -19,7 +19,7 @@ STATE = BASE / 'qa_ideas_state.json'
 VALUE_RANK = {'высокая': 0, 'средняя': 1, 'низкая': 2}
 STATUS_WORDS = {'proposed': 'ждёт вашего решения', 'taken': 'взята, очередь разработчика',
                 'running': 'у разработчика', 'done': 'сделана в ветке, ждёт проверки и выпуска',
-                'failed': 'разработчик не справился — тестировщик разберёт', 'declined': 'не берём'}
+                'failed': 'попытка не удалась — можно взять снова', 'declined': 'не берём'}
 
 
 def utc_now():
@@ -124,7 +124,7 @@ def pending(path=None):
     state = read(path)
     if _numbered(state):
         save(state, path)
-    ideas = [x for x in state['ideas'].values() if x.get('status') == 'proposed']
+    ideas = [x for x in state['ideas'].values() if x.get('status') in ('proposed', 'failed')]
     return sorted(ideas, key=lambda x: (VALUE_RANK.get(x.get('value', '').casefold(), 3), x.get('first_seen', '')))
 
 
@@ -148,18 +148,21 @@ def card(ideas, limit=5):
     shown = ideas[:limit]
     lines = ['💡 Идеи тестировщика — решите кнопками под сообщением:']
     for idea in shown:
-        lines.append(f"\n{idea['num']}. {idea['title']}" + (f" (ценность {idea['value']})" if idea.get('value') else ''))
+        lines.append(f"\n{idea['num']}. {idea['title']}" + (f" (ценность {idea['value']})" if idea.get('value') else '')
+                     + (' — прошлая попытка разработчика не удалась, можно взять снова' if idea.get('status') == 'failed' else ''))
         if idea.get('why'):
             lines.append('Что мешает: ' + idea['why'])
         if idea.get('how'):
             lines.append('Как: ' + idea['how'])
     if len(ideas) > limit:
         lines.append(f"\n…и ещё {len(ideas) - limit} — появятся здесь, когда решите эти.")
-    lines.append('\n«✅ N» — берём: разработчик сделает в отдельной ветке, в рабочий бот попадёт только после '
-                 'проверки тестировщиком и вашего выпуска. «✖ N» — не берём, идея больше не предлагается. '
-                 'После каждого решения придёт обновлённый список.')
-    keyboard = [[{'text': f"✅ {idea['num']}. {_button_title(idea['title'])}"}, {'text': f"✖ {idea['num']}"}]
-                for idea in shown]
+    lines.append('\nВерхние кнопки «✅ N» — берём: разработчик сделает в отдельной ветке, в рабочий бот попадёт '
+                 'только после проверки тестировщиком и вашего выпуска. Нижний ряд «✖ N» — не берём, идея больше не '
+                 'предлагается. После каждого решения придёт обновлённый список.')
+    # Telegram splits a row equally and has no per-button width (owner 26.10: «левую шире»):
+    # each «✅» gets a full row, all small «✖ N» share one row below.
+    keyboard = [[{'text': f"✅ {idea['num']}. {_button_title(idea['title'], 36)}"}] for idea in shown]
+    keyboard.append([{'text': f"✖ {idea['num']}"} for idea in shown])
     keyboard.append([{'text': '⬅️ Главное меню'}])
     return '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True}
 
@@ -175,7 +178,8 @@ def _update(ident, allowed, path=None, **fields):
 
 
 def decide(ident, take, path=None, now=None):
-    return _update(ident, {'proposed'}, path, status='taken' if take else 'declined',
+    # A failed attempt (e.g. 26.10, blocked sandbox) can be taken again from the list.
+    return _update(ident, {'proposed', 'failed'}, path, status='taken' if take else 'declined',
                    decided_at=(now or utc_now()).isoformat(timespec='seconds'))
 
 
