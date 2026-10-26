@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import handoff_watcher as hw
@@ -223,13 +224,15 @@ class BridgeHandoffTests(unittest.TestCase):
              patch.dict(hw.os.environ, {'SMARTBILD_REPO': '/repo'}), \
              patch.object(hw, 'STATE', Path(temporary) / 'handoff_state.json'), \
              patch.object(hw.subprocess, 'run', git), \
+             patch.object(hw, 'workspace', side_effect=lambda task_id: (Path('/handoff-work'), Path('/handoff-work') / task_id)), \
              patch.object(bridge, 'DEVELOPER_LOCK_FILE', str(Path(temporary) / 'developer.lock')), \
              patch.object(bridge, 'ask_developer', return_value='Сделано, отчёт в handoff/outbox.') as developer, \
              patch.object(bridge, 'send_message', side_effect=lambda token, chat, text, markup=None: sent.append((text, markup))):
             self.assertTrue(bridge.poll_handoff('token', 'owner'))
             self.assertEqual(1, developer.call_count)
             self.assertIn('Сделай сверку.', developer.call_args.args[0])
-            self.assertEqual({'workdir': '/repo', 'fresh': True}, developer.call_args.kwargs)
+            self.assertEqual({'workdir': '/handoff-work/TASK-20261023-01', 'fresh': True,
+                              'sandbox_root': '/handoff-work'}, developer.call_args.kwargs)
             card = next(markup for text, markup in sent if 'TASK-20261023-02' in text and markup)
             self.assertIn('✅ Выполнить TASK-20261023-02', json.dumps(card, ensure_ascii=False))
             state = hw.read_state()
@@ -242,13 +245,48 @@ class BridgeHandoffTests(unittest.TestCase):
             with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()):
                 self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))
             self.assertEqual(2, developer.call_count)
-            self.assertEqual({'workdir': '/repo', 'fresh': True}, developer.call_args.kwargs)
+            self.assertEqual({'workdir': '/handoff-work/TASK-20261023-02', 'fresh': True,
+                              'sandbox_root': '/handoff-work'}, developer.call_args.kwargs)
             self.assertEqual('done', hw.read_state()['tasks']['TASK-20261023-02']['status'])
             self.assertTrue(any('TASK-20261023-02: отчёт разработчика НЕ подтверждён' in text for text, _ in sent),
                             'нет отчёта в GitHub — владелец видит предупреждение, а не «готово»')
             self.assertTrue(bridge.handle_global_navigation('token', 'owner', '✅ Выполнить TASK-20261023-02'))
             self.assertEqual(2, developer.call_count, 'повторная кнопка не запускает разработчика')
 
+
+
+class TaskWorkspaceTest(unittest.TestCase):
+    """26.10: the sandbox keeps <writable root>/.git read-only, so each task gets a clone
+    one level below the writable root; the service clone itself is only read."""
+
+    def test_task_clone_tracks_github_and_reuses_the_read_only_helper(self):
+        calls = []
+        def runner(command, **kwargs):
+            calls.append(command[2:] if command[1] == '-C' else command[1:])
+            repo = command[2]
+            output = {'remote get-url origin': 'https://github.com/kocherav/smartbild-bot.git\n',
+                      'config --get credential.helper': '!f() { :; }; f\n'}.get(' '.join(command[3:]), '')
+            if command[3] == 'clone':
+                Path(command[-1]).mkdir(parents=True)
+            return SimpleNamespace(returncode=0, stdout=output, stderr='')
+        with tempfile.TemporaryDirectory() as folder:
+            service = Path(folder) / 'handoff-repo'
+            service.mkdir()
+            leftover = Path(folder) / 'handoff-work' / 'IDEA-0001'
+            leftover.mkdir(parents=True)
+            (leftover / 'old').write_text('x')
+            root, clone = hw.workspace('IDEA-0001', service, runner)
+            self.assertEqual(Path(folder) / 'handoff-work', root)
+            self.assertEqual(root / 'IDEA-0001', clone)
+            self.assertFalse((clone / 'old').exists(), 'повтор начинается с чистой копии')
+        on_service = [c[1:] for c in calls if c[0] == str(service)]
+        self.assertEqual([['remote', 'get-url', 'origin'], ['config', '--get', 'credential.helper']], on_service,
+                         'служебный клон только читается')
+        on_clone = [c[1:] for c in calls if c[0] == str(clone)]
+        self.assertEqual([['remote', 'set-url', 'origin', 'https://github.com/kocherav/smartbild-bot.git'],
+                          ['config', 'credential.helper', '!f() { :; }; f'],
+                          ['fetch', '--quiet', 'origin'],
+                          ['checkout', '--quiet', '-B', 'main', 'origin/main']], on_clone)
 
 if __name__ == '__main__':
     unittest.main()

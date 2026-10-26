@@ -66,6 +66,16 @@ class IdeasRegistryTest(unittest.TestCase):
         self.assertIn('handoff/' + record['id'], prompt)
         self.assertIn('8 нажатий', prompt)
 
+    def test_failed_attempt_is_offered_again(self):
+        record = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)[0]
+        qa_ideas.decide(record['id'], True, self.path)
+        qa_ideas.start(record['id'], self.path)
+        qa_ideas.finish(record['id'], False, {'ok': False, 'status': 'blocked', 'problems': []}, self.path)
+        again = [x for x in qa_ideas.pending(self.path) if x['id'] == record['id']]
+        self.assertEqual(1, len(again))
+        self.assertIn('можно взять снова', qa_ideas.card(again)[0])
+        self.assertEqual('taken', qa_ideas.decide(record['id'], True, self.path)['status'])
+
     def test_weekly_review_lists_every_idea_with_its_fate(self):
         records = qa_ideas.register(qa_ideas.recent(RUNS, NOW), self.path, NOW)
         qa_ideas.decide(records[0]['id'], True, self.path)
@@ -111,6 +121,7 @@ class IdeasOwnerFlowTest(unittest.TestCase):
         report = {'ok': True, 'status': 'done', 'commits': {'abc1234': True}, 'report': 'status: done', 'problems': []}
         with (patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()),
               patch.object(bridge.handoff_watcher, 'repository', return_value=Path(self.temp.name)),
+              patch.object(bridge.handoff_watcher, 'workspace', return_value=(Path(self.temp.name), Path(self.temp.name) / 'clone')),
               patch.object(bridge.handoff_watcher, 'verify_report', return_value=report) as verify,
               patch.object(bridge, 'ask_developer', return_value='Сделано в ветке') as developer):
             self.assertTrue(bridge.handle_global_navigation('qa', 'owner', '✅ 1. Кнопка счёта в карточке'))
