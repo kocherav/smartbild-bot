@@ -8961,6 +8961,12 @@ def _run_developer_codex(session_id, prompt, workdir=None):
                 "/home/kocher.av/hogart-scraper", "/home/kocher.av/daichi-scraper"]
     if workdir not in writable:
         writable.append(workdir)
+    # Newer Codex sandboxes keep <root>/.git read-only inside a writable root
+    # (26.10: «.git/index.lock: Read-only file system»). Handoff work must commit
+    # in its service clone, so its metadata is named explicitly.
+    git_dir = os.path.join(workdir, ".git")
+    if os.path.isdir(git_dir) and git_dir not in writable:
+        writable.append(git_dir)
     common = ["--json", "--ignore-rules", "--skip-git-repo-check", "-c", 'approval_policy="never"',
               "-c", 'sandbox_workspace_write.network_access=true', "-c",
               'sandbox_workspace_write.writable_roots=' + json.dumps(writable)]

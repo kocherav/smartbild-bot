@@ -179,5 +179,16 @@ class AclSpecTest(unittest.TestCase):
         with patch.object(qa_handoff, 'QA_SERVICE_USER', 'smartbild-projects'):
             self.assertEqual('u:smartbild-projects:rw,u:kocher.av:rw,m:rw', qa_handoff.acl_spec())
 
+
+class DeveloperSandboxTest(unittest.TestCase):
+    def test_service_clone_git_metadata_is_writable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / '.git').mkdir()
+            with patch.object(bridge.subprocess, 'run') as run:
+                bridge._run_developer_codex('', 'задача', folder)
+            command = run.call_args.args[0]
+            roots = next(arg for arg in command if arg.startswith('sandbox_workspace_write.writable_roots='))
+            self.assertIn(str(Path(folder) / '.git'), json.loads(roots.split('=', 1)[1]))
+
 if __name__ == '__main__':
     unittest.main()
