@@ -128,5 +128,22 @@ class AutopilotTest(unittest.TestCase):
         self.assertNotIn('waiting_input', text)
 
 
+
+    def test_planned_journeys_are_not_shown_as_waiting_for_data(self):
+        now = dt.datetime(2026, 10, 26, 15, 0, tzinfo=dt.timezone.utc)
+        state = {'runs': [], 'tasks': [{'id': 'QA-P', 'status': 'waiting_input', 'severity': 'P1', 'failures': [
+            {'id': 'coverage:HUMAN-PROCUREMENT'}, {'id': 'coverage:HUMAN-CONTRACT:evidence-missing'}]}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'qa.json'
+            path.write_text(json.dumps(state, ensure_ascii=False))
+            journeys = Path(temporary) / 'journeys.json'
+            journeys.write_text(json.dumps({'journeys': [
+                {'id': 'HUMAN-PROCUREMENT', 'title': 'Учесть счёт поставщика'},
+                {'id': 'HUMAN-CONTRACT', 'title': 'Подготовить договор по сделке'}]}, ensure_ascii=False))
+            text = qa_autopilot.digest(path, now, journeys)
+        self.assertIn('Ещё не автоматизированы (в плане тестировщика): «Учесть счёт поставщика».', text)
+        self.assertIn('для маршрута «Подготовить договор по сделке» нет файла снимка CRM', text)
+        self.assertNotIn('«Учесть счёт поставщика» не подтверждён', text)
+
 if __name__ == '__main__':
     unittest.main()

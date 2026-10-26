@@ -181,6 +181,21 @@ class QaAgentTests(unittest.TestCase):
         self.assertIn('--evidence', runner.call_args.args[0])
 
 
+
+class CoverageGapTasksTest(unittest.TestCase):
+    def test_new_gap_set_supersedes_older_ones_of_the_profile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            registry = qa_agent.Registry(Path(temporary) / 'state.json')
+            old = {'successful': False, 'cases': [{'id': 'coverage:HUMAN-CONTRACT:case-not-passed', 'status': 'missing'},
+                                                  {'id': 'coverage:HUMAN-PROCUREMENT', 'status': 'missing'}]}
+            now = {'successful': False, 'cases': [{'id': 'coverage:HUMAN-PROCUREMENT', 'status': 'missing'}]}
+            _, first = registry.record_all('human', 'e1', old)
+            _, second = registry.record_all('human', 'e2', now)
+            tasks = {t['id']: t for t in registry.read()['tasks']}
+            self.assertEqual('closed', tasks[first[0]['id']]['status'])
+            self.assertEqual(second[0]['id'], tasks[first[0]['id']]['superseded_by'])
+            self.assertEqual(['waiting_input'], [t['status'] for t in tasks.values() if t['status'] != 'closed'])
+
 if __name__ == '__main__':
     unittest.main()
 
