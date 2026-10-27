@@ -5380,7 +5380,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token, chat_id, f"Не удалось подготовить счёт: {invoice_error_text(result.get('error'))}", INVOICE_MENU_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin="menu")
-        send_message(token, chat_id, f"В счёте будет одна строка:\n\n{result['line']}\n\nВыставить счёт?", CONTRACT_INVOICE_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, contract_invoice_preview_text(result, deal_id),
+                     CONTRACT_INVOICE_CONFIRM_KEYBOARD)
         return True
     if pending == "invoice_full_confirm" and value == "✅ Выставить общий счёт":
         update_deal_ui_state(chat_id, pending="invoice_menu")
@@ -5409,7 +5410,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin=None)
         send_message(
             token, chat_id,
-            f"Будет выставлен счёт по сделке №{deal_id}. В счёте будет ровно одна строка:\n\n{result['line']}\n\nСумма: {_ru_money(result['amount'])} руб.\nПлательщик: {result.get('payer_name') or result['payer_id']}\nИсточник: {result['contract_filename']}",
+            contract_invoice_preview_text(result, deal_id),
             CONTRACT_INVOICE_CONFIRM_KEYBOARD,
         )
         return True
@@ -8484,6 +8485,17 @@ def invoice_error_text(error):
     if "позици" in folded:
         return error + "\n\nДобавьте позиции в сделку в Мегаплане и повторите."
     return error
+
+
+def contract_invoice_preview_text(preview, deal_id):
+    """Render every stage-invoice entry point from the same confirmed preview."""
+    return (
+        f"Будет выставлен счёт по сделке №{deal_id}. В счёте будет ровно одна строка:\n\n"
+        f"{preview['line']}\n\n"
+        f"Сумма: {bank_money(preview['amount'])} ₽\n"
+        f"Плательщик: {preview.get('payer_name') or preview['payer_id']}\n"
+        f"Источник: {preview['contract_filename']}"
+    )
 
 
 EDO_OFFER_KEYBOARD = {"keyboard": [[{"text": "📤 Отправить по ЭДО"}], [{"text": "⬅️ Назад к сделке"}]],

@@ -164,7 +164,8 @@ class InvoiceJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('📄 Документы сделки')
             yield press('🧾 Работа со счетами')
             yield press('6.4.1')
-            person.sees('п.6.4.1', expected='Показана строка будущего счёта по пункту договора')
+            person.sees('п.6.4.1', 'Сумма: 57 000,00 ₽',
+                        expected='Показаны строка и сумма будущего счёта')
             yield press('✅ Выставить счёт')
             person.sees('выставлен', expected='Счёт по этапу выставлен')
             person.got_document('Счёт')
