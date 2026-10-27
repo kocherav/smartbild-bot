@@ -7087,6 +7087,29 @@ def try_begin_proposal_recipient(chat_id, deal_id, expected_revision=None):
     return True
 
 
+REPLY_PROPOSAL_RE = re.compile(r"(?:Для сделки|Сделка)\s*№(\d+)\b[^\n]*«Коммерческое предложение»[^\n]*(?:адресата КП|Кому адресовать КП)")
+REPLY_DEAL_RE = re.compile(r"(?i)\bсделк\w*\W{0,3}№\s?(\d{2,7})\b")
+RECIPIENT_PREFIX_RE = re.compile(r"(?i)^\s*(?:адресат(?:\s+кп)?|кому(?:\s+кп)?|получатель)\s*[:\-—–]?\s*")
+
+
+def apply_reply_context(chat_id, msg):
+    """A reply to a bot message about one deal is about that deal (QA 27.10: «Адресат КП –
+    Татьяна» in reply to the deal №903 notice was applied to the open deal №890)."""
+    replied = str((msg.get('reply_to_message') or {}).get('text') or '')
+    text = str(msg.get('text') or '')
+    proposal = REPLY_PROPOSAL_RE.search(replied)
+    if proposal:
+        recipient = RECIPIENT_PREFIX_RE.sub('', text).strip()
+        if recipient:
+            update_deal_ui_state(chat_id, pending='proposal_recipient', proposal_deal_id=proposal.group(1),
+                                 current_deal_id=proposal.group(1))
+            return {**msg, 'text': recipient}
+    deals = set(REPLY_DEAL_RE.findall(replied))
+    if len(deals) == 1 and not human_intents._deal_id(text):
+        update_deal_ui_state(chat_id, current_deal_id=deals.pop())
+    return msg
+
+
 def check_external_proposal_transitions(token, chat_id):
     revision=ui_state_store().current(chat_id).get('_revision',0)
     result = run_deal_proposal({'action': 'scan'})
@@ -11569,6 +11592,9 @@ def main():
                 if not installer_media_allowed(msg,current_deal_ui_state(chat_id).get('pending')):
                     send_message(token,chat_id,'Для PDF по нескольким объектам выберите «📤 Сборный отчёт». Для фото, видео и отчёта одного объекта откройте «Мои монтажи» → объект → «Новый отчёт».',INSTALLER_USER_KEYBOARD)
                     continue
+
+            if is_owner and msg.get('reply_to_message') and msg.get('text'):
+                msg = apply_reply_context(chat_id, msg)
 
             if is_owner and handle_invoice_cancellation(token, chat_id, msg):
                 continue

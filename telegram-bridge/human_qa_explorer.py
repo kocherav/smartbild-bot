@@ -30,7 +30,7 @@ import sys
 
 import human_fixtures
 import qa_schedule
-from human_qa_harness import Stand, codex_jsonl, press, say, render_transcript, _REAL_RUN
+from human_qa_harness import Stand, codex_jsonl, press, reply, say, render_transcript, _REAL_RUN
 from test_human_journeys import office
 
 
@@ -48,12 +48,14 @@ MAX_SCREEN_CHARS = 3500
 ACTOR_RULES = """Ты — тестировщик, который играет роль менеджера компании SmartBild (климатическое
 оборудование и монтаж). Ты общаешься с рабочим Telegram-ботом компании, как обычный человек.
 Ты видишь только то, что видно в Telegram: сообщения бота, присланные файлы и кнопки.
-Можно: написать сообщение (say) или нажать ОДНУ из видимых кнопок (press) — точный текст кнопки.
+Можно: написать сообщение (say), нажать ОДНУ из видимых кнопок (press) — точный текст кнопки,
+или ответить на конкретное сообщение бота кнопкой Telegram «Ответить» (reply: value — твой текст,
+to — фрагмент того сообщения бота).
 Нельзя: нажимать кнопки, которых нет в списке; придумывать номера сделок, которых нет в задании;
 подсказывать боту внутренние команды. Если бот запутался — веди себя как живой человек:
 переформулируй, вернись в меню, попробуй кнопки. Когда цель достигнута или стало ясно, что бот
 не может её выполнить (3–4 безуспешные попытки), заверши (finish).
-Ответь ТОЛЬКО JSON без пояснений: {"action": "say"|"press"|"finish", "value": "текст", "thought": "зачем"}"""
+Ответь ТОЛЬКО JSON без пояснений: {"action": "say"|"press"|"reply"|"finish", "value": "текст", "to": "только для reply", "thought": "зачем"}"""
 
 JUDGE_RULES = """Ты — строгий QA-инженер. Оцени разговор менеджера с рабочим ботом SmartBild.
 Тебе дана цель менеджера, критерии успеха, полный диалог и список записей, которые бот реально
@@ -166,6 +168,12 @@ def explore(mission, brain, stand, max_steps=16):
 
     def journey(person):
         history = []
+        if mission.get('notice'):
+            # A message the bot sends on its own (e.g. a stage-change notice) before the person acts.
+            import bridge
+            if mission.get('open_deal'):
+                yield say(str(mission['open_deal']))
+            bridge.send_message('qa', person.telegram.owner_chat, mission['notice'])
         for step in range(int(mission.get('max_steps') or max_steps)):
             buttons = person.visible_buttons()
             prompt = (ACTOR_RULES + '\n\nТВОЯ ЦЕЛЬ:\n' + mission['goal'] +
@@ -187,6 +195,10 @@ def explore(mission, brain, stand, max_steps=16):
             decisions.append({'step': step + 1, **decision})
             if action == 'finish' or not value:
                 return
+            if action == 'reply':
+                history.append(f"Ты ответил на сообщение «{decision.get('to')}»: {value}")
+                yield reply(value, to=str(decision.get('to') or ''))
+                continue
             history.append(('Ты нажал: ' if action == 'press' else 'Ты написал: ') + value)
             yield press(value) if action == 'press' else say(value)
 

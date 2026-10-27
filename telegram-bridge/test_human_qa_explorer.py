@@ -37,6 +37,20 @@ class ExplorerTests(unittest.TestCase):
         case = explorer.case_from(MISSION, receipt, explorer.judge(MISSION, receipt, brain), decisions)
         return brain, stand, case
 
+    def test_actor_can_reply_to_a_bot_notice(self):
+        mission = {'id': 'reply-to-notice', 'goal': 'Ответь на уведомление: адресат КП — Татьяна',
+                   'open_deal': '990001', 'success': ['КП по 990002'],
+                   'notice': '📄 Для сделки №990002 на стадии «Коммерческое предложение» нужно указать адресата КП.'}
+        brain = ScriptedBrain([{'action': 'reply', 'value': 'Адресат КП - Татьяна', 'to': '№990002'}],
+                              {'achieved': True, 'defects': [], 'summary': 'ok'})
+        stand = Stand()
+        self.addCleanup(stand.close)
+        office(stand.crm)
+        explorer.explore(mission, brain, stand)
+        texts = [e.get('text') or '' for e in stand.telegram.events if e.get('actor') == 'bot']
+        self.assertTrue(any('КП №990002' in t for t in texts), 'ответ на уведомление дошёл до сделки 990002')
+        self.assertIn('Ответить', brain.prompts[0])
+
     def test_actor_sees_screen_and_only_visible_buttons(self):
         brain, stand, case = self.run_mission([
             {'action': 'say', 'value': 'поменяй плательщика в сделке 990001 на альфа сервис'},
