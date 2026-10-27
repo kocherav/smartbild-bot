@@ -506,7 +506,7 @@ DEAL_ACTIONS_KEYBOARD = {
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
-        [{"text": "👤 Назначить исполнителя"}],
+        [{"text": "👤 Назначить исполнителя"}, {"text": "💰 Экономика"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
         [{"text": "⬅️ К списку сделок"}],
@@ -3237,6 +3237,9 @@ def select_deal(token, chat_id, deal_id):
     return True
 
 
+DEAL_ECONOMICS_WORD_RE = re.compile(r"(?i)экономик|рентабельн|маржинальн|маржу|маржа|прибыл")
+
+
 def handle_explicit_deal_read(token, chat_id, text):
     match = DEAL_READ_RE.search(text or "")
     if not match:
@@ -3246,6 +3249,13 @@ def handle_explicit_deal_read(token, chat_id, text):
     if not DEAL_READ_VERB_RE.search(text or "") and DEAL_READ_OTHER_TASK_RE.search(text or ""):
         return False
     deal_id = next(group for group in match.groups() if group)
+    if DEAL_ECONOMICS_WORD_RE.search(text or ""):
+        # Owner 27.10: «покажи экономику по сделке 903» showed the card, not the economics.
+        update_deal_ui_state(chat_id, current_deal_id=deal_id, pending=None, transitions=None,
+                             pending_transition=None)
+        run_background_job(lambda: send_current_profitability(token, chat_id, deal_id), token, chat_id,
+                           operation=f'экономика сделки:{deal_id}')
+        return True
     result = run_deal_browser({"action": "get", "deal_id": deal_id})
     if not result.get("ok"):
         send_message(

@@ -102,6 +102,26 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office)
 
 
+class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
+    """Owner 27.10: «Покажи мне экономику по сделке 903» showed the card; no economics button in it."""
+
+    def test_economics_by_phrase(self):
+        def journey(person):
+            yield say('Покажи мне экономику по сделке 990001')
+            person.sees('выручка 114 000,00 ₽', 'прибыль 42 000,00 ₽', expected='Фраза про экономику прислала экономику')
+            person.got_document('Рентабельность', expected='Пришёл файл рентабельности')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_economics_button_in_the_deal_card(self):
+        def journey(person):
+            yield say('990001')
+            person.sees_button('💰 Экономика', expected='Экономика видна прямо в карточке сделки')
+            yield press('💰 Экономика')
+            person.sees('выручка 114 000,00 ₽', expected='Кнопка из карточки прислала экономику')
+        self.play(journey, setup=office)
+
+
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
 
