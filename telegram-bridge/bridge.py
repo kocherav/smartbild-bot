@@ -3546,9 +3546,16 @@ def handle_deal_comparison_followup(token, chat_id, text):
 
 def format_profitability(deal_id, result):
     margin = f"{float(result.get('margin_pct') or 0):.1f}".replace(".", ",")
-    return (f"Экономика сделки №{deal_id}: выручка {bank_money(result.get('total_revenue', 0))} ₽, "
+    text = (f"Экономика сделки №{deal_id}: выручка {bank_money(result.get('total_revenue', 0))} ₽, "
             f"себестоимость {bank_money(result.get('total_cost', 0))} ₽, "
             f"прибыль {bank_money(result.get('total_profit', 0))} ₽ ({margin}%).")
+    # Owner 27.10: say why the numbers look wrong instead of leaving «дикие цифры».
+    remarks = [f"• {item['remark']} — {item['rows']} поз., {item.get('money_label', 'сумма')} "
+               f"{bank_money(item.get('amount', 0))} ₽"
+               for item in result.get('remarks') or []]
+    if remarks:
+        text += "\n\nНа что обратить внимание (подробно — столбец «Замечание» в файле):\n" + "\n".join(remarks)
+    return text
 
 
 def send_current_profitability(token, chat_id, deal_id):

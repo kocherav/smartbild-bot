@@ -274,6 +274,46 @@ def compute_profitability(entries, procurement=None, installation=None, deal_id=
     return rows, total_revenue, total_cost, total_profit, margin_pct
 
 
+def sale_amount(row):
+    return round(float(row.get("qty") or 0) * float(row.get("sell_price") or 0), 2)
+
+
+def row_remark(row):
+    """Why a line loses money, in words (owner 27.10: «дикие цифры, непонятно»)."""
+    qty = float(row.get("qty") or 0)
+    sale = qty * float(row.get("sell_price") or 0)
+    material = float(row.get("plan_material") or 0)
+    if not float(row.get("sell_price") or 0) and float(row.get("plan_cost") or 0) > 0:
+        return "нет цены продажи: затраты без выручки"
+    # Less than a rouble is rounding of unit prices, not a commercial loss.
+    if material > sale + 1:
+        return "закупка дороже цены продажи"
+    if material > 0 and abs(material - sale) <= 1:
+        return "без наценки: закупка равна цене продажи"
+    return ""
+
+
+def remarks_summary(rows):
+    """One line per kind of remark with the money that explains it, for the bot message."""
+    summary = {}
+    for row in rows:
+        remark = row_remark(row)
+        if not remark:
+            continue
+        sale = float(row.get("qty") or 0) * float(row.get("sell_price") or 0)
+        material = float(row.get("plan_material") or 0)
+        amount = (float(row.get("plan_cost") or 0) if remark.startswith("нет цены") else
+                  material - sale if remark.startswith("закупка дороже") else material)
+        item = summary.setdefault(remark, {"rows": 0, "amount": 0.0})
+        item["rows"] += 1
+        item["amount"] = round(item["amount"] + amount, 2)
+    words = {"нет цены продажи: затраты без выручки": "затраты без выручки",
+             "закупка дороже цены продажи": "закупка дороже продажи на",
+             "без наценки: закупка равна цене продажи": "продаётся по закупке"}
+    return [{"remark": key, "rows": value["rows"], "amount": value["amount"], "money_label": words[key]}
+            for key, value in summary.items()]
+
+
 def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     from openpyxl import Workbook
     from openpyxl.utils import get_column_letter
@@ -285,29 +325,45 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     ws.title = "Расчёт рентабельности"
     ws.sheet_view.showGridLines = False
 
-    headers = ["Наименование", "Кол-во", "Цена продажи/ед.", "Выручка",
+    headers = ["Наименование", "Кол-во", "Цена продажи/ед.", "Сумма продажи (кол-во × цена)", "Выручка без НДС",
                "План материалов", "План работ", "План себестоимости",
                "Закрыто счетами, кол-во", "Факт материалов по счетам",
                "Остаток материалов по плану", "Принято работ, кол-во",
                "Факт работ по отчётам", "Остаток работ по плану", "Прогноз себестоимости",
-               "Отклонение от плана", "Прибыль по прогнозу"]
+               "Отклонение от плана", "Прибыль по строке (выручка без НДС − прогноз себестоимости)", "Замечание"]
     header_row = style.write_title_banner(ws, "Расчёт рентабельности сделки", f"Сделка № {deal_id}", len(headers))
     style.write_header_row(ws, header_row, headers)
     align_by_col = {1: style.LEFT, 2: style.CENTER, **{i: style.RIGHT for i in range(3, len(headers) + 1)}}
 
-    money_cols = (3,4,5,6,7,9,10,12,13,14,15,16)
+    money_cols = (3,4,5,6,7,8,10,11,13,14,15,16,17)
+    profit_col = len(headers) - 1
     for i, r in enumerate(rows):
-        ws.append([r["name"], r["qty"], r["sell_price"], r["revenue"], r["plan_material"],
+        ws.append([r["name"], r["qty"], r["sell_price"], sale_amount(r), r["revenue"], r["plan_material"],
                    r["plan_work"], r["plan_cost"], r["fact_qty"], r["fact_material"],
                    r["remaining_plan_material"],r["fact_work_qty"],r["fact_work"],r["remaining_plan_work"],
-                   r["forecast_cost"],r["deviation"],r["profit"]])
+                   r["forecast_cost"],r["deviation"],r["profit"], row_remark(r)])
         row_idx = ws.max_row
         style.style_data_row(ws, row_idx, len(headers), align_by_col, stripe=(i % 2 == 1))
+        ws.cell(row=row_idx, column=len(headers)).alignment = style.LEFT
         for col in money_cols:
             ws.cell(row=row_idx, column=col).number_format = style.MONEY_FMT
+        if float(r["profit"] or 0) < 0:
+            ws.cell(row=row_idx, column=profit_col).font = style.Font(name=style.FONT_NAME, size=10, color="C62828")
 
     first_data_row, last_data_row = header_row + 1, ws.max_row
-    summary_row = ws.max_row + 1
+    # Owner 27.10: a total under every money column, not only the four summary figures.
+    fields = {4: sale_amount, 5: "revenue", 6: "plan_material", 7: "plan_work", 8: "plan_cost", 10: "fact_material",
+              11: "remaining_plan_material", 13: "fact_work", 14: "remaining_plan_work", 15: "forecast_cost",
+              16: "deviation", 17: "profit"}
+    total_row = ws.max_row + 1
+    ws.cell(row=total_row, column=1, value="Итого по позициям")
+    for col, key in fields.items():
+        value = sum(float(key(x) if callable(key) else x[key] or 0) for x in rows)
+        cell = ws.cell(row=total_row, column=col, value=round(value, 2))
+        cell.number_format = style.MONEY_FMT
+    style.style_total_row(ws, total_row, len(headers))
+    ws.row_dimensions[total_row].height = 20
+    summary_row = total_row + 2
     # Mobile previewers (including Telegram's) often display an XLSX formula's
     # *old cached value* and never calculate it.  Finance documents must show a
     # truthful result everywhere, therefore totals are saved as checked numeric
@@ -326,17 +382,28 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     for i, (label, value) in enumerate(labels_values):
         r = summary_row + i
         ws.cell(row=r, column=1, value=label)
-        cell = ws.cell(row=r, column=14, value=value)
+        cell = ws.cell(row=r, column=15, value=value)
         cell.number_format = style.MONEY_FMT
         style.style_total_row(ws, r, len(headers))
         ws.row_dimensions[r].height = 20
     margin_row = summary_row + len(labels_values)
     ws.cell(row=margin_row, column=1, value="Рентабельность, %")
-    ws.cell(row=margin_row, column=14, value=calculated["margin"]).number_format = '0.0"%"'
+    ws.cell(row=margin_row, column=15, value=calculated["margin"]).number_format = '0.0"%"'
     style.style_total_row(ws, margin_row, len(headers))
     ws.row_dimensions[margin_row].height = 20
+    legend = [
+        "Как читать:",
+        "Сумма продажи = кол-во × цена продажи; выручка без НДС = сумма продажи без исходящего НДС.",
+        "План себестоимости = закупка материалов + работы монтажника по плану.",
+        "Прогноз себестоимости = фактические счета и отчёты + ещё не закрытая часть плана.",
+        "Прибыль по строке = выручка без НДС − прогноз себестоимости; минус выделен красным, "
+        "причина — в столбце «Замечание».",
+    ]
+    for offset, text in enumerate(legend, start=2):
+        ws.cell(row=margin_row + offset, column=1, value=text)
+    ws.cell(row=margin_row + 2, column=1).font = style.Font(name=style.FONT_NAME, size=10, bold=True)
 
-    widths = [45,9,16,16,17,15,18,18,20,22,18,20,20,21,18,20]
+    widths = [45,9,16,18,16,17,15,18,18,20,22,18,20,20,21,18,26,40]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -360,7 +427,7 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
 
 
 # Bump when the workbook layout or the meaning of its numbers changes.
-REPORT_FORMAT = "profitability-v1"
+REPORT_FORMAT = "profitability-v2"
 
 
 def data_fingerprint(deal_id, rows, totals, audit):
@@ -453,6 +520,7 @@ def main():
         "total_revenue": total_revenue, "total_cost": total_cost,
         "total_profit": total_profit, "margin_pct": margin_pct,
         "financial_audit_count": len(audit),
+        "remarks": remarks_summary(rows),
         "data_fingerprint": data_fingerprint(args.deal_id, rows, totals, audit),
         "profitability_write": "unchanged" if profit_is_current else "updated",
     }, ensure_ascii=False))
