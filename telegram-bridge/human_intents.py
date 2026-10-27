@@ -33,8 +33,26 @@ def _clean(value):
 
 
 def _deal_id(text):
-    match = re.search(r"(?i)\b(?:сделк\w*\s*)?(?:№|номер\s*)?(\d{2,})\b", text)
-    return match.group(1) if match else None
+    """A number is a deal only when the phrase says so: «сделка 861», «по сделке № 861»,
+    «№861» (not «счёт №311»).  QA 27.10: «кондиционер в кабинет 103» opened deal №103."""
+    match = re.search(r"(?i)\bсделк\w*\s*(?:№|номер)?\s*(\d{2,})\b", text)
+    if match:
+        return match.group(1)
+    for match in re.finditer(r"(?i)(?:№|\bномер)\s*(\d{2,})\b", text):
+        if not re.search(r"(?i)\b(?:сч[её]т|акт|упд|договор|накладн)\w*\s*$", text[:match.start()]):
+            return match.group(1)
+    # «счёт по 990001», «плательщика 990001»: a bare number counts unless it describes
+    # an object or a quantity («кабинет 103», «этаж 5», «45 000 ₽», «3 шт»).
+    for match in re.finditer(r"(?<![\d\w.,])(\d{3,})(?![\d\w.,])", text):
+        before = text[:match.start()]
+        after = text[match.end():]
+        if re.search(r"(?i)(?:\d\s*|\b(?:кабинет|каб|офис|этаж|дом|д|квартир|кв|комнат|помещени|корпус|строени|"
+                     r"стр|ул|улиц|подъезд|сч[её]т|акт|упд|договор|инн|кпп|бик|артикул|модел|серия|код)\w*\.?\s*)$", before):
+            continue
+        if re.match(r"(?i)\s*(?:шт|м\b|м2|м²|кв\.?\s*м|₽|руб|р\.|тыс|%|кг|вт|квт|мм|см)", after):
+            continue
+        return match.group(1)
+    return None
 
 
 def _tail(text, patterns):

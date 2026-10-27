@@ -3324,7 +3324,7 @@ DEAL_FREE_SEARCH_RE = re.compile(
 )
 # Lists by period/status/payment and deal numbers belong to other handlers.
 DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
-    r"(?i)\b\d{3,}\b|статус|недел|месяц|сегодн|вчера|последн|открыт|оплат|долг|сч[её]т|работе"
+    r"(?i)^\s*\d{3,}\b|статус|недел|месяц|сегодн|вчера|последн|открыт|оплат|долг|сч[её]т|работе"
 )
 
 
@@ -3356,6 +3356,37 @@ def handle_bare_deal_number(token, chat_id, text):
                                        and time.time() - float(tasks.get("catalog_at") or 0) < 86400):
         return False
     return handle_deal_ui(token, chat_id, "№" + match.group(1))
+
+
+# «Найди сделку <описание> и аннулируй счёт…»: the search part comes first (QA 27.10).
+DEAL_FIND_THEN_ACT_RE = re.compile(
+    r"(?i)^\s*(?:найди|найти|поищи|покажи|открой)\s+(?:мне\s+)?сделк\w*\s+(?P<query>.+?)\s+и\s+"
+    r"(?P<rest>(?:аннулир|отмен|выстав|смени|помен|отправ|пришли|переведи|назнач|сделай|созда|удали|исправ|оформ)\w*.*?)"
+    r"[?!.]*\s*$"
+)
+
+
+def handle_find_then_act(token, chat_id, text):
+    """Show matching deals as buttons (best match first, newer first among equals); the
+    requested action continues from the chosen deal's card.  A number inside the
+    description («кабинет 103») is never taken for a deal number."""
+    match = DEAL_FIND_THEN_ACT_RE.match(text or "")
+    if not match:
+        return False
+    query = match.group("query").strip(" «»\"")
+    result = run_deal_browser({"action": "search_any", "query": query, "limit": 10})
+    if not result.get("ok") or not result.get("deals"):
+        return False
+    update_deal_ui_state(chat_id, pending=None)
+    send_deal_list(token, chat_id, None, result)
+    rest = match.group("rest").casefold()
+    notes = ["Выберите сделку кнопкой — откроется её карточка с меню действий."]
+    if re.search(r"аннулир|отмен", rest):
+        notes.append("Аннулировать счёт бот пока не умеет: это делается в Мегаплане.")
+    if re.search(r"выстав|оформ", rest):
+        notes.append("Новый счёт — кнопкой «🧾 Выставить счёт» в карточке; дата счёта — сегодняшняя.")
+    send_message(token, chat_id, " ".join(notes))
+    return True
 
 
 def _phrase_limit(match):
@@ -7056,6 +7087,29 @@ def try_begin_proposal_recipient(chat_id, deal_id, expected_revision=None):
     return True
 
 
+REPLY_PROPOSAL_RE = re.compile(r"(?:Для сделки|Сделка)\s*№(\d+)\b[^\n]*«Коммерческое предложение»[^\n]*(?:адресата КП|Кому адресовать КП)")
+REPLY_DEAL_RE = re.compile(r"(?i)\bсделк\w*\W{0,3}№\s?(\d{2,7})\b")
+RECIPIENT_PREFIX_RE = re.compile(r"(?i)^\s*(?:адресат(?:\s+кп)?|кому(?:\s+кп)?|получатель)\s*[:\-—–]?\s*")
+
+
+def apply_reply_context(chat_id, msg):
+    """A reply to a bot message about one deal is about that deal (QA 27.10: «Адресат КП –
+    Татьяна» in reply to the deal №903 notice was applied to the open deal №890)."""
+    replied = str((msg.get('reply_to_message') or {}).get('text') or '')
+    text = str(msg.get('text') or '')
+    proposal = REPLY_PROPOSAL_RE.search(replied)
+    if proposal:
+        recipient = RECIPIENT_PREFIX_RE.sub('', text).strip()
+        if recipient:
+            update_deal_ui_state(chat_id, pending='proposal_recipient', proposal_deal_id=proposal.group(1),
+                                 current_deal_id=proposal.group(1))
+            return {**msg, 'text': recipient}
+    deals = set(REPLY_DEAL_RE.findall(replied))
+    if len(deals) == 1 and not human_intents._deal_id(text):
+        update_deal_ui_state(chat_id, current_deal_id=deals.pop())
+    return msg
+
+
 def check_external_proposal_transitions(token, chat_id):
     revision=ui_state_store().current(chat_id).get('_revision',0)
     result = run_deal_proposal({'action': 'scan'})
@@ -9759,9 +9813,11 @@ def handle_human_workflow(token,chat_id,text):
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
         return _start_human_invoice(token,chat_id,match.group(),saved.get('name') or human_intents.ISSUE_INVOICE)
-    else:intent=human_intents.classify(value)
+    else:
+        if handle_find_then_act(token,chat_id,value):return True
+        intent=human_intents.classify(value)
     if not intent:return False
-    if intent.name!=human_intents.CREATE_DEAL and not intent.deal_id and state.get('current_deal_id') and not re.search(r'(?i)друг\w*\s+сделк|не\s+в\s+этой',value):
+    if intent.name!=human_intents.CREATE_DEAL and not intent.deal_id and state.get('current_deal_id') and not re.search(r'(?i)друг\w*\s+сделк|не\s+в\s+этой|\b(?:найди|найти|поищи)\b',value):
         # The person is inside an open deal card: «смени плательщика на …» refers to it.
         # Every preview below names the deal, so a stale selection is visible before any write.
         intent=human_intents.Intent(intent.name,str(state['current_deal_id']),intent.target,intent.fields,
@@ -11536,6 +11592,9 @@ def main():
                 if not installer_media_allowed(msg,current_deal_ui_state(chat_id).get('pending')):
                     send_message(token,chat_id,'Для PDF по нескольким объектам выберите «📤 Сборный отчёт». Для фото, видео и отчёта одного объекта откройте «Мои монтажи» → объект → «Новый отчёт».',INSTALLER_USER_KEYBOARD)
                     continue
+
+            if is_owner and msg.get('reply_to_message') and msg.get('text'):
+                msg = apply_reply_context(chat_id, msg)
 
             if is_owner and handle_invoice_cancellation(token, chat_id, msg):
                 continue

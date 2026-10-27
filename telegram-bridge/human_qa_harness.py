@@ -698,6 +698,11 @@ def say(text):
     return Action('text', text)
 
 
+def reply(text, to):
+    """Telegram «Ответить» on the latest bot message containing ``to``."""
+    return Action('reply', text, to=to)
+
+
 def press(label):
     return Action('press', label)
 
@@ -858,6 +863,18 @@ class Stand:
             if action.extra.get('caption'):
                 message['caption'] = action.extra['caption']
             return self.telegram.next_update({'message': message})
+        if action.kind == 'reply':
+            target = next((e for e in reversed(self.telegram.events) if e.get('actor') == 'bot'
+                           and e.get('kind') == 'message' and action.extra['to'] in (e.get('text') or '')), None)
+            if target is None:
+                self.failure = AssertionError(f"Нет сообщения бота с «{action.extra['to']}», на которое можно ответить")
+                self.finished = True
+                raise JourneyStop()
+            self.telegram.begin_action('message', f"{action.value} (ответ на «{target['text'][:40]}…»)")
+            return self.telegram.next_update({'message': {
+                'message_id': self.telegram.update_id + 1, 'date': time.time(), 'chat': chat, 'from': sender,
+                'text': action.value, 'reply_to_message': {'message_id': target.get('message_id'),
+                                                           'from': {'is_bot': True}, 'text': target['text']}}})
         self.telegram.begin_action('message', action.value)
         return self.telegram.next_update({'message': {
             'message_id': self.telegram.update_id + 1, 'date': time.time(), 'chat': chat,

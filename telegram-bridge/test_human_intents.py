@@ -1,4 +1,5 @@
 import unittest
+import human_intents
 import human_intents as h
 
 
@@ -66,6 +67,23 @@ class HumanIntentTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertEqual(expected, h.classify(phrase).name)
 
+
+
+class DealNumberInPhraseTest(unittest.TestCase):
+    """QA 27.10: «кабинет 103» was taken for deal №103."""
+
+    def test_object_numbers_and_quantities_are_not_deal_numbers(self):
+        for phrase in ('Найди сделку Завет кондиционер в кабинет 103 и выстави новый счёт',
+                       'выставь счёт на 45 000 руб', 'выстави счёт на 150 шт', 'счёт по дому 25 корпус 103'):
+            with self.subTest(phrase=phrase):
+                intent = human_intents.classify(phrase)
+                self.assertIsNone(intent and intent.deal_id)
+
+    def test_deal_numbers_in_usual_phrasings(self):
+        for phrase, deal in (('нужен счёт по 990001', '990001'), ('смени плательщика 990001 альфа сервис', '990001'),
+                             ('Выстави счёт по сделке № 861', '861'), ('выстави счёт по 990001 на 3 шт', '990001')):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(deal, human_intents.classify(phrase).deal_id)
 
 if __name__ == "__main__":
     unittest.main()

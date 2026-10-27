@@ -30,7 +30,7 @@ import sys
 
 import human_fixtures
 import qa_schedule
-from human_qa_harness import Stand, codex_jsonl, press, say, render_transcript, _REAL_RUN
+from human_qa_harness import Stand, codex_jsonl, press, reply, say, render_transcript, _REAL_RUN
 from test_human_journeys import office
 
 
@@ -48,18 +48,22 @@ MAX_SCREEN_CHARS = 3500
 ACTOR_RULES = """Ты — тестировщик, который играет роль менеджера компании SmartBild (климатическое
 оборудование и монтаж). Ты общаешься с рабочим Telegram-ботом компании, как обычный человек.
 Ты видишь только то, что видно в Telegram: сообщения бота, присланные файлы и кнопки.
-Можно: написать сообщение (say) или нажать ОДНУ из видимых кнопок (press) — точный текст кнопки.
+Можно: написать сообщение (say), нажать ОДНУ из видимых кнопок (press) — точный текст кнопки,
+или ответить на конкретное сообщение бота кнопкой Telegram «Ответить» (reply: value — твой текст,
+to — фрагмент того сообщения бота).
 Нельзя: нажимать кнопки, которых нет в списке; придумывать номера сделок, которых нет в задании;
 подсказывать боту внутренние команды. Если бот запутался — веди себя как живой человек:
 переформулируй, вернись в меню, попробуй кнопки. Когда цель достигнута или стало ясно, что бот
 не может её выполнить (3–4 безуспешные попытки), заверши (finish).
-Ответь ТОЛЬКО JSON без пояснений: {"action": "say"|"press"|"finish", "value": "текст", "thought": "зачем"}"""
+Ответь ТОЛЬКО JSON без пояснений: {"action": "say"|"press"|"reply"|"finish", "value": "текст", "to": "только для reply", "thought": "зачем"}"""
 
 JUDGE_RULES = """Ты — строгий QA-инженер. Оцени разговор менеджера с рабочим ботом SmartBild.
 Тебе дана цель менеджера, критерии успеха, полный диалог и список записей, которые бот реально
 сделал в CRM (это единственный источник правды о записи: слова бота «сделано» без записи — ложь).
 Найди дефекты: цель не достигнута; бот сделал не ту запись или две записи вместо одной;
 бот заявил успех без записи; бот потерял контекст; непонятный или технический текст;
+число из описания объекта (кабинет, этаж, дом, количество) принято за номер сделки — P1;
+бот нашёл сделку, но продолжить работу с ней в боте можно только вводом номера или ссылкой в CRM — P3;
 человек был вынужден угадывать; бот не предложил следующий шаг; неверные суммы/количества/формат денег;
 лишние вопросы; молчание бота. Не придумывай требования, которых нет в цели и критериях.
 Налоговый режим, рассчитанный по действующей политике продавца и показанный в предпросмотре до
@@ -164,6 +168,12 @@ def explore(mission, brain, stand, max_steps=16):
 
     def journey(person):
         history = []
+        if mission.get('notice'):
+            # A message the bot sends on its own (e.g. a stage-change notice) before the person acts.
+            import bridge
+            if mission.get('open_deal'):
+                yield say(str(mission['open_deal']))
+            bridge.send_message('qa', person.telegram.owner_chat, mission['notice'])
         for step in range(int(mission.get('max_steps') or max_steps)):
             buttons = person.visible_buttons()
             prompt = (ACTOR_RULES + '\n\nТВОЯ ЦЕЛЬ:\n' + mission['goal'] +
@@ -185,6 +195,10 @@ def explore(mission, brain, stand, max_steps=16):
             decisions.append({'step': step + 1, **decision})
             if action == 'finish' or not value:
                 return
+            if action == 'reply':
+                history.append(f"Ты ответил на сообщение «{decision.get('to')}»: {value}")
+                yield reply(value, to=str(decision.get('to') or ''))
+                continue
             history.append(('Ты нажал: ' if action == 'press' else 'Ты написал: ') + value)
             yield press(value) if action == 'press' else say(value)
 
@@ -225,12 +239,20 @@ def case_from(mission, receipt, verdict, decisions):
                       if isinstance(idea, dict) and idea.get('title')]}
 
 
+def explorer_office(crm):
+    """The office plus decoy deals with short numbers: in the real CRM almost any
+    number in a phrase («кабинет 103») is somebody's deal (QA 27.10)."""
+    office(crm)
+    crm.add_deal('103', '502', 'Старая сделка Иванова', status_id='1', positions=(('Работа', 1, 1000),))
+    crm.add_deal('5', '502', 'Первая сделка Иванова', status_id='1', positions=(('Работа', 1, 500),))
+
+
 def fixture_from(snapshot_registry):
     if snapshot_registry:
         snapshot, problem = human_fixtures.verified_snapshot(snapshot_registry)
         if snapshot and not problem:
-            return lambda crm: (office(crm), human_fixtures.load(crm, snapshot))
-    return office
+            return lambda crm: (explorer_office(crm), human_fixtures.load(crm, snapshot))
+    return explorer_office
 
 
 def live_model_stand(stand):

@@ -1,7 +1,7 @@
 """Human journeys, third wave: contract, proposal, navigation and help."""
 import unittest
 
-from human_qa_harness import HumanJourneyCase, press, say
+from human_qa_harness import HumanJourneyCase, press, reply, say
 from test_human_journeys import DEAL, office, open_deal_by_number
 
 
@@ -176,6 +176,33 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('📄 КП по сделке')
             yield say('Уважаемая Татьяна,')
             person.got_document('КП')
+        self.play(journey, setup=office)
+
+
+class ReplyContextJourneys(HumanJourneyCase, unittest.TestCase):
+    """QA 27.10: «Адресат КП – Татьяна» in reply to the deal №903 notice went to the open deal №890."""
+
+    def test_reply_to_proposal_notice_builds_that_deals_proposal(self):
+        def journey(person):
+            yield from open_deal_by_number(person)
+            import bridge
+            bridge.send_message('qa', 'owner', '📄 Для сделки №990002 на стадии «Коммерческое предложение» нужно указать '
+                                'адресата КП. Текущее действие и его кнопки сохранены. Когда закончите, откройте эту '
+                                'сделку и нажмите «📄 КП по сделке».')
+            yield reply('Адресат КП - Татьяна', to='№990002')
+            person.sees('КП №990002', 'Адресат: Татьяна', expected='КП собирается по сделке из сообщения, на которое ответили')
+            person.not_sees('990001', expected='Открытая до этого сделка не подставлена')
+            person.got_document('КП', expected='Пришёл PDF КП')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(stand.model.prompts), 'Ответ на уведомление не должен уходить в ИИ')
+
+    def test_reply_to_a_deal_message_makes_it_the_current_deal(self):
+        def journey(person):
+            yield from open_deal_by_number(person)
+            import bridge
+            bridge.send_message('qa', 'owner', 'Сделка №990002: оплата поступила.')
+            yield reply('выстави счёт', to='№990002')
+            person.sees('990002', expected='Действие в ответе относится к сделке из сообщения')
         self.play(journey, setup=office)
 
 
