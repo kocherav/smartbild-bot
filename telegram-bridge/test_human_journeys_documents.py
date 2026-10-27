@@ -17,7 +17,41 @@ def to_contract_menu(person):
     person.sees_button('👁 Проверить данные договора')
 
 
+def to_contract_menu_for(person, deal_id):
+    yield from open_deal_by_number(person, deal_id)
+    yield press('📄 Документы сделки')
+    yield press('📑 Работа с договором')
+    person.sees_button('👁 Проверить данные договора')
+
+
 class ContractJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_individual_contract_uses_client_name_and_never_saves_a_question(self):
+        def setup(crm):
+            office(crm)
+            crm.deals['990003']['contract'] = None
+
+        def journey(person):
+            yield from to_contract_menu_for(person, '990003')
+            yield press('👁 Проверить данные договора')
+            person.sees('Подписант: Иванов Пётр Сергеевич',
+                        'от своего имени',
+                        expected='Для физлица подписант виден в предпросмотре без опроса')
+
+        stand = self.play(journey, setup=setup)
+        saves = [w for w in stand.crm.writes if w['action'] == 'save_signatory']
+        self.assertEqual([], saves, 'Автоподставленное ФИО физлица не требует CRM-записи')
+
+    def test_signatory_question_is_answered_without_advancing_or_writing(self):
+        def journey(person):
+            yield from to_contract_menu(person)
+            yield press('👁 Проверить данные договора')
+            yield say('А зачем это нужно?')
+            person.sees('ФИО нужно для договора', 'Укажите ФИО',
+                        expected='Бот ответил на вопрос и остался на шаге ФИО')
+
+        stand = self.play(journey, setup=no_contract)
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] == 'save_signatory'])
+
     def test_prepare_contract_then_stage_invoice(self):
         def journey(person):
             yield from to_contract_menu(person)

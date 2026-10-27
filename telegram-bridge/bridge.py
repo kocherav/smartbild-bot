@@ -3562,11 +3562,15 @@ def run_contract_invoice(spec):
 
 def format_contract_preview(preview):
     money = lambda value: f"{bank_money(value)} ₽"
+    signatory = preview.get("signatory") or {}
     return (
         f"Договор №{preview.get('number')} от {preview.get('date')}\n"
         f"Поставщик: {preview.get('seller_name') or 'не указан'}\n"
         f"Клиент: {preview.get('client')}\n"
         f"Заказчик / плательщик: {preview.get('payer_name') or 'не указан'}\n"
+        f"Подписант: {signatory.get('name') or 'не указан'}\n"
+        f"Статус / должность: {signatory.get('position') or 'не указана'}\n"
+        f"Основание: {signatory.get('authority') or 'не указано'}\n"
         f"Объект: {preview.get('address')}\n"
         f"Предмет: {preview.get('subject')}\n\n"
         f"Оборудование: {money(preview.get('equipment', 0))}\n"
@@ -5440,6 +5444,14 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if pending == "contract_signatory_name":
         if value.startswith(("📝 ", "📑 ", "👁 ", "✅ ", "⬅️ ", "🤝 ")):
             send_message(token, chat_id, "Введите ФИО подписанта текстом, не нажимая кнопку меню.")
+            return True
+        if value.endswith("?") or re.search(r"(?i)\b(?:зачем|почему|для чего|что значит|объясни)\b", value):
+            send_message(token, chat_id,
+                         "ФИО нужно для договора и подписи со стороны заказчика; этот ответ будет сохранён в карточке плательщика. Укажите ФИО полностью: фамилию, имя и отчество.")
+            return True
+        name_parts = re.findall(r"[A-Za-zА-Яа-яЁё-]+", value)
+        if len(name_parts) < 3 or any(len(part.replace("-", "")) < 2 for part in name_parts):
+            send_message(token, chat_id, "Укажите ФИО полностью: фамилию, имя и отчество. Вопросы и пояснения в это поле не сохраняются.")
             return True
         signer = state.get("contract_signatory") or {}
         signer["name"] = value

@@ -556,6 +556,10 @@ class FakeMegaplan:
             return {'ok': False, 'error': 'в сделке не выбран плательщик'}
         signer = {k: str((spec.get('customer_signatory') or {}).get(k) or payer.get('signatory', {}).get(k) or '').strip()
                   for k in ('name', 'position', 'authority')}
+        customer = self.contractors.get(deal['client_id']) or {}
+        if customer.get('kind') == 'human':
+            signer = {'name': customer.get('name') or '', 'position': 'Физическое лицо',
+                      'authority': 'действует от своего имени'}
         missing = [label for key, label in (('name', 'ФИО подписанта'), ('position', 'должность подписанта'),
                                             ('authority', 'основание полномочий подписанта')) if not signer[key]]
         if not deal['address']:

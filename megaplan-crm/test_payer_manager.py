@@ -123,6 +123,15 @@ class PayerManagerTests(unittest.TestCase):
             "1003023", "Иванова Мария Петровна", "Генеральный директор", "Устав",
         )
 
+    def test_rejects_question_in_signatory_name_before_write(self):
+        api = FakeAPI()
+        with self.assertRaisesRegex(ValueError, "фамилию, имя и отчество"):
+            payer_manager.apply({
+                "action": "save_signatory", "deal_id": "887",
+                "director": "А зачем это нужно?", "position": "Директор", "authority": "Устав",
+            }, api)
+        self.assertEqual(api.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

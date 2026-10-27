@@ -32,6 +32,11 @@ def digits(value):
     return re.sub(r"\D", "", str(value or ""))
 
 
+def is_full_person_name(value):
+    parts = re.findall(r"[A-Za-zА-Яа-яЁё-]+", str(value or ""))
+    return len(parts) >= 3 and all(len(part.replace("-", "")) > 1 for part in parts)
+
+
 def valid_inn(value):
     value = digits(value)
     if len(value) == 10:
@@ -126,6 +131,8 @@ def apply(spec, api=None):
         director = str(spec.get("director") or "").strip()
         if not deal_id or not director:
             raise ValueError("для сохранения руководителя нужны сделка и ФИО")
+        if not is_full_person_name(director):
+            raise ValueError("ФИО подписанта должно содержать фамилию, имя и отчество")
         deal = api._call("GET", f"/deal/{deal_id}")["data"]
         payer_entity = deal.get("payer") or {}
         if not payer_entity.get("id"):
