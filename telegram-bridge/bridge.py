@@ -4067,7 +4067,13 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(
+            token,
+            chat_id,
+            "Работа со сделками — выберите действие.\n\n"
+            "Просто отправьте номер сделки — например, 990001.",
+            DEALS_KEYBOARD,
+        )
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
