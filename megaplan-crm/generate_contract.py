@@ -97,6 +97,7 @@ def is_full_person_name(value):
 
 def contract_data(deal, spec):
     payer = deal.get("payer") or {}
+    contractor = deal.get("contractor") or {}
     # Megaplan expands a Unit only once; subsequent rows carry its id alone.
     unit_names = {}
     for source_row in deal.get('positions') or []:
@@ -139,7 +140,17 @@ def contract_data(deal, spec):
     stored_name = str(payer.get("Category715CustomFieldFioRukovoditelya") or "").strip()
     supplied_name = str(signatory.get("name") or "").strip()
     supplied_payer_id = str(spec.get("customer_signatory_payer_id") or "")
-    if is_full_person_name(stored_name):
+    customer_is_person = contractor.get("contentType") == "ContractorHuman"
+    customer_name = str(contractor.get("name") or " ".join(filter(None, [
+        contractor.get("lastName"), contractor.get("firstName"), contractor.get("middleName")
+    ]))).strip()
+    if customer_is_person and is_full_person_name(customer_name):
+        signatory = {
+            "name": customer_name,
+            "position": "Физическое лицо",
+            "authority": "действует от своего имени",
+        }
+    elif is_full_person_name(stored_name):
         signatory["name"] = stored_name
     elif supplied_payer_id == payer_id and is_full_person_name(supplied_name):
         signatory["name"] = supplied_name

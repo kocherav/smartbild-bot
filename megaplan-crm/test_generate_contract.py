@@ -95,6 +95,21 @@ class ContractFilenameTests(unittest.TestCase):
         self.assertFalse(is_full_person_name("Ильинов С.А."))
         self.assertTrue(is_full_person_name("Ильинов Сергей Александрович"))
 
+    def test_individual_signs_personally_without_corporate_questions(self):
+        deal = {
+            "id": "990003",
+            "contractor": {"contentType": "ContractorHuman", "name": "Иванов Пётр Сергеевич"},
+            "payer": {"id": "7201", "name": "Иванов Пётр Сергеевич"},
+            "positions": [], "price": {"value": 0},
+        }
+        data = contract_data(deal, {})
+        self.assertEqual(data["signatory"], {
+            "name": "Иванов Пётр Сергеевич",
+            "position": "Физическое лицо",
+            "authority": "действует от своего имени",
+        })
+        self.assertFalse(any("подписант" in item for item in data["missing"]))
+
     def test_contract_subject_grammar_is_stable(self):
         source = "Проектирование, поставка, монтаж и пусконаладка системы кондиционирования"
         self.assertEqual(

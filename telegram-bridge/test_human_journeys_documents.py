@@ -17,7 +17,32 @@ def to_contract_menu(person):
     person.sees_button('👁 Проверить данные договора')
 
 
+def to_contract_menu_for(person, deal_id):
+    yield from open_deal_by_number(person, deal_id)
+    yield press('📄 Документы сделки')
+    yield press('📑 Работа с договором')
+    person.sees_button('👁 Проверить данные договора')
+
+
 class ContractJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_individual_contract_uses_card_name_with_one_preview_confirmation(self):
+        def setup(crm):
+            office(crm)
+            crm.deals['990003']['contract'] = None
+
+        def journey(person):
+            yield from to_contract_menu_for(person, '990003')
+            yield press('👁 Проверить данные договора')
+            person.sees('Подписант: Иванов Пётр Сергеевич', 'от своего имени',
+                        expected='ФИО физлица подставлено в единый предпросмотр')
+            person.sees_button('✅ Сформировать договор')
+
+        stand = self.play(journey, setup=setup)
+        actions = [event for event in stand.telegram.events if event['actor'] == 'tester']
+        self.assertEqual(7, len(actions),
+                         'Маршрут до подтверждения предпросмотра: 7 действий вместо прежних 10')
+        saves = [w for w in stand.crm.writes if w['action'] == 'save_signatory']
+        self.assertEqual([], saves, 'Автоподстановка не создаёт отдельную запись подписанта')
     def test_prepare_contract_then_stage_invoice(self):
         def journey(person):
             yield from to_contract_menu(person)
