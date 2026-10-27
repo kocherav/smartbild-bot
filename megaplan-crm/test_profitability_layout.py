@@ -31,21 +31,22 @@ class ProfitabilityLayoutTest(unittest.TestCase):
         rows = [row('Шкаф', 1, 10000, 7000, 1000), row('Кабель', 100, 100, 6000, 2000)]
         table, _ = self.build(rows)
         totals = table['Итого по позициям']
-        self.assertEqual(round(10000 / 1.05 + 10000 / 1.05, 2), totals[3])
-        self.assertEqual(13000, totals[4])
-        self.assertEqual(3000, totals[5])
-        self.assertEqual(16000, totals[6])
-        self.assertEqual(round(sum(r['profit'] for r in rows), 2), totals[15])
+        self.assertEqual(20000, totals[3], 'сумма продажи')
+        self.assertEqual(round(10000 / 1.05 + 10000 / 1.05, 2), totals[4], 'выручка без НДС')
+        self.assertEqual(13000, totals[5], 'себестоимость материалов')
+        self.assertEqual(3000, totals[6], 'себестоимость работ')
+        self.assertEqual(16000, totals[7])
+        self.assertEqual(round(sum(r['profit'] for r in rows), 2), totals[16])
 
     def test_every_loss_has_a_reason(self):
         rows = [row('Без цены', 2, 0, 0, 1000), row('Дороже', 10, 100, 1200, 0), row('Без наценки', 1, 500, 500, 0),
                 row('Нормальная', 1, 1000, 500, 100)]
         table, ws = self.build(rows)
-        self.assertEqual('нет цены продажи: затраты без выручки', table['Без цены'][16])
-        self.assertEqual('закупка дороже цены продажи', table['Дороже'][16])
-        self.assertEqual('без наценки: закупка равна цене продажи', table['Без наценки'][16])
-        self.assertIn(table['Нормальная'][16], ('', None))
-        self.assertIn('выручка без НДС − прогноз себестоимости', ws.cell(row=3, column=16).value)
+        self.assertEqual('нет цены продажи: затраты без выручки', table['Без цены'][17])
+        self.assertEqual('закупка дороже цены продажи', table['Дороже'][17])
+        self.assertEqual('без наценки: закупка равна цене продажи', table['Без наценки'][17])
+        self.assertIn(table['Нормальная'][17], ('', None))
+        self.assertIn('выручка без НДС − прогноз себестоимости', ws.cell(row=3, column=17).value)
         summary = {x['remark']: x for x in report.remarks_summary(rows)}
         self.assertEqual(1000, summary['нет цены продажи: затраты без выручки']['amount'])
         self.assertEqual(200, summary['закупка дороже цены продажи']['amount'])

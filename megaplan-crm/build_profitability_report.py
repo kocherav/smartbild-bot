@@ -274,6 +274,10 @@ def compute_profitability(entries, procurement=None, installation=None, deal_id=
     return rows, total_revenue, total_cost, total_profit, margin_pct
 
 
+def sale_amount(row):
+    return round(float(row.get("qty") or 0) * float(row.get("sell_price") or 0), 2)
+
+
 def row_remark(row):
     """Why a line loses money, in words (owner 27.10: «дикие цифры, непонятно»)."""
     qty = float(row.get("qty") or 0)
@@ -281,9 +285,10 @@ def row_remark(row):
     material = float(row.get("plan_material") or 0)
     if not float(row.get("sell_price") or 0) and float(row.get("plan_cost") or 0) > 0:
         return "нет цены продажи: затраты без выручки"
-    if material > sale + 0.01:
+    # Less than a rouble is rounding of unit prices, not a commercial loss.
+    if material > sale + 1:
         return "закупка дороже цены продажи"
-    if material > 0 and abs(material - sale) <= 0.01:
+    if material > 0 and abs(material - sale) <= 1:
         return "без наценки: закупка равна цене продажи"
     return ""
 
@@ -320,7 +325,7 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     ws.title = "Расчёт рентабельности"
     ws.sheet_view.showGridLines = False
 
-    headers = ["Наименование", "Кол-во", "Цена продажи/ед.", "Выручка без НДС",
+    headers = ["Наименование", "Кол-во", "Цена продажи/ед.", "Сумма продажи (кол-во × цена)", "Выручка без НДС",
                "План материалов", "План работ", "План себестоимости",
                "Закрыто счетами, кол-во", "Факт материалов по счетам",
                "Остаток материалов по плану", "Принято работ, кол-во",
@@ -330,9 +335,10 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     style.write_header_row(ws, header_row, headers)
     align_by_col = {1: style.LEFT, 2: style.CENTER, **{i: style.RIGHT for i in range(3, len(headers) + 1)}}
 
-    money_cols = (3,4,5,6,7,9,10,12,13,14,15,16)
+    money_cols = (3,4,5,6,7,8,10,11,13,14,15,16,17)
+    profit_col = len(headers) - 1
     for i, r in enumerate(rows):
-        ws.append([r["name"], r["qty"], r["sell_price"], r["revenue"], r["plan_material"],
+        ws.append([r["name"], r["qty"], r["sell_price"], sale_amount(r), r["revenue"], r["plan_material"],
                    r["plan_work"], r["plan_cost"], r["fact_qty"], r["fact_material"],
                    r["remaining_plan_material"],r["fact_work_qty"],r["fact_work"],r["remaining_plan_work"],
                    r["forecast_cost"],r["deviation"],r["profit"], row_remark(r)])
@@ -342,17 +348,18 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
         for col in money_cols:
             ws.cell(row=row_idx, column=col).number_format = style.MONEY_FMT
         if float(r["profit"] or 0) < 0:
-            ws.cell(row=row_idx, column=16).font = style.Font(name=style.FONT_NAME, size=10, color="C62828")
+            ws.cell(row=row_idx, column=profit_col).font = style.Font(name=style.FONT_NAME, size=10, color="C62828")
 
     first_data_row, last_data_row = header_row + 1, ws.max_row
     # Owner 27.10: a total under every money column, not only the four summary figures.
-    fields = {4: "revenue", 5: "plan_material", 6: "plan_work", 7: "plan_cost", 9: "fact_material",
-              10: "remaining_plan_material", 12: "fact_work", 13: "remaining_plan_work", 14: "forecast_cost",
-              15: "deviation", 16: "profit"}
+    fields = {4: sale_amount, 5: "revenue", 6: "plan_material", 7: "plan_work", 8: "plan_cost", 10: "fact_material",
+              11: "remaining_plan_material", 13: "fact_work", 14: "remaining_plan_work", 15: "forecast_cost",
+              16: "deviation", 17: "profit"}
     total_row = ws.max_row + 1
     ws.cell(row=total_row, column=1, value="Итого по позициям")
     for col, key in fields.items():
-        cell = ws.cell(row=total_row, column=col, value=round(sum(float(x[key] or 0) for x in rows), 2))
+        value = sum(float(key(x) if callable(key) else x[key] or 0) for x in rows)
+        cell = ws.cell(row=total_row, column=col, value=round(value, 2))
         cell.number_format = style.MONEY_FMT
     style.style_total_row(ws, total_row, len(headers))
     ws.row_dimensions[total_row].height = 20
@@ -375,18 +382,18 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
     for i, (label, value) in enumerate(labels_values):
         r = summary_row + i
         ws.cell(row=r, column=1, value=label)
-        cell = ws.cell(row=r, column=14, value=value)
+        cell = ws.cell(row=r, column=15, value=value)
         cell.number_format = style.MONEY_FMT
         style.style_total_row(ws, r, len(headers))
         ws.row_dimensions[r].height = 20
     margin_row = summary_row + len(labels_values)
     ws.cell(row=margin_row, column=1, value="Рентабельность, %")
-    ws.cell(row=margin_row, column=14, value=calculated["margin"]).number_format = '0.0"%"'
+    ws.cell(row=margin_row, column=15, value=calculated["margin"]).number_format = '0.0"%"'
     style.style_total_row(ws, margin_row, len(headers))
     ws.row_dimensions[margin_row].height = 20
     legend = [
         "Как читать:",
-        "Выручка без НДС = кол-во × цена продажи, без исходящего НДС.",
+        "Сумма продажи = кол-во × цена продажи; выручка без НДС = сумма продажи без исходящего НДС.",
         "План себестоимости = закупка материалов + работы монтажника по плану.",
         "Прогноз себестоимости = фактические счета и отчёты + ещё не закрытая часть плана.",
         "Прибыль по строке = выручка без НДС − прогноз себестоимости; минус выделен красным, "
@@ -396,7 +403,7 @@ def build_xlsx(rows, deal_id, path, audit=None, totals=None):
         ws.cell(row=margin_row + offset, column=1, value=text)
     ws.cell(row=margin_row + 2, column=1).font = style.Font(name=style.FONT_NAME, size=10, bold=True)
 
-    widths = [45,9,16,16,17,15,18,18,20,22,18,20,20,21,18,26,40]
+    widths = [45,9,16,18,16,17,15,18,18,20,22,18,20,20,21,18,26,40]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
