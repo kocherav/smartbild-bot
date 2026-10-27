@@ -8,6 +8,30 @@ from test_human_journeys import DEAL, office
 
 
 class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_welcome_offers_one_input_deal_number_search(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say('990001')
+            person.sees('Сделка №990001', expected='Кнопочный маршрут открыл сделку')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(4, before.receipt()['actions'],
+                         'до результата через меню — 3 нажатия и ввод номера')
+
+        def direct_journey(person):
+            yield say('/start')
+            person.sees('Просто отправьте номер сделки, например 990001',
+                        expected='На старте видна подсказка о прямом поиске по номеру')
+            yield say('990001')
+            person.sees('Сделка №990001', expected='Номер со старта открыл ту же сделку')
+
+        after = self.play(direct_journey, setup=office)
+        self.assertEqual(1, after.receipt()['actions'] - 1,
+                         'после приветствия до результата — один ввод')
+        self.assertEqual(0, len(after.model.prompts), 'Прямой поиск не должен уходить в ИИ')
+
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')
