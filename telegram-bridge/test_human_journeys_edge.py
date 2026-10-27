@@ -83,6 +83,23 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office, model_rules=[('', 'Сделок по бассейну в Сочи я не нашёл. Уточните клиента?')])
         self.assertEqual(1, len(stand.model.prompts))
 
+    def test_number_in_a_description_is_not_a_deal_number(self):
+        # QA 27.10 (owner, voice): «кабинет 103» opened deal №103 and started an invoice there.
+        def setup(crm):
+            office(crm)
+            crm.add_deal('103', '502', 'Старая сделка', positions=(('Работа', 1, 1000),))
+        def journey(person):
+            yield say('990001')
+            yield say('Найди сделку Альфа кондиционирование офиса кабинет 103 и аннулируй счёт и выстави новый')
+            person.not_sees('Сделка №103', expected='Число из описания не принято за номер сделки')
+            person.sees_button('№990001 · Кондиционирование офиса на Тверской', expected='Показаны варианты сделок кнопками')
+            person.sees('Аннулировать счёт бот пока не умеет', expected='Честно сказано, чего бот не умеет')
+            person.not_sees('Выставить общий счёт', expected='Счёт не начат ни по какой сделке до выбора')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            person.sees_button('🧾 Выставить счёт', expected='Из выбранной сделки — меню действий')
+        stand = self.play(journey, setup=setup)
+        self.assertEqual([], stand.crm.writes)
+
 class UnsupportedInputJourneys(HumanJourneyCase, unittest.TestCase):
     def test_voice_message_gets_an_honest_answer(self):
         def journey(person):

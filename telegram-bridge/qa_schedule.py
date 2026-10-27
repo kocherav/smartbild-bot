@@ -5,7 +5,6 @@ on its own.  An unreadable or invalid file falls back to the built-in default,
 which equals the schedule the bridge used before the file existed.
 """
 import datetime as dt
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -129,10 +128,14 @@ def missions_for(day, missions, schedule=None):
     """The night's missions: the day's focus areas first, then a stable rotation."""
     schedule = schedule or load()
     count = int(schedule['explore']['missions_per_night'])
-    seed = day.isoformat()
-    rotation = sorted(missions, key=lambda m: hashlib.sha256((seed + m['id']).encode()).hexdigest())
+    ordered = sorted(missions, key=lambda m: m['id'])
+    # A round-robin walk instead of a daily hash: every mission comes up in turn
+    # however many missions are added (18 since 27.10).
+    offset = (day.toordinal() * count) % len(ordered) if ordered else 0
+    rotation = ordered[offset:] + ordered[:offset]
     areas = set(focus(day, schedule).get('areas') or [])
-    chosen = [m for m in rotation if areas & set(m.get('areas') or [])][:count]
+    # The day's theme takes at most all but one slot: the rotation always advances.
+    chosen = [m for m in rotation if areas & set(m.get('areas') or [])][:max(count - 1, 1)]
     chosen += [m for m in rotation if m not in chosen][:count - len(chosen)]
     return chosen
 

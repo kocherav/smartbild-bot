@@ -60,6 +60,8 @@ JUDGE_RULES = """Ты — строгий QA-инженер. Оцени разг�
 сделал в CRM (это единственный источник правды о записи: слова бота «сделано» без записи — ложь).
 Найди дефекты: цель не достигнута; бот сделал не ту запись или две записи вместо одной;
 бот заявил успех без записи; бот потерял контекст; непонятный или технический текст;
+число из описания объекта (кабинет, этаж, дом, количество) принято за номер сделки — P1;
+бот нашёл сделку, но продолжить работу с ней в боте можно только вводом номера или ссылкой в CRM — P3;
 человек был вынужден угадывать; бот не предложил следующий шаг; неверные суммы/количества/формат денег;
 лишние вопросы; молчание бота. Не придумывай требования, которых нет в цели и критериях.
 Налоговый режим, рассчитанный по действующей политике продавца и показанный в предпросмотре до
@@ -225,12 +227,20 @@ def case_from(mission, receipt, verdict, decisions):
                       if isinstance(idea, dict) and idea.get('title')]}
 
 
+def explorer_office(crm):
+    """The office plus decoy deals with short numbers: in the real CRM almost any
+    number in a phrase («кабинет 103») is somebody's deal (QA 27.10)."""
+    office(crm)
+    crm.add_deal('103', '502', 'Старая сделка Иванова', status_id='1', positions=(('Работа', 1, 1000),))
+    crm.add_deal('5', '502', 'Первая сделка Иванова', status_id='1', positions=(('Работа', 1, 500),))
+
+
 def fixture_from(snapshot_registry):
     if snapshot_registry:
         snapshot, problem = human_fixtures.verified_snapshot(snapshot_registry)
         if snapshot and not problem:
-            return lambda crm: (office(crm), human_fixtures.load(crm, snapshot))
-    return office
+            return lambda crm: (explorer_office(crm), human_fixtures.load(crm, snapshot))
+    return explorer_office
 
 
 def live_model_stand(stand):
