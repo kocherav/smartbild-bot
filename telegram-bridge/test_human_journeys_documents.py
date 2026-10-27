@@ -89,6 +89,29 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('Итого: 114 000,00 ₽', expected='Суммы в договоре в привычном формате')
         self.play(journey, setup=no_contract)
 
+    def test_manager_corrects_signatory_from_unified_preview(self):
+        """Before: no route from preview. After: four actions edit all signer fields."""
+        def journey(person):
+            yield from to_contract_menu(person)
+            yield press('👁 Проверить данные договора')
+            yield say('Петров Иван Сергеевич')
+            yield say('Директор')
+            yield press('Устав')
+            person.sees('Подписант', 'ФИО: Петров Иван Сергеевич',
+                        'Статус: Директор', 'Действует: Устав')
+            person.sees_button('✏️ Исправить подписанта')
+            actions_before_correction = len([e for e in person.stand.telegram.events if e['actor'] == 'tester'])
+            yield press('✏️ Исправить подписанта')
+            yield say('Иванов Пётр Сергеевич')
+            yield say('Физическое лицо')
+            yield press('От своего имени')
+            person.sees('ФИО: Иванов Пётр Сергеевич', 'Статус: Физическое лицо',
+                        'Действует: От своего имени', expected='Исправленные реквизиты видны до формирования')
+            actions_after_correction = len([e for e in person.stand.telegram.events if e['actor'] == 'tester'])
+            person.check('Исправление подписанта занимает 4 действия вместо отсутствующего маршрута',
+                         4, actions_after_correction - actions_before_correction)
+        self.play(journey, setup=no_contract)
+
 
 class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
     def test_deal_economics_button(self):

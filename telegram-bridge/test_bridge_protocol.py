@@ -423,6 +423,31 @@ class ProtocolTest(unittest.TestCase):
             bridge.prepare_contract_preview("token", "chat", "892")
         update.assert_called_once_with("chat", pending="contract_date", contract_deal_id="892")
 
+    def test_contract_preview_exposes_signatory_and_correction_actions(self):
+        preview = {
+            "number": "892-Д", "date": "27.10.2026", "seller_name": "ООО «КЛИВЭЛ»",
+            "client": "Иванов", "payer_name": "Иванов Пётр Сергеевич",
+            "address": "Москва", "subject": "Поставка", "signatory": {
+                "name": "Иванов Пётр Сергеевич", "position": "Физическое лицо",
+                "authority": "От своего имени",
+            },
+        }
+        text = bridge.format_contract_preview(preview)
+        self.assertIn("Подписант", text)
+        self.assertIn("ФИО: Иванов Пётр Сергеевич", text)
+        self.assertIn("Статус: Физическое лицо", text)
+        self.assertIn("Действует: От своего имени", text)
+
+        with mock.patch.object(bridge, "current_deal_ui_state", return_value={}), \
+             mock.patch.object(bridge, "run_contract_builder", return_value={"ok": True, "preview": preview}), \
+             mock.patch.object(bridge, "update_deal_ui_state"), \
+             mock.patch.object(bridge, "send_message") as send:
+            bridge.prepare_contract_preview("token", "chat", "892")
+        labels = {button["text"] for row in send.call_args.args[3]["keyboard"] for button in row}
+        self.assertIn("✏️ Исправить подписанта", labels)
+        self.assertIn("✏️ Исправить дату", labels)
+        self.assertIn("✏️ Исправить адрес", labels)
+
     def test_deals_navigation_is_a_local_fast_path(self):
         with mock.patch.object(bridge, "update_deal_ui_state") as update_state, \
              mock.patch.object(bridge, "send_message", return_value=True) as send:

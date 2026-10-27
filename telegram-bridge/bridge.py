@@ -3562,6 +3562,7 @@ def run_contract_invoice(spec):
 
 def format_contract_preview(preview):
     money = lambda value: f"{bank_money(value)} ₽"
+    signatory = preview.get("signatory") or {}
     return (
         f"Договор №{preview.get('number')} от {preview.get('date')}\n"
         f"Поставщик: {preview.get('seller_name') or 'не указан'}\n"
@@ -3569,6 +3570,10 @@ def format_contract_preview(preview):
         f"Заказчик / плательщик: {preview.get('payer_name') or 'не указан'}\n"
         f"Объект: {preview.get('address')}\n"
         f"Предмет: {preview.get('subject')}\n\n"
+        f"Подписант\n"
+        f"ФИО: {signatory.get('name') or 'не указано'}\n"
+        f"Статус: {signatory.get('position') or 'не указан'}\n"
+        f"Действует: {signatory.get('authority') or 'не указано'}\n\n"
         f"Оборудование: {money(preview.get('equipment', 0))}\n"
         f"Материалы: {money(preview.get('materials', 0))}\n"
         f"Авансовый платёж: {money(preview.get('advance', 0))}\n"
@@ -3780,13 +3785,18 @@ def prepare_contract_preview(token, chat_id, deal_id):
         return
     if "основание полномочий подписанта" in missing:
         update_deal_ui_state(chat_id, pending="contract_signatory_authority", contract_deal_id=str(deal_id))
-        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}], [{"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}],
+                                 [{"text": "От своего имени"}], [{"text": "❌ Отмена"}]],
+                    "resize_keyboard": True, "one_time_keyboard": True}
         send_message(token, chat_id, "На основании чего действует подписант?", keyboard)
         return
     if missing:
         send_message(token, chat_id, "Договор пока нельзя сформировать:\n- " + "\n- ".join(missing), CONTRACT_KEYBOARD)
         return
-    keyboard = {"keyboard": [[{"text": "✅ Сформировать договор"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+    keyboard = {"keyboard": [[{"text": "✅ Сформировать договор"}, {"text": "❌ Отмена"}],
+                             [{"text": "✏️ Исправить подписанта"}],
+                             [{"text": "✏️ Исправить дату"}, {"text": "✏️ Исправить адрес"}]],
+                "resize_keyboard": True, "one_time_keyboard": True}
     update_deal_ui_state(chat_id,pending='contract_generate_confirm',contract_deal_id=str(deal_id),contract_data_fingerprint=preview.get('fingerprint'))
     send_message(token, chat_id, format_contract_preview(preview) + "\n\nПроверьте данные перед формированием.", keyboard)
 
@@ -5454,7 +5464,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         signer = state.get("contract_signatory") or {}
         signer["position"] = value
         update_deal_ui_state(chat_id, pending="contract_signatory_authority", contract_signatory=signer)
-        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}], [{"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}],
+                                 [{"text": "От своего имени"}], [{"text": "❌ Отмена"}]],
+                    "resize_keyboard": True, "one_time_keyboard": True}
         send_message(token, chat_id, "На основании чего действует подписант?", keyboard)
         return True
     if pending == "contract_signatory_authority":
@@ -6456,6 +6468,19 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value in ("📝 Подготовить договор", "👁 Проверить данные договора") and deal_id:
         update_deal_ui_state(chat_id, contract_deal_id=str(deal_id), deal_creation_active=False)
         prepare_contract_preview(token, chat_id, deal_id)
+        return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить подписанта":
+        update_deal_ui_state(chat_id, pending="contract_signatory_name", contract_signatory={},
+                             contract_signatory_payer_id=state.get("contract_signatory_payer_id"))
+        send_message(token, chat_id, "Укажите ФИО подписанта со стороны заказчика полностью.")
+        return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить дату":
+        update_deal_ui_state(chat_id, pending="contract_date")
+        send_message(token, chat_id, "Укажите дату договора в формате ДД.ММ.ГГГГ.")
+        return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить адрес":
+        update_deal_ui_state(chat_id, pending="contract_address")
+        send_message(token, chat_id, "Укажите адрес объекта для договора.")
         return True
     if value == "🧾 Выставить счёт по договору" and deal_id:
         update_deal_ui_state(chat_id, pending="contract_invoice_clause", contract_invoice_preview=None)
