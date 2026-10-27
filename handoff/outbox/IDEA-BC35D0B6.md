@@ -1,5 +1,5 @@
 status: done
-commits: 5f6a3f2f474545f176c76b084fcb0292f968b31f
+commits: 5f6a3f2bad0240ba8dce19df6b3357767e2b7e67
 branch: handoff/IDEA-BC35D0B6
 
 Что сделано:
