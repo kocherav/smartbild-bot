@@ -180,14 +180,31 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class NavigationJourneys(HumanJourneyCase, unittest.TestCase):
-    def test_leaving_a_payer_choice_for_the_menu_forgets_it(self):
+    def test_interrupted_payer_choice_resumes_from_deals_in_one_action(self):
         def journey(person):
             yield say('Нужно сменить плательщика')
             yield say('990001')
+            person.sees_button('ООО «Альфа Сервис» · ИНН 7701000002')
+            yield press('🏦 Деньги')
             yield press('🤝 Сделки')
-            person.sees_button('🔎 Найти сделку', expected='Главное меню доступно посреди сценария')
-            yield say('Альфа Сервис')
-            person.not_sees('Новый плательщик', expected='Брошенный выбор плательщика не продолжился сам')
+            person.sees_button('▶️ Продолжить смену плательщика в сделке №990001',
+                               expected='В разделе сделок есть однокнопочное продолжение')
+            yield press('▶️ Продолжить смену плательщика в сделке №990001')
+            person.sees_button('ООО «Альфа Сервис» · ИНН 7701000002',
+                               expected='Выбор плательщика восстановлен за одно действие')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
+    def test_cancel_removes_interrupted_payer_continuation(self):
+        def journey(person):
+            yield say('Нужно сменить плательщика')
+            yield say('990001')
+            yield press('🏦 Деньги')
+            yield say('❌ Отмена')
+            yield press('🤝 Сделки')
+            buttons = person.visible_buttons()
+            person.observe('Явная отмена удалила отложенное продолжение', ', '.join(buttons),
+                           not any('Продолжить смену плательщика' in button for button in buttons))
         stand = self.play(journey, setup=office)
         self.assertEqual([], stand.crm.writes)
 

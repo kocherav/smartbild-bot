@@ -500,6 +500,17 @@ DEALS_KEYBOARD = {
     ],
     "resize_keyboard": True,
 }
+
+
+def deals_keyboard(chat_id):
+    """Add a safe continuation for an interrupted payer draft, if there is one."""
+    state = current_deal_ui_state(chat_id)
+    deal_id = str(state.get("suspended_payer_deal_id") or "")
+    if not deal_id:
+        return DEALS_KEYBOARD
+    keyboard = {**DEALS_KEYBOARD, "keyboard": [list(row) for row in DEALS_KEYBOARD["keyboard"]]}
+    keyboard["keyboard"].insert(0, [{"text": f"▶️ Продолжить смену плательщика в сделке №{deal_id}"}])
+    return keyboard
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
@@ -4067,7 +4078,7 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, "Работа со сделками — выберите действие.", deals_keyboard(chat_id))
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
@@ -4083,6 +4094,10 @@ def handle_global_navigation(token, chat_id, text):
         update_deal_ui_state(
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
+            suspended_payer_deal_id=None if value == '❌ Отмена' else
+            current_deal_ui_state(chat_id).get('suspended_payer_deal_id'),
+            suspended_payer_target=None if value == '❌ Отмена' else
+            current_deal_ui_state(chat_id).get('suspended_payer_target'),
         )
         text = (
             "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены."
@@ -9569,23 +9584,27 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
         matches=([item for item in payers if digits and str(item.get('inn') or '')==digits] if len(digits)>=10 else
                  [item for item in payers if needle in ' '.join(str(item.get('name') or '').casefold().replace('ё','е').split())])
         if len(matches)==1 and matches[0].get('selected'):
-            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                                 suspended_payer_deal_id=None,suspended_payer_target=None)
             send_message(token,chat_id,f"В сделке №{deal_id} плательщик уже «{matches[0]['name']}». Менять нечего, ничего не записано.",DEAL_ACTIONS_KEYBOARD)
             return True
         if len(matches)==1:
             item=matches[0]
-            update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item})
+            update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item},
+                                 suspended_payer_deal_id=None,suspended_payer_target=None)
             current=next((x for x in payers if x.get('selected')),None)
             send_message(token,chat_id,
                 f"Сделка №{deal_id}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nНовый плательщик: {item['name']}" + (f", ИНН {item['inn']}" if item.get('inn') else '') + f" (ID {item['id']}).\n\nДанные ещё не записаны.",HUMAN_PAYER_CONFIRM_KEYBOARD)
             return True
-    update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices)
+    update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices,
+                         suspended_payer_deal_id=None,suspended_payer_target=None)
     if choices:
         current=next((x for x in payers if x.get('selected')),None)
         not_found=f"Плательщик «{target}» у клиента сделки не найден однозначно.\n" if target else ''
         send_message(token,chat_id,f"{not_found}Сделка №{deal_id}, клиент {result.get('client_name') or 'не указан'}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nВыберите нового плательщика или пришлите новую карточку.",_human_choice_keyboard(choices,'📎 Новая карточка плательщика'))
     else:
-        update_deal_ui_state(chat_id,pending='payer_card_file',payer_target_deal_id=str(deal_id),human_intent=None,human_choices=None)
+        update_deal_ui_state(chat_id,pending='payer_card_file',payer_target_deal_id=str(deal_id),human_intent=None,human_choices=None,
+                             suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,f"У клиента сделки №{deal_id} нет доступных карточек. Пришлите карточку нового плательщика.")
     return True
 
@@ -9694,10 +9713,27 @@ def handle_human_workflow(token,chat_id,text):
     value=str(text or '').strip();state=current_deal_ui_state(chat_id);pending=state.get('pending') or ''
     if value in TOP_LEVEL_NAVIGATION:
         if pending.startswith('human_'):
-            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+            intent=state.get('human_intent') or {}
+            if value != '❌ Отмена' and pending.startswith('human_payer_') and intent.get('deal_id'):
+                payer=intent.get('payer') or {}
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                                     suspended_payer_deal_id=str(intent['deal_id']),
+                                     suspended_payer_target=(payer.get('inn') or payer.get('name')))
+            else:
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                                     suspended_payer_deal_id=None if value == '❌ Отмена' else state.get('suspended_payer_deal_id'),
+                                     suspended_payer_target=None if value == '❌ Отмена' else state.get('suspended_payer_target'))
         return False
+    resume=re.fullmatch(r'▶️ Продолжить смену плательщика в сделке №(\d+)',value)
+    if resume:
+        deal_id=str(state.get('suspended_payer_deal_id') or '')
+        if deal_id != resume.group(1):
+            send_message(token,chat_id,'Это продолжение устарело. Данные не изменены.',deals_keyboard(chat_id));return True
+        target=state.get('suspended_payer_target')
+        return _start_human_payer(token,chat_id,deal_id,target)
     if pending.startswith('human_') and value=='❌ Отмена':
-        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                             suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
     if pending=='human_payer_deal':
         match=re.search(r'\d{2,}',value)
