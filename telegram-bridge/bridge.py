@@ -5556,7 +5556,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             elif not select_deal(token, chat_id, match.group(0)):
                 update_deal_ui_state(chat_id, pending="get_number")
         else:
-            send_deal_list(token, chat_id, {"action": pending, "query": value, "limit": 15})
+            spec = {"action": pending, "query": value, "limit": 15}
+            result = run_deal_browser(spec)
+            # People often choose «by address» and then enter the whole object
+            # description ("вентиляция склада в Химках").  Keep the precise
+            # search first, but do not turn that natural input into a dead end:
+            # the common index can combine the object and address and handles
+            # Russian case endings.
+            if pending == "search_address" and result.get("ok") and not result.get("deals"):
+                result = run_deal_browser({"action": "search_any", "query": value, "limit": 15})
+            send_deal_list(token, chat_id, spec, result=result)
         return True
 
     if pending == "procurement_stock_select":

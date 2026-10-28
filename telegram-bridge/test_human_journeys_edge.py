@@ -52,6 +52,27 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
             person.not_sees('№990001', expected='Чужие сделки не попали в выдачу')
         self.play(journey, setup=office)
 
+    def test_address_button_accepts_object_and_city_then_invoice_can_finish(self):
+        """Regression for explore:find-and-continue (QA-651A67BEB76D1672741F)."""
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('📍 Найти по адресу')
+            yield say('вентиляция склада в Химках')
+            person.sees('№990002', expected='Описание объекта и город нашли сделку через адресный вход')
+            yield press('№990002 · Вентиляция склада')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            person.sees('Выставить общий счёт', '150 000,00 ₽', expected='Показан предпросмотр до записи')
+            yield press('✅ Выставить общий счёт')
+            person.sees('выставлен', expected='Бот сообщил о созданном счёте')
+            person.got_document('Счёт', expected='После явного подтверждения прислан PDF')
+
+        stand = self.play(journey, setup=office)
+        invoice_writes = writes(stand, 'create_full')
+        self.assertEqual(1, len(invoice_writes), 'Подтверждение создаёт ровно один общий счёт')
+        self.assertEqual('990002', invoice_writes[0]['spec']['deal_id'])
+
     def test_find_deals_of_client_by_phrase(self):
         def journey(person):
             yield say('Найди сделки клиента Иванов')

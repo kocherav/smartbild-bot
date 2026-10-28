@@ -99,6 +99,12 @@ class ExplorerTests(unittest.TestCase):
             seen |= {m['id'] for m in explorer.choose(missions, 4, f'2026-11-{day:02d}')}
         self.assertEqual({m['id'] for m in missions}, seen)
 
+    def test_find_and_continue_budget_reaches_invoice_confirmation(self):
+        mission = next(m for m in explorer.load_missions() if m['id'] == 'find-and-continue')
+        self.assertGreaterEqual(mission['max_steps'], 11)
+        self.assertTrue(any('подтверждения' in item and 'ровно один' in item
+                            for item in mission['success']))
+
     def test_main_writes_receipt_for_qa_agent(self):
         brain = ScriptedBrain([{'action': 'finish'}] * 3, {'achieved': True, 'defects': [], 'summary': 'ok'})
         with tempfile.TemporaryDirectory() as temporary, \
