@@ -103,7 +103,10 @@ def acquire_slot(lock,background=False):
     marker=None
     if not background:
         fd,marker=tempfile.mkstemp(prefix='request-',dir=directory);os.close(fd)
-    deadline=time.monotonic()+(10 if background else 30)
+    # A long background job (morning brief, 28.10) may wait longer for a free slot:
+    # it still yields to every interactive request while waiting.
+    wait=float(os.environ.get('MEGAPLAN_BACKGROUND_WAIT') or 10) if background else 30
+    deadline=time.monotonic()+wait
     try:
         while True:
             if time.monotonic()>deadline:

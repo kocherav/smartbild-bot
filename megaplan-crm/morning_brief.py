@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 os.environ.setdefault("MEGAPLAN_PRIORITY", "background")
+# At 09:00 other scans hold the shared CRM queue; waiting is cheap, giving up is not (28.10).
+os.environ.setdefault("MEGAPLAN_BACKGROUND_WAIT", "90")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 

@@ -2827,7 +2827,7 @@ def run_deal_browser(spec, timeout=45):
         return {"ok": False, "error": "техническая ошибка поиска сделок"}
 
 
-def run_morning_brief(spec, timeout=90):
+def run_morning_brief(spec, timeout=600):
     try:
         result = subprocess.run(
             [REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "morning_brief.py")],
@@ -2845,16 +2845,29 @@ def run_morning_brief(spec, timeout=90):
 
 
 MORNING_BRIEF_MAX_ITEMS = 10
+MORNING_BRIEF_RETRIES = 8
+MORNING_BRIEF_RETRY_SECONDS = 150
+MORNING_BRIEF_TRANSIENT_RE = re.compile(r"(?i)очередь запросов занята|повторите позже|временно не ответил|timed? ?out|таймаут")
 
 
 def send_morning_brief(token, chat_id, config=None):
     config = config or qa_schedule.morning_brief_config()
-    result = run_morning_brief({"invoice_days": config["invoice_overdue_days"],
-                                "stale_days": config["deal_stale_days"],
-                                "completed_statuses": config.get("completed_statuses") or []})
+    spec = {"invoice_days": config["invoice_overdue_days"], "stale_days": config["deal_stale_days"],
+            "completed_statuses": config.get("completed_statuses") or []}
+    attempts = int(config.get("retry_attempts") or MORNING_BRIEF_RETRIES)
+    for attempt in range(1, attempts + 1):
+        result = run_morning_brief(spec)
+        # 28.10: «очередь запросов занята» every morning — a busy queue is a reason to wait,
+        # not to report failure.
+        if result.get("ok") or not MORNING_BRIEF_TRANSIENT_RE.search(str(result.get("error") or "")):
+            break
+        if attempt < attempts:
+            time.sleep(int(config.get("retry_seconds") or MORNING_BRIEF_RETRY_SECONDS))
     if not result.get("ok"):
-        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку. "
-                     "Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
+        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку"
+                     + (f" ({attempt} попыт., около {attempt * int(config.get('retry_seconds') or MORNING_BRIEF_RETRY_SECONDS) // 60} мин.)"
+                        if attempt > 1 else "") +
+                     ". Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
         return False
     overdue = sorted(result.get("overdue") or [], key=lambda item: -int(item.get("days") or 0))
     stale = sorted(result.get("stale") or [], key=lambda item: -float(item.get("amount") or 0))
