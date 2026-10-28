@@ -52,6 +52,19 @@ class TransportTest(unittest.TestCase):
         foreground.join(3);background.join(3)
         self.assertEqual(order,['foreground','background']);self.assertEqual(os.listdir(directory),[])
 
+    def test_background_wait_is_configurable_and_still_bounded(self):
+        # 28.10: the morning brief gave up after 10 s of a busy queue every morning.
+        import fcntl
+        clock = iter([0, 0, 15, 15, 95])
+        with open(t.DB+'.lock','a') as occupied, open(t.DB+'.lock','a') as lock, \
+             patch.dict(os.environ, {'MEGAPLAN_BACKGROUND_WAIT': '90'}), \
+             patch.object(t.time, 'monotonic', side_effect=lambda: next(clock)), \
+             patch.object(t.time, 'sleep'):
+            fcntl.flock(occupied, fcntl.LOCK_EX)
+            with self.assertRaises(t.ProtectionPause):
+                t.acquire_slot(lock, background=True)
+            self.assertEqual([], list(clock), 'ждал дольше 10 с, но не бесконечно')
+
     def test_429_retry_after_and_fail_fast(self):
         self.error(429,headers={'Retry-After':'120'})
         with t.connect() as db:self.assertGreater(db.execute('SELECT until FROM circuits').fetchone()[0],time.time()+115)

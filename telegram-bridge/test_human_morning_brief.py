@@ -35,7 +35,9 @@ class MorningBriefHumanQATests(unittest.TestCase):
               patch.object(bridge, 'DEAL_UI_STATE_FILE', str(Path(self.temp.name) / 'state.json')),
               patch.object(bridge, 'DEAL_UI_STATE_LOCK_FILE', str(Path(self.temp.name) / 'state.lock')),
               patch.object(bridge, 'tg_api', side_effect=self.telegram.api),
-              patch.object(bridge, 'run_morning_brief', return_value=result)):
+              patch.object(bridge.time, 'sleep') as self.sleep,
+              patch.object(bridge, 'run_morning_brief', **({'side_effect': result} if isinstance(result, list)
+                                                           else {'return_value': result})) as self.runs):
             bridge.send_morning_brief('qa', 'owner', {'invoice_overdue_days': 7, 'deal_stale_days': 14,
                                                        'completed_statuses': ['заверш']})
 
@@ -78,6 +80,29 @@ class MorningBriefHumanQATests(unittest.TestCase):
         self.assertNotIn('№205', text)
         self.assertEqual(10, len([label for label in self.telegram.visible_inline() if 'открыть сделку' in label]))
 
+
+
+    def test_busy_crm_queue_is_waited_out_not_reported(self):
+        # 28.10: «очередь запросов занята» every morning at 09:00.
+        busy = {'ok': False, 'error': 'Мегаплан: очередь запросов занята. Запрос не отправлен; повторите позже.'}
+        good = self.crm.cli_morning_brief('build', {'invoice_days': 7, 'stale_days': 14, 'completed_statuses': ['заверш']})
+        self._send([busy, busy, good])
+        text = '\n'.join(event['text'] for event in self.telegram.events)
+        self.assertNotIn('НЕ СОБРАН', text)
+        self.assertIn('Должник', text)
+        self.assertEqual(3, self.runs.call_count)
+        self.assertEqual(2, self.sleep.call_count)
+
+    def test_queue_busy_all_morning_is_reported_once_with_attempts(self):
+        busy = {'ok': False, 'error': 'Мегаплан: очередь запросов занята. Запрос не отправлен; повторите позже.'}
+        self._send([busy] * bridge.MORNING_BRIEF_RETRIES)
+        failures = [e['text'] for e in self.telegram.events if 'НЕ СОБРАН' in e['text']]
+        self.assertEqual(1, len(failures))
+        self.assertIn(f'{bridge.MORNING_BRIEF_RETRIES} попыт.', failures[0])
+
+    def test_non_transient_error_is_reported_without_retries(self):
+        self._send({'ok': False, 'error': 'нет прав на чтение счетов'})
+        self.assertEqual(1, self.runs.call_count)
 
 if __name__ == '__main__':
     unittest.main()
