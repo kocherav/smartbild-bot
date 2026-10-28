@@ -92,9 +92,13 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
 
     def test_check_payment_of_deal(self):
         def journey(person):
-            yield say('Оплачена ли сделка 990001?')
-            person.sees('Сделка №990001', 'Остаток по выставленным счетам', expected='Бот ответил по оплате сделки')
-        self.play(journey, setup=office)
+            yield say('Проверь, оплачена ли сделка 990001 и какой остаток по выставленным счетам.')
+            person.sees('Сделка №990001', 'Оплачена полностью: нет',
+                        'Счетов в Мегаплане: 1, на 114 000,00 ₽',
+                        'Остаток по выставленным счетам: 114 000,00 ₽',
+                        expected='Бот сразу назвал сумму счетов и остаток')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes, 'Проверка оплаты должна оставаться только чтением')
 
 
 class PayerJourneys(HumanJourneyCase, unittest.TestCase):

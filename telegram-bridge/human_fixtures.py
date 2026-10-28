@@ -144,11 +144,6 @@ def load(crm, snapshot):
         if client_id not in crm.contractors:
             crm.add_client(client_id, item.get('client_name') or deal.get('client') or 'Клиент',
                            payers=[(p['id'], p.get('name') or '', p.get('inn') or '') for p in item.get('payers') or []])
-        if deal.get('status_id'):
-            crm.statuses[str(deal['status_id'])] = deal.get('status') or 'Статус'
-        for transition in deal.get('transitions') or []:
-            if transition.get('state_id'):
-                crm.statuses.setdefault(str(transition['state_id']), transition.get('name') or 'Статус')
         selected = next((p['id'] for p in item.get('payers') or [] if p.get('selected')), None)
         positions = [(row.get('name') or 'Позиция', float(row.get('qty') or 0),
                       float(row.get('sell_price') if row.get('sell_price') is not None else row.get('unit_price') or 0),
@@ -156,7 +151,8 @@ def load(crm, snapshot):
         crm.add_deal(deal['id'], client_id, deal.get('description') or deal.get('name') or '',
                      status_id=str(deal.get('status_id') or '1'), address=deal.get('address') or '',
                      executors=deal.get('executors') or [], payer_id=selected, positions=positions,
-                     created_at=deal.get('created_at'))
+                     created_at=deal.get('created_at'), status_name=deal.get('status'),
+                     transitions=deal.get('transitions') or [])
         for invoice in item.get('invoices') or []:
             amount = float(invoice.get('sum') or 0)
             rows = [{'name': invoice.get('line') or 'Счёт по спецификации', 'qty': 1, 'price': amount}]

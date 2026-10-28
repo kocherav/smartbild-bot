@@ -203,14 +203,16 @@ class FakeMegaplan:
         return self.contractors[str(client_id)]
 
     def add_deal(self, deal_id, client_id, description='', status_id='1', address='', executors=(),
-                 payer_id=None, positions=(), contract=None, created_at=None):
+                 payer_id=None, positions=(), contract=None, created_at=None, status_name=None,
+                 transitions=None):
         positions = [dict(name=p[0], qty=p[1], price=p[2], cost_material=(p[3] if len(p) > 3 else None),
                           cost_work=(p[4] if len(p) > 4 else None)) for p in positions]
         self.deals[str(deal_id)] = {
             'id': str(deal_id), 'client_id': str(client_id), 'description': description,
             'status_id': str(status_id), 'address': address, 'executors': list(executors),
             'payer_id': str(payer_id) if payer_id else None, 'positions': positions,
-            'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00'}
+            'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00',
+            'status_name': status_name, 'transitions': copy.deepcopy(transitions)}
         return self.deals[str(deal_id)]
 
     def add_invoice(self, deal_id, rows, number=None, status='drawn'):
@@ -232,12 +234,14 @@ class FakeMegaplan:
 
     def summary(self, deal):
         client = self.contractors.get(deal['client_id']) or {}
-        transitions = [{'transition_id': 't' + sid, 'state_id': sid, 'name': name, 'enabled': True}
-                       for sid, name in self.statuses.items() if sid != deal['status_id']]
+        transitions = deal.get('transitions')
+        if transitions is None:
+            transitions = [{'transition_id': 't' + sid, 'state_id': sid, 'name': name, 'enabled': True}
+                           for sid, name in self.statuses.items() if sid != deal['status_id']]
         return {'id': deal['id'], 'name': deal['description'][:60], 'description': deal['description'],
                 'client': client.get('name') or 'не указан', 'address': deal['address'],
                 'executors': list(deal['executors']), 'status_id': deal['status_id'],
-                'status': self.statuses.get(deal['status_id'], 'не указан'), 'program': 'Продажи',
+                'status': deal.get('status_name') or self.statuses.get(deal['status_id'], 'не указан'), 'program': 'Продажи',
                 'created_at': deal['created_at'], 'price': self.price(deal),
                 'positions_count': len(deal['positions']), 'transitions': transitions}
 
@@ -332,10 +336,14 @@ class FakeMegaplan:
                     'total_count': len(found)}
         if action == 'move_status':
             deal = self._deal(spec)
-            if str(spec.get('state_id')) not in self.statuses:
+            available = {str(item.get('state_id')): item.get('name') for item in (deal.get('transitions') or [])}
+            if str(spec.get('state_id')) not in self.statuses and str(spec.get('state_id')) not in available:
                 raise ValueError('переход недоступен')
             self._write('deal_browser', action, spec)
             deal['status_id'] = str(spec['state_id'])
+            if available:
+                deal['status_name'] = available.get(deal['status_id'])
+                deal['transitions'] = []
             return {'ok': True, 'deal': self.summary(deal)}
         if action == 'search_employees':
             query = str(spec.get('query') or '').casefold()

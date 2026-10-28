@@ -99,7 +99,8 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('выручка 114 000,00 ₽', 'себестоимость 72 000,00 ₽', 'прибыль 42 000,00 ₽', '36,8%',
                         expected='Экономика сделки в понятном формате')
             person.got_document('Рентабельность')
-        self.play(journey, setup=office)
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes, 'Просмотр экономики не должен публиковать файл в CRM')
 
 
 class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
@@ -122,8 +123,8 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office)
 
 
-class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
-    """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
+class EconomicsReadOnlyJourneys(HumanJourneyCase, unittest.TestCase):
+    """Viewing or downloading economics never publishes a file to the CRM."""
 
     @staticmethod
     def economics(person):
@@ -133,49 +134,46 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     def writes(self, stand):
         return [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
 
-    def test_three_presses_write_once_and_always_deliver(self):
+    def test_three_presses_write_nothing_and_always_deliver(self):
         def journey(person):
             yield from open_deal_by_number(person)
             for attempt in range(3):
                 yield from self.economics(person)
                 person.sees('выручка 114 000,00 ₽', expected=f'Нажатие {attempt + 1}: цифры показаны')
                 person.got_document('Рентабельность', expected=f'Нажатие {attempt + 1}: файл пришёл')
-                if attempt:
-                    person.sees('файл в сделке актуален', expected='Без изменений бот не переписал файл и сказал об этом')
         stand = self.play(journey, setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
-    def test_changed_position_publishes_a_new_version(self):
+    def test_changed_position_still_does_not_publish(self):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
             person.stand.crm.deals[DEAL]['positions'][0]['qty'] = 3
             yield from self.economics(person)
-            person.not_sees('файл в сделке актуален', expected='После изменения данных файл обновлён')
         stand = self.play(journey, setup=office)
-        self.assertEqual(2, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
-    def test_restart_without_changes_does_not_rewrite(self):
+    def test_restart_without_changes_does_not_write(self):
         def before(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
         def after(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('файл в сделке актуален')
         stand = self.play([before, after], setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
-    def test_crm_failure_still_delivers_the_file(self):
+    def test_crm_writer_is_not_called_and_file_is_delivered(self):
         def setup(crm):
             office(crm)
             crm.failures[('deal_browser', 'upsert_profitability_file')] = 'Megaplan timeout'
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('выручка 114 000,00 ₽', 'не сохранён в сделке', expected='Цифры и честное предупреждение')
+            person.sees('выручка 114 000,00 ₽', expected='Цифры рассчитаны без записи в CRM')
             person.got_document('Рентабельность', expected='Файл пришёл, несмотря на сбой CRM')
-        self.play(journey, setup=setup)
+        stand = self.play(journey, setup=setup)
+        self.assertEqual(0, len(self.writes(stand)))
 
 
 class ProposalJourneys(HumanJourneyCase, unittest.TestCase):

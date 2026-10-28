@@ -81,7 +81,7 @@ def _strip_deal_ref(value):
 def _invoice_intent(folded, deal_id):
     # «счёт на оплату» names the document; any other «оплат…» asks about money received.
     folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
-    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
+    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|опла(?:т|ч)", folded):
         return None
     missing = () if deal_id else ("deal",)
     if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):

@@ -75,6 +75,17 @@ class HumanFixtureTests(unittest.TestCase):
             self.assertEqual([], problems)
             self.assertEqual(10, result.testsRun)
 
+    def test_snapshot_status_names_do_not_change_synthetic_deal_transitions(self):
+        """A real CRM may use another ID for a same-named status in another program."""
+        with tempfile.TemporaryDirectory() as temporary:
+            crm = FakeMegaplan(temporary)
+            crm.add_client('synthetic-client', 'Иванов')
+            crm.add_deal('990003', 'synthetic-client', 'Кондиционер', status_id='1')
+            human_fixtures.load(crm, {'deals': [{'deal': DEAL, 'client_id': '42'}]})
+
+            transitions = {item['name']: item['state_id'] for item in crm.summary(crm.deals['990003'])['transitions']}
+            self.assertEqual('3', transitions['Закупка'])
+
 
 if __name__ == '__main__':
     unittest.main()

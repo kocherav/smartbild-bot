@@ -3573,13 +3573,14 @@ def format_profitability(deal_id, result):
 
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-    result = build_and_store_profitability(deal_id)
-    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
+    # Viewing economics is a read-only request. Publishing a working copy to
+    # the deal is a separate external effect and must not be hidden behind a
+    # report/view button (QA 28.10).
+    result = run_build_profitability_report(deal_id)
+    if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
-            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
-    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
+    send_message(token, chat_id, format_profitability(deal_id, result), DEAL_ACTIONS_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
@@ -9879,7 +9880,8 @@ def handle_human_workflow(token,chat_id,text):
         if not intent.deal_id:update_deal_ui_state(chat_id,pending='human_payment_deal',human_intent={'name':intent.name});send_message(token,chat_id,'По какой сделке проверить оплату? Укажите номер.');return True
         result=_human_payment_summary(intent.deal_id)
         if not result.get('ok'):send_message(token,chat_id,'Оплата НЕ ПРОВЕРЕНА: '+str(result.get('error')));return True
-        deal=result['deal'];send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nСчетов в Мегаплане: {len(result['invoices'])}, на {bank_money(result['invoice_total'])} ₽.\nПодтверждённых входящих операций, привязанных к сделке: {len(result['operations'])}, на {bank_money(result['paid'])} ₽.\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
+        deal=result['deal'];fully_paid=bool(result['invoices']) and result['remainder'] <= 0
+        send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nОплачена полностью: {'да' if fully_paid else 'нет'}.\nСчетов в Мегаплане: {len(result['invoices'])}, на {bank_money(result['invoice_total'])} ₽.\nПодтверждённых входящих операций, привязанных к сделке: {len(result['operations'])}, на {bank_money(result['paid'])} ₽.\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
     return False
 
 
@@ -10401,7 +10403,7 @@ def main():
             if economics_match:
                 deal_id = economics_match.group(1)
                 send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-                result = build_and_store_profitability(deal_id)
+                result = run_build_profitability_report(deal_id)
                 if result.get("ok"):
                     send_message(token, chat_id, format_profitability(deal_id, result), MAIN_KEYBOARD)
                     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
@@ -11221,7 +11223,7 @@ def main():
         if profitability_deal_id:
             print(f"{LOG_PREFIX} profitability requested for deal {profitability_deal_id}")
             send_typing(token, chat_id)
-            profit_result = build_and_store_profitability(profitability_deal_id)
+            profit_result = run_build_profitability_report(profitability_deal_id)
             if profit_result.get("ok"):
                 profitability_xlsx_path = profit_result["path"]
                 reply = (reply + "\n\n" if reply.strip() else "") + format_profitability(profitability_deal_id, profit_result)
