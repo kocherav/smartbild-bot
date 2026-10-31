@@ -503,6 +503,7 @@ DEALS_KEYBOARD = {
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
+        [{"text": "💳 Счета и оплаты"}],
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
@@ -4244,6 +4245,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value in local_menus:
         title, menu = local_menus[value]
         send_message(token, chat_id, title, menu)
+        return True
+    if value == "💳 Счета и оплаты":
+        deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
+        if not deal_id:
+            send_message(token, chat_id, "Сначала выберите сделку.", DEALS_KEYBOARD)
+        elif _background:
+            send_deal_payment_summary(token, chat_id, deal_id)
+        else:
+            run_background_job(lambda: send_deal_payment_summary(token, chat_id, deal_id), token, chat_id,
+                               operation=f"счета и оплаты:{deal_id}")
         return True
     if value == "⭐ Текущая сделка":
         deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
@@ -9761,6 +9772,34 @@ def _human_payment_summary(deal_id):
             'remainder':invoice_total-paid,'invoices':invoice_rows,'operations':operations}
 
 
+def send_deal_payment_summary(token, chat_id, deal_id):
+    result = _human_payment_summary(deal_id)
+    if not result.get('ok'):
+        send_message(token, chat_id, 'Оплата НЕ ПРОВЕРЕНА: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
+        return
+    issued, paid, remainder = result['invoice_total'], result['paid'], result['remainder']
+    if not result['invoices']:
+        state = 'счета не выставлены'
+    elif paid <= 0:
+        state = 'не оплачено'
+    elif remainder > 0:
+        state = 'частично оплачено'
+    elif remainder == 0:
+        state = 'оплачено полностью'
+    else:
+        state = 'переплата'
+    deal = result['deal']
+    send_message(token, chat_id, (
+        f"Сделка №{deal_id} — {deal.get('client')}.\n"
+        f"Выставлено: {bank_money(issued)} ₽ ({len(result['invoices'])} сч.).\n"
+        f"Оплачено: {bank_money(paid)} ₽ ({len(result['operations'])} опер.).\n"
+        f"Остаток: {bank_money(max(remainder, Decimal('0')))} ₽.\n"
+        f"Состояние: {state}.\n\n"
+        "Источники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. "
+        "Почтовые уведомления без банковской операции не считались."
+    ), DEAL_ACTIONS_KEYBOARD)
+
+
 def has_explicit_deal_economics(text):
     """Return true when a typed spec carries user-owned sale and cost data."""
     value = str(text or '')
@@ -9877,9 +9916,7 @@ def handle_human_workflow(token,chat_id,text):
         return _start_human_executor(token,chat_id,intent.deal_id,intent.target,intent.name)
     if intent.name==human_intents.CHECK_PAYMENT:
         if not intent.deal_id:update_deal_ui_state(chat_id,pending='human_payment_deal',human_intent={'name':intent.name});send_message(token,chat_id,'По какой сделке проверить оплату? Укажите номер.');return True
-        result=_human_payment_summary(intent.deal_id)
-        if not result.get('ok'):send_message(token,chat_id,'Оплата НЕ ПРОВЕРЕНА: '+str(result.get('error')));return True
-        deal=result['deal'];send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nСчетов в Мегаплане: {len(result['invoices'])}, на {bank_money(result['invoice_total'])} ₽.\nПодтверждённых входящих операций, привязанных к сделке: {len(result['operations'])}, на {bank_money(result['paid'])} ₽.\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
+        send_deal_payment_summary(token, chat_id, intent.deal_id);return True
     return False
 
 

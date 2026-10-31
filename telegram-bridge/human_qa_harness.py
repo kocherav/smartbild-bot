@@ -617,7 +617,7 @@ class FakeMegaplan:
 
     def cli_bank_statement(self, action, spec):
         if action == 'list':
-            return {'ok': True, 'transactions': []}
+            return {'ok': True, 'transactions': copy.deepcopy(self.bank_transactions)}
         return None
 
     def cli_morning_brief(self, action, spec):
