@@ -3847,9 +3847,41 @@ def prepare_contract_preview(token, chat_id, deal_id):
     if missing:
         send_message(token, chat_id, "Договор пока нельзя сформировать:\n- " + "\n- ".join(missing), CONTRACT_KEYBOARD)
         return
-    keyboard = {"keyboard": [[{"text": "✅ Сформировать договор"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+    keyboard = {"keyboard": [[{"text": "✅ Сформировать и загрузить Word и PDF"}],
+                             [{"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
     update_deal_ui_state(chat_id,pending='contract_generate_confirm',contract_deal_id=str(deal_id),contract_data_fingerprint=preview.get('fingerprint'))
     send_message(token, chat_id, format_contract_preview(preview) + "\n\nПроверьте данные перед формированием.", keyboard)
+
+
+def upload_generated_contract(token, chat_id, deal_id):
+    generated = current_deal_ui_state(chat_id).get("generated_contract") or {}
+    if generated.get("deal_id") != str(deal_id):
+        send_message(token, chat_id, "Нет подготовленного комплекта договоров для этой сделки.", CONTRACT_KEYBOARD)
+        return False
+    send_message(token, chat_id, f"📤 Загружаю Word и подписанный PDF в сделку №{deal_id}...")
+    result = run_deal_browser({
+        "action": "upload_contracts", "deal_id": str(deal_id),
+        "paths": [generated.get("docx_path"), generated.get("pdf_path")],
+    })
+    if not result.get("ok"):
+        send_message(token, chat_id, f"Не удалось загрузить договоры: {result.get('error')}", CONTRACT_UPLOAD_KEYBOARD)
+        return False
+    filenames = "\n".join(f"- {item.get('name')}" for item in result.get("files") or [])
+    archive_errors = []
+    for contract_path in (generated.get("docx_path"), generated.get("pdf_path")):
+        if not contract_path:
+            continue
+        archived = run_financial_archive({"deal_id": str(deal_id), "path": contract_path,
+                                           "category": "contract_client"})
+        if not archived.get("ok"):
+            archive_errors.append(archived.get("error") or "ошибка OneDrive")
+    cleanup_generated_contract(current_deal_ui_state(chat_id))
+    update_deal_ui_state(chat_id, pending=None, generated_contract=None)
+    archive_notice = ("\n📁 Копии договоров сохранены в финансовом архиве OneDrive."
+                      if not archive_errors else
+                      "\n📁 Договоры загружены в Мегаплан. Передача в OneDrive ещё не подтверждена; исходники сохранены в очереди архива.")
+    send_message(token, chat_id, f"Договоры загружены и подтверждены в сделке №{deal_id}.\n{filenames}{archive_notice}", DEAL_ACTIONS_KEYBOARD)
+    return True
 
 
 OPERATION_TITLES = {'run_create_megaplan_deal':'Создание сделки','run_payer_card_apply':'Привязка плательщика',
@@ -4967,7 +4999,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     contract_actions = {
         "📑 Работа с договором", "📝 Подготовить договор", "👁 Проверить данные договора",
-        "✅ Сформировать договор", "📑 Получить договор", "📎 Получить договор из Мегаплана",
+        "✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF",
+        "📑 Получить договор", "📎 Получить договор из Мегаплана",
         "✅ Загрузить договоры в сделку", "🧾 Выставить счёт по договору", "🏢 Добавить плательщика",
     }
     if value in contract_actions and not deal_id:
@@ -4980,7 +5013,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     slow_values = {
         "🔄 Изменить статус", "✅ Подтвердить", "💰 Экономика",
         "📝 Подготовить договор", "👁 Проверить данные договора",
-        "✅ Сформировать договор", "📑 Получить договор",
+        "✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF", "📑 Получить договор",
         "🧾 Выставить счёт по договору", "✅ Выставить счёт",
         "🧾 Работа со счетами", "📋 Общий счёт по спецификации", "✅ Выставить общий счёт", "📚 Скачать счёт",
         "🧾 Выставить счёт", "🏢 Сменить плательщика", "📤 Отправить по ЭДО",
@@ -6522,7 +6555,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending="contract_invoice_clause", contract_invoice_preview=None)
         send_message(token, chat_id, "По какому пункту последнего загруженного договора выставить счёт?", CONTRACT_INVOICE_CLAUSE_KEYBOARD)
         return True
-    if value == "✅ Сформировать договор" and deal_id:
+    if value in ("✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF") and deal_id:
         cleanup_generated_contract(current_deal_ui_state(chat_id))
         update_deal_ui_state(chat_id, generated_contract=None)
         signer = current_deal_ui_state(chat_id).get("contract_signatory") or {}
@@ -6543,6 +6576,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             "docx_path": result["docx_path"],
             "pdf_path": result["pdf_path"],
         })
+        if value == "✅ Сформировать и загрузить Word и PDF":
+            upload_generated_contract(token, chat_id, deal_id)
+            return True
         send_message(
             token, chat_id,
             f"Оба файла сформированы. Загрузить Word и подписанный PDF в сделку №{deal_id}?",
@@ -6550,33 +6586,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         )
         return True
     if value == "✅ Загрузить договоры в сделку" and deal_id:
-        generated = current_deal_ui_state(chat_id).get("generated_contract") or {}
-        if generated.get("deal_id") != str(deal_id):
-            send_message(token, chat_id, "Нет подготовленного комплекта договоров для этой сделки.", CONTRACT_KEYBOARD)
-            return True
-        send_message(token, chat_id, f"📤 Загружаю Word и подписанный PDF в сделку №{deal_id}...")
-        result = run_deal_browser({
-            "action": "upload_contracts", "deal_id": str(deal_id),
-            "paths": [generated.get("docx_path"), generated.get("pdf_path")],
-        })
-        if not result.get("ok"):
-            send_message(token, chat_id, f"Не удалось загрузить договоры: {result.get('error')}", CONTRACT_UPLOAD_KEYBOARD)
-            return True
-        filenames = "\n".join(f"- {item.get('name')}" for item in result.get("files") or [])
-        archive_errors = []
-        for contract_path in (generated.get("docx_path"), generated.get("pdf_path")):
-            if not contract_path:
-                continue
-            archived = run_financial_archive({"deal_id": str(deal_id), "path": contract_path,
-                                               "category": "contract_client"})
-            if not archived.get("ok"):
-                archive_errors.append(archived.get("error") or "ошибка OneDrive")
-        cleanup_generated_contract(current_deal_ui_state(chat_id))
-        update_deal_ui_state(chat_id, pending=None, generated_contract=None)
-        archive_notice = ("\n📁 Копии договоров сохранены в финансовом архиве OneDrive."
-                          if not archive_errors else
-                          "\n📁 Договоры загружены в Мегаплан. Передача в OneDrive ещё не подтверждена; исходники сохранены в очереди архива.")
-        send_message(token, chat_id, f"Договоры загружены и подтверждены в сделке №{deal_id}.\n{filenames}{archive_notice}", DEAL_ACTIONS_KEYBOARD)
+        upload_generated_contract(token, chat_id, deal_id)
         return True
     if value == "❌ Не загружать" and deal_id:
         cleanup_generated_contract(current_deal_ui_state(chat_id))

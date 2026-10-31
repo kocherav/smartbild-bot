@@ -152,10 +152,9 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
                 person.check('Бот задаёт понятный вопрос о данных договора', screen, answer)
                 yield answer
             person.sees('Договор №', money(total), expected='Предпросмотр договора с суммой сделки')
-            yield press('✅ Сформировать договор')
+            yield press('✅ Сформировать и загрузить Word и PDF')
             person.got_document('.docx')
             person.got_document('.pdf')
-            yield press('✅ Загрузить договоры в сделку')
             person.sees('загружены')
         stand = self.play(journey, setup=self.setup)
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'upload_contracts']))
