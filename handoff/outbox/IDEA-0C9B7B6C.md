@@ -1,5 +1,5 @@
 status: done
-commits: c4b84b8cd3a29d16653b9a1ba3be0560b393f432
+commits: c4b84b81a9ba79ad34d154c5d853162824197b57
 
 # IDEA-0C9B7B6C — КП из позиций сделки
 
