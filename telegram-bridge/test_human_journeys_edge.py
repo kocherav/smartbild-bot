@@ -163,6 +163,27 @@ class PayerEdgeCases(HumanJourneyCase, unittest.TestCase):
 
 
 class InvoiceEdgeCases(HumanJourneyCase, unittest.TestCase):
+    def test_find_existing_invoice_from_money_by_number_client_and_object(self):
+        """IDEA-C00D8A4D: the manager starts where invoices are expected — Money."""
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('№311, Альфа Климат, офис на Тверской')
+            person.got_document('Счёт №311', expected='Найден и получен нужный PDF счёта')
+        stand = self.play(journey, setup=office)
+        actions = [event for event in stand.telegram.events if event.get('actor') == 'tester']
+        self.assertEqual(3, len(actions), 'Новый маршрут должен занимать три действия менеджера')
+        self.assertEqual([], stand.crm.writes, 'Поиск существующего счёта не должен ничего записывать')
+
+    def test_find_existing_invoice_from_money_by_number_only(self):
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('№311')
+            person.got_document('Счёт №311')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
     def test_issue_invoice_by_phrase_to_the_end(self):
         def journey(person):
             yield say('Выстави счёт по сделке 990001')

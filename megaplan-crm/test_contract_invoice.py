@@ -148,6 +148,18 @@ class ContractInvoiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "номер или дата договора"):
             contract_basis("", "22.09.2026")
 
+    def test_find_invoice_number_is_exact_and_reads_all_pages(self):
+        api = Mock()
+        api._call.side_effect = [
+            {'data': [{'id': '1', 'number': '3110', 'deal': {'id': '8'}}],
+             'meta': {'pagination': {'hasMoreNext': True}}},
+            {'data': [{'id': '2', 'number': '311', 'deal': {'id': '9'}}],
+             'meta': {'pagination': {'hasMoreNext': False}}},
+        ]
+        result = ci.find_invoice_number({'number': '311'}, api)
+        self.assertEqual([{'id': '2', 'number': '311', 'deal_id': '9'}], result['invoices'])
+        self.assertEqual('1', api._call.call_args_list[1].kwargs['params']['pageAfter']['id'])
+
 
 if __name__ == "__main__":
     unittest.main()

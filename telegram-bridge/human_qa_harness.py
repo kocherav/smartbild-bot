@@ -438,6 +438,11 @@ class FakeMegaplan:
         return [{'name': p['name'], 'quantity': p['qty'], 'price': p['price']} for p in deal['positions']]
 
     def cli_contract_invoice(self, action, spec):
+        if action == 'find_number':
+            wanted = str(spec.get('number') or '').casefold()
+            found = [{'id': invoice['id'], 'number': invoice['number'], 'deal_id': invoice['deal_id']}
+                     for invoice in self.invoices.values() if str(invoice['number']).casefold() == wanted]
+            return {'ok': True, 'invoices': found}
         deal = self._deal(spec)
         payer = self.payer(deal)
         if action == 'list':

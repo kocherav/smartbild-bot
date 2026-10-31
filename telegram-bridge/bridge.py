@@ -300,6 +300,7 @@ PAYER_TARGET_CONFIRM_KEYBOARD = {
 }
 BANK_MENU_KEYBOARD = {
     "keyboard": [
+        [{"text": "🔎 Найти счёт"}],
         [{"text": "📤 Загрузить выписку"}],
         [{"text": "📩 Банковские уведомления"}],
         [{"text": "🔗 Найти соответствия"}],
@@ -4212,8 +4213,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     # A bound deal button is navigation, never free-form input for whichever
     # wizard happened to be left pending. This boundary must precede every
     # pending handler, including the developer-task prompt.
-    selected_button = re.match(r"^№(\d+)\b", value)
-    if selected_button:
+    # Only an actual deal button (or a bare deal number) opens a card.  A search
+    # phrase such as «№311, Альфа Климат…» must remain input for its pending flow.
+    selected_button = re.fullmatch(r"№(\d+)(?:\s*·.*)?", value)
+    invoice_search_input = current_deal_ui_state(chat_id).get("pending") == "invoice_search"
+    if selected_button and not invoice_search_input:
         selected_id = selected_button.group(1)
         if _background:
             select_deal(token, chat_id, selected_id)
@@ -4995,6 +4999,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         or value in (state.get("transitions") or {})
         or pending_now in ("search_client", "search_address", "get_number", "contract_date", "contract_address",
                            "contract_signatory_authority", "contract_invoice_clause", "invoice_menu", "invoice_download",
+                           "invoice_search",
                            "supplier_invoice_confirm", "supplier_distribution_edit",
                            "supplier_distribution_exclusion_reason")
         or value in slow_values
@@ -5016,6 +5021,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
         send_message(token, chat_id, "Выберите способ поиска сделки.", DEALS_KEYBOARD)
         return True
+
+    if value == "🔎 Найти счёт":
+        update_deal_ui_state(chat_id, pending="invoice_search")
+        send_message(token, chat_id,
+                     "Введите номер счёта, клиента или объект. Можно вместе, например: «№311, Альфа Климат, офис на Тверской».",
+                     {"keyboard": [[{"text": "⬅️ Главное меню"}]], "resize_keyboard": True})
+        return True
+    if pending_now == "invoice_search":
+        update_deal_ui_state(chat_id, pending=None)
+        return find_and_send_megaplan_invoice(token, chat_id, value)
 
     recent = re.fullmatch(r"🕘 (?:Последние )?(5|10|15)", value)
     if recent:
@@ -8530,6 +8545,70 @@ def send_latest_megaplan_invoice(token, chat_id, deal_id, wait_for_creation=Fals
     else:
         send_message(token, chat_id, f"Не удалось получить счёт: {last_error}", DEAL_ACTIONS_KEYBOARD)
     return False
+
+
+def find_and_send_megaplan_invoice(token, chat_id, query):
+    """Find an existing customer invoice by its number and deal context.
+
+    Deal search uses the read-only cached index.  Invoice lists and the selected
+    PDF are then read fresh from Megaplan; this route never creates or changes an
+    invoice.  A supplied invoice number is an exact constraint, while client and
+    object words disambiguate the deal.
+    """
+    raw = str(query or "").strip()
+    invoice_number = None
+    number_match = re.search(r"(?i)(?:№|сч[её]т(?:а|у|ом)?\s*(?:№)?)\s*([\w./-]+)", raw)
+    if number_match:
+        invoice_number = number_match.group(1).strip(".,;: ")
+    deal_query = re.sub(r"(?i)(?:№|сч[её]т(?:а|у|ом)?\s*(?:№)?)\s*[\w./-]+", " ", raw)
+    deal_query = re.sub(r"(?i)\b(?:найди|найти|получи|получить|пришли|сч[её]т|pdf)\b", " ", deal_query)
+    deal_query = re.sub(r"\s*[,;]+\s*|\s+", " ", deal_query).strip(" .")
+    if not deal_query and invoice_number:
+        found = run_contract_invoice({"action": "find_number", "number": invoice_number})
+        matches = [(None, invoice) for invoice in found.get("invoices") or []] if found.get("ok") else []
+        if len(matches) > 1:
+            send_message(token, chat_id, "Найдено несколько счетов с таким номером. Добавьте клиента или объект.", BANK_MENU_KEYBOARD)
+            return True
+        deals = []
+    elif not deal_query:
+        send_message(token, chat_id, "Введите номер счёта, клиента или объект.", BANK_MENU_KEYBOARD)
+        return True
+    else:
+        matches = []
+        deals_result = run_deal_browser({"action": "search_any", "query": deal_query, "limit": 10})
+        deals = deals_result.get("deals") or [] if deals_result.get("ok") else []
+    for deal in deals:
+        listed = run_contract_invoice({"action": "list", "deal_id": str(deal.get("id"))})
+        if not listed.get("ok"):
+            continue
+        for invoice in listed.get("invoices") or []:
+            if invoice_number and str(invoice.get("number") or "").casefold() != invoice_number.casefold():
+                continue
+            matches.append((deal, invoice))
+    if not matches:
+        send_message(token, chat_id, "Подходящий выставленный счёт не найден. Уточните номер, клиента или объект и попробуйте ещё раз.", BANK_MENU_KEYBOARD)
+        return True
+    if len(matches) > 1:
+        exact_numbers = {str(invoice.get("number") or "") for _, invoice in matches}
+        if not invoice_number or len(exact_numbers) > 1:
+            send_message(token, chat_id, "Найдено несколько счетов. Добавьте точный номер счёта к клиенту или объекту.", BANK_MENU_KEYBOARD)
+            return True
+    deal, invoice = matches[0]
+    result = fetch_megaplan_invoice_pdf({"invoiceId": str(invoice["id"])})
+    if not result.get("ok"):
+        send_message(token, chat_id, "Счёт найден, но PDF сейчас получить не удалось: " + str(result.get("error") or "ошибка Мегаплана"), BANK_MENU_KEYBOARD)
+        return True
+    try:
+        sent = send_document(token, chat_id, result["path"], result.get("caption") or f"Счёт №{invoice.get('number')}", result.get("filename"))
+    finally:
+        try:
+            os.remove(result["path"])
+        except OSError:
+            pass
+    send_message(token, chat_id,
+                 "Счёт получен из Мегаплана." if sent is not False else "Счёт найден, но Telegram не принял файл. Попробуйте поиск ещё раз.",
+                 BANK_MENU_KEYBOARD)
+    return True
 
 
 def send_megaplan_invoice_by_id(token, chat_id, invoice_id, keyboard=INVOICE_MENU_KEYBOARD, deal_id=None):
