@@ -36,6 +36,14 @@ def office(crm):
     crm.add_employee('1000011', 'Алексей Смирнов')
 
 
+def office_with_partial_payment(crm):
+    office(crm)
+    crm.bank_transactions.append({
+        'id': 'bank-income-1', 'deal_id': DEAL, 'status': 'assigned',
+        'direction': 'income', 'amount': 50000,
+    })
+
+
 def open_deal_by_number(person, deal_id=DEAL):
     yield press('🤝 Сделки')
     person.sees_button('🔎 Найти сделку')
@@ -92,9 +100,13 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
 
     def test_check_payment_of_deal(self):
         def journey(person):
-            yield say('Оплачена ли сделка 990001?')
-            person.sees('Сделка №990001', 'Остаток по выставленным счетам', expected='Бот ответил по оплате сделки')
-        self.play(journey, setup=office)
+            yield say('Сколько оплачено и какой остаток по выставленным счетам сделки 990001?')
+            person.sees('Сделка №990001', 'Выставлено: 114 000', 'Оплачено: 50 000',
+                        'Остаток по выставленным счетам: 64 000', 'Статус оплаты: частично оплачено',
+                        expected='Один ответ свёл счета и подтверждённые платежи по сделке')
+        stand = self.play(journey, setup=office_with_partial_payment)
+        actions = [event for event in stand.receipt()['transcript'] if event['actor'] == 'tester']
+        self.assertEqual(1, len(actions), 'После изменения менеджеру достаточно одного запроса вместо трёх')
 
 
 class PayerJourneys(HumanJourneyCase, unittest.TestCase):

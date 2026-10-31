@@ -9757,8 +9757,21 @@ def _human_payment_summary(deal_id):
     invoice_total=sum((Decimal(str(item.get('sum') or 0)) for item in invoice_rows),Decimal('0'))
     operations=[item for item in (bank.get('transactions') or []) if str(item.get('deal_id') or '')==str(deal_id) and item.get('status')=='assigned' and item.get('direction')=='income']
     paid=sum((Decimal(str(item.get('amount') or 0)) for item in operations),Decimal('0'))
+    remainder=max(invoice_total-paid,Decimal('0'))
+    if not invoice_rows:
+        payment_status='счета не выставлены'
+    elif paid <= 0:
+        payment_status='не оплачено'
+    elif paid < invoice_total:
+        payment_status='частично оплачено'
+    elif paid == invoice_total:
+        payment_status='оплачено полностью'
+    else:
+        payment_status='оплачено с переплатой'
     return {'ok':True,'deal':deal_result['deal'],'invoice_total':invoice_total,'paid':paid,
-            'remainder':invoice_total-paid,'invoices':invoice_rows,'operations':operations}
+            'remainder':remainder,'payment_status':payment_status,
+            'overpayment':max(paid-invoice_total,Decimal('0')),
+            'invoices':invoice_rows,'operations':operations}
 
 
 def has_explicit_deal_economics(text):
@@ -9879,7 +9892,8 @@ def handle_human_workflow(token,chat_id,text):
         if not intent.deal_id:update_deal_ui_state(chat_id,pending='human_payment_deal',human_intent={'name':intent.name});send_message(token,chat_id,'По какой сделке проверить оплату? Укажите номер.');return True
         result=_human_payment_summary(intent.deal_id)
         if not result.get('ok'):send_message(token,chat_id,'Оплата НЕ ПРОВЕРЕНА: '+str(result.get('error')));return True
-        deal=result['deal'];send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nСчетов в Мегаплане: {len(result['invoices'])}, на {bank_money(result['invoice_total'])} ₽.\nПодтверждённых входящих операций, привязанных к сделке: {len(result['operations'])}, на {bank_money(result['paid'])} ₽.\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
+        deal=result['deal'];overpayment=(f"\nПереплата: {bank_money(result['overpayment'])} ₽." if result['overpayment'] else '')
+        send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nВыставлено: {bank_money(result['invoice_total'])} ₽ ({len(result['invoices'])} сч.).\nОплачено: {bank_money(result['paid'])} ₽ ({len(result['operations'])} подтвержд. поступл.).\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\nСтатус оплаты: {result['payment_status']}.{overpayment}\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
     return False
 
 
