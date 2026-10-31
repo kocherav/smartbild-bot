@@ -184,9 +184,15 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
             yield say('Сделай КП по сделке 990001')
             person.sees('Кому адресовать', expected='Бот спросил адресата КП')
             yield say('Алексей')
+            person.sees('Предпросмотр КП', '2 позиции', '114 000,00', 'монтаж',
+                        expected='Один предпросмотр показал позиции, количества, монтаж и итог')
+            person.check('До подтверждения PDF не создан', person.documents(), not person.documents())
+            yield press('✅ Создать PDF КП')
             person.got_document('КП', expected='Пришёл PDF КП')
             person.sees('2 позиций', '114 000,00', expected='Подпись КП с количеством и суммой')
         stand = self.play(journey, setup=office)
+        actions = [event for event in self.qa_transcript if event['actor'] == 'tester']
+        self.assertEqual(3, len(actions), 'После: запрос, адресат, одно подтверждение; до: 2 действия без preview')
         self.assertEqual(0, len(stand.model.prompts), 'КП по сделке не должно уходить в ИИ')
 
     def test_proposal_from_deal_card(self):
@@ -195,6 +201,7 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('📋 Основное')
             yield press('📄 КП по сделке')
             yield say('Уважаемая Татьяна,')
+            yield press('✅ Создать PDF КП')
             person.got_document('КП')
         self.play(journey, setup=office)
 
@@ -210,8 +217,9 @@ class ReplyContextJourneys(HumanJourneyCase, unittest.TestCase):
                                 'адресата КП. Текущее действие и его кнопки сохранены. Когда закончите, откройте эту '
                                 'сделку и нажмите «📄 КП по сделке».')
             yield reply('Адресат КП - Татьяна', to='№990002')
-            person.sees('КП №990002', 'Адресат: Татьяна', expected='КП собирается по сделке из сообщения, на которое ответили')
+            person.sees('КП по сделке №990002', 'Адресат: Татьяна', expected='КП собирается по сделке из сообщения, на которое ответили')
             person.not_sees('990001', expected='Открытая до этого сделка не подставлена')
+            yield press('✅ Создать PDF КП')
             person.got_document('КП', expected='Пришёл PDF КП')
         stand = self.play(journey, setup=office)
         self.assertEqual(0, len(stand.model.prompts), 'Ответ на уведомление не должен уходить в ИИ')

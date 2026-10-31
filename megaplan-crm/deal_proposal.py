@@ -178,7 +178,27 @@ def save(path, data):
     os.replace(tmp, path)
 
 
-def publish(deal_id, api=None, recipient=None):
+def deal_snapshot(deal_id, api=None):
+    if not str(deal_id).isdigit():
+        raise ValueError('Некорректный номер сделки')
+    api = api or MegaplanAPI()
+    deal = api._call('GET', f'/deal/{deal_id}')['data']
+    from document_tax_policy import settings, require_document_tax
+    if settings().get('companies'):
+        require_document_tax(deal, api)
+    units = {str(x['id']): x['name'] for x in api._call('GET', '/unit')['data']}
+    taxes = {str(x['id']): x['rate'] for x in api._call('GET', '/tax')['data']}
+    data = snapshot(deal, units, taxes)
+    fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return api, data, units, taxes, fingerprint
+
+
+def preview(deal_id, api=None):
+    _api, data, _units, _taxes, fingerprint = deal_snapshot(deal_id, api)
+    return {'ok': True, **data, 'count': len(data['rows']), 'fingerprint': fingerprint}
+
+
+def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
     recipient = ' '.join(str(recipient or '').split())
     if not recipient or len(recipient) > 200:
         raise ValueError('Укажите, кому адресовать КП (до 200 символов)')
@@ -189,12 +209,9 @@ def publish(deal_id, api=None, recipient=None):
     folder.mkdir(parents=True, exist_ok=True)
     with open(folder / 'lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        deal = api._call('GET', f'/deal/{deal_id}')['data']
-        from document_tax_policy import settings,require_document_tax
-        if settings().get('companies'):require_document_tax(deal,api)
-        units = {str(x['id']): x['name'] for x in api._call('GET', '/unit')['data']}
-        taxes = {str(x['id']): x['rate'] for x in api._call('GET', '/tax')['data']}
-        data = snapshot(deal, units, taxes)
+        api, data, units, taxes, preview_fingerprint = deal_snapshot(deal_id, api)
+        if expected_fingerprint and expected_fingerprint != preview_fingerprint:
+            raise ValueError('Сделка изменилась после предпросмотра. Повторите формирование')
         data['date'] = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m.%Y')
         data['recipient'] = recipient
         data['letterhead_sha256'] = hashlib.sha256(LETTERHEAD.read_bytes()).hexdigest()
@@ -314,8 +331,11 @@ if __name__ == '__main__':
             result = scan()
         elif action in ('ack', 'enqueue'):
             result = ack(spec['deal_id'], spec.get('event'), enqueue=action == 'enqueue')
+        elif action == 'preview':
+            result = preview(spec['deal_id'])
         else:
-            result = publish(spec['deal_id'], recipient=spec.get('recipient'))
+            result = publish(spec['deal_id'], recipient=spec.get('recipient'),
+                             expected_fingerprint=spec.get('expected_fingerprint'))
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         # Keep diagnostics useful without sending CRM trace blobs or secrets to chat.
