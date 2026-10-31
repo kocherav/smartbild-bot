@@ -123,7 +123,7 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
-    """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
+    """IDEA-B43E66AF: 3 actions preview; a fourth explicit action publishes."""
 
     @staticmethod
     def economics(person):
@@ -133,27 +133,37 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     def writes(self, stand):
         return [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
 
-    def test_three_presses_write_once_and_always_deliver(self):
+    def test_three_views_never_write_and_always_deliver(self):
         def journey(person):
             yield from open_deal_by_number(person)
             for attempt in range(3):
                 yield from self.economics(person)
                 person.sees('выручка 114 000,00 ₽', expected=f'Нажатие {attempt + 1}: цифры показаны')
                 person.got_document('Рентабельность', expected=f'Нажатие {attempt + 1}: файл пришёл')
-                if attempt:
-                    person.sees('файл в сделке актуален', expected='Без изменений бот не переписал файл и сказал об этом')
+                person.sees('в сделке и архиве ничего не изменено')
+                if attempt < 2:
+                    yield press('⬅️ Назад к сделке')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(self.writes(stand)))
+
+    def test_save_is_a_separate_confirmed_action(self):
+        def journey(person):
+            yield from open_deal_by_number(person)
+            yield from self.economics(person)
+            yield press('✅ Сохранить файл экономики')
+            person.sees('сохранён в сделке')
         stand = self.play(journey, setup=office)
         self.assertEqual(1, len(self.writes(stand)))
 
-    def test_changed_position_publishes_a_new_version(self):
+    def test_changed_data_after_preview_blocks_save(self):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
             person.stand.crm.deals[DEAL]['positions'][0]['qty'] = 3
-            yield from self.economics(person)
-            person.not_sees('файл в сделке актуален', expected='После изменения данных файл обновлён')
+            yield press('✅ Сохранить файл экономики')
+            person.sees('изменились после просмотра', 'Файл не сохранён')
         stand = self.play(journey, setup=office)
-        self.assertEqual(2, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
     def test_restart_without_changes_does_not_rewrite(self):
         def before(person):
@@ -162,9 +172,9 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def after(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('файл в сделке актуален')
+            person.sees('в сделке и архиве ничего не изменено')
         stand = self.play([before, after], setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
     def test_crm_failure_still_delivers_the_file(self):
         def setup(crm):
@@ -173,7 +183,7 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('выручка 114 000,00 ₽', 'не сохранён в сделке', expected='Цифры и честное предупреждение')
+            person.sees('выручка 114 000,00 ₽', 'ничего не изменено')
             person.got_document('Рентабельность', expected='Файл пришёл, несмотря на сбой CRM')
         self.play(journey, setup=setup)
 

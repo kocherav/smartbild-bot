@@ -527,6 +527,10 @@ DEAL_BASIC_KEYBOARD = {"keyboard": [
     [{"text": "📄 Позиции сделки"}, {"text": "📄 КП по сделке"}],
     [{"text": "⬅️ Назад к сделке"}],
 ], "resize_keyboard": True}
+ECONOMICS_PREVIEW_KEYBOARD = {"keyboard": [
+    [{"text": "✅ Сохранить файл экономики"}],
+    [{"text": "⬅️ Назад к сделке"}],
+], "resize_keyboard": True}
 DEAL_DOCUMENTS_KEYBOARD = {"keyboard": [
     [{"text": "📑 Работа с договором"}, {"text": "🧾 Работа со счетами"}],
     [{"text": "📥 Получить счёт"}, {"text": "🧾 Учесть счёт"}],
@@ -3573,13 +3577,15 @@ def format_profitability(deal_id, result):
 
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-    result = build_and_store_profitability(deal_id)
-    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
+    result = run_build_profitability_report(deal_id)
+    if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
-            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
-    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
+    update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending="economics_save_confirm",
+                         economics_preview={"deal_id": str(deal_id), "fingerprint": result.get("data_fingerprint")})
+    note = ("\n\nЭто просмотр: в сделке и архиве ничего не изменено. "
+            "Чтобы опубликовать файл в CRM, нажмите «✅ Сохранить файл экономики».")
+    send_message(token, chat_id, format_profitability(deal_id, result) + note, ECONOMICS_PREVIEW_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
@@ -4272,6 +4278,36 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                 MAIN_KEYBOARD,
             )
             return True
+    if value == '✅ Сохранить файл экономики':
+        state = current_deal_ui_state(chat_id)
+        preview = state.get('economics_preview') or {}
+        if state.get('pending') != 'economics_save_confirm' or not preview.get('deal_id'):
+            send_message(token, chat_id, 'Просмотр устарел. Сначала откройте экономику сделки заново.', DEAL_ACTIONS_KEYBOARD)
+            return True
+        if not _background:
+            run_background_job(lambda: handle_deal_ui(token, chat_id, text, _background=True), token, chat_id,
+                               operation=f'экономика:сохранить:{preview["deal_id"]}')
+            return True
+        result = run_build_profitability_report(preview['deal_id'])
+        if not result.get('ok'):
+            send_message(token, chat_id, 'Файл не сохранён: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
+            return True
+        if result.get('data_fingerprint') != preview.get('fingerprint'):
+            update_deal_ui_state(chat_id, pending=None, economics_preview=None)
+            send_message(token, chat_id, 'Данные сделки изменились после просмотра. Файл не сохранён; откройте экономику заново.', DEAL_ACTIONS_KEYBOARD)
+        else:
+            result = store_profitability_report(preview['deal_id'], result)
+            if result.get('ok'):
+                update_deal_ui_state(chat_id, pending=None, economics_preview=None)
+                note = 'Файл уже был актуален; CRM не перезаписана.' if result.get('unchanged') else 'Файл экономики сохранён в сделке.'
+                send_message(token, chat_id, '✅ ' + note, DEAL_ACTIONS_KEYBOARD)
+            else:
+                send_message(token, chat_id, 'Файл не сохранён: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
+        try:
+            os.remove(result['path'])
+        except (KeyError, OSError):
+            pass
+        return True
     if value == '✅ Заменить позиции подтверждённым КП':
         state = current_deal_ui_state(chat_id)
         if state.get('pending') != 'deal_sync_confirm' or not state.get('deal_sync_spec'):
@@ -7959,6 +7995,11 @@ def build_and_store_profitability(deal_id):
     result = run_build_profitability_report(deal_id)
     if not result.get("ok"):
         return result
+    return store_profitability_report(deal_id, result)
+
+
+def store_profitability_report(deal_id, result):
+    """Publish an already built and explicitly confirmed profitability workbook."""
     stored = run_deal_browser({
         "action": "upsert_profitability_file",
         "deal_id": str(deal_id),
@@ -10400,17 +10441,7 @@ def main():
             economics_match = ECONOMICS_CMD_RE.match(text.strip())
             if economics_match:
                 deal_id = economics_match.group(1)
-                send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-                result = build_and_store_profitability(deal_id)
-                if result.get("ok"):
-                    send_message(token, chat_id, format_profitability(deal_id, result), MAIN_KEYBOARD)
-                    send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
-                    try:
-                        os.remove(result["path"])
-                    except OSError:
-                        pass
-                else:
-                    send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error', 'неизвестная ошибка')}", MAIN_KEYBOARD)
+                send_current_profitability(token, chat_id, deal_id)
                 return
             print(f"{LOG_PREFIX} received: {text[:200]!r}")
 
@@ -11221,10 +11252,13 @@ def main():
         if profitability_deal_id:
             print(f"{LOG_PREFIX} profitability requested for deal {profitability_deal_id}")
             send_typing(token, chat_id)
-            profit_result = build_and_store_profitability(profitability_deal_id)
+            profit_result = run_build_profitability_report(profitability_deal_id)
             if profit_result.get("ok"):
                 profitability_xlsx_path = profit_result["path"]
+                update_deal_ui_state(chat_id, current_deal_id=str(profitability_deal_id), pending="economics_save_confirm",
+                                     economics_preview={"deal_id": str(profitability_deal_id), "fingerprint": profit_result.get("data_fingerprint")})
                 reply = (reply + "\n\n" if reply.strip() else "") + format_profitability(profitability_deal_id, profit_result)
+                reply += "\n\nЭто просмотр: в CRM ничего не изменено. Сохранение — отдельной кнопкой."
             else:
                 reply = (reply + "\n\n" if reply.strip() else "") + f"Не удалось построить экономику: {profit_result.get('error', 'неизвестная ошибка')}"
 
@@ -11300,6 +11334,8 @@ def main():
                                   if invoice_apply_spec.get("unallocated") or
                                      plan.get("suggestions") or plan.get("inventory_remainder")
                                   else SUPPLIER_INVOICE_CONFIRM_KEYBOARD)
+            if profitability_xlsx_path:
+                reply_keyboard = ECONOMICS_PREVIEW_KEYBOARD
             if catalog_task_mode:
                 if not request_is_current():
                     os._exit(0)
