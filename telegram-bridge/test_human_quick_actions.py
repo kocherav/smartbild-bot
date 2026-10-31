@@ -8,6 +8,34 @@ from test_human_journeys import DEAL, office
 
 
 class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_deals_menu_advertises_direct_executor_assignment(self):
+        def legacy_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say('990001')
+            yield press('👤 Назначить исполнителя')
+            yield say('Смирнов')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            yield press('✅ Назначить исполнителя')
+
+        before = self.play(legacy_journey, setup=office)
+        self.assertEqual(8, before.receipt()['actions'], 'кнопочный маршрут — 8 действий')
+
+        def direct_journey(person):
+            yield press('🤝 Сделки')
+            person.sees('Назначь исполнителем сделки 990002 Алексея Смирнова',
+                        expected='На экране сделок виден пример прямой команды')
+            yield say('Назначь исполнителем сделки 990001 Алексея Смирнова')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            yield press('✅ Назначить исполнителя')
+
+        after = self.play(direct_journey, setup=office)
+        self.assertEqual(3, after.receipt()['actions'] - 1,
+                         'после показа подсказки — команда, выбор и подтверждение')
+        self.assertEqual(['Алексей Смирнов'], after.crm.deals[DEAL]['executors'])
+        self.assertEqual(0, len(after.model.prompts), 'Прямая команда не должна уходить в ИИ')
+
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')

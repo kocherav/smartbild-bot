@@ -500,6 +500,11 @@ DEALS_KEYBOARD = {
     ],
     "resize_keyboard": True,
 }
+DEALS_MENU_TEXT = (
+    "Работа со сделками — выберите действие.\n\n"
+    "Можно сразу написать, например:\n"
+    "«Назначь исполнителем сделки 990002 Алексея Смирнова»."
+)
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
@@ -4128,7 +4133,7 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, DEALS_KEYBOARD)
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
@@ -5006,7 +5011,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if value in ("🤝 Сделки", "🤝 Работа со сделками", "/deals"):
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, DEALS_KEYBOARD)
         return True
     if value == "⬅️ Главное меню":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
