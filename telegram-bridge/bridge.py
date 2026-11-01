@@ -500,6 +500,29 @@ DEALS_KEYBOARD = {
     ],
     "resize_keyboard": True,
 }
+
+
+def proposal_resume_label(state):
+    """Return a bound, human-readable action for a complete proposal draft."""
+    draft = (state or {}).get('proposal_draft') or {}
+    deal_id = str(draft.get('deal_id') or '').strip()
+    recipient = ' '.join(str(draft.get('recipient') or '').split())
+    if not deal_id.isdigit() or not recipient:
+        return None
+    # Keep Telegram reply-keyboard labels compact while retaining the full value
+    # in durable UI state. The common short-name case remains unabridged.
+    shown_recipient = recipient if len(recipient) <= 24 else recipient[:23].rstrip() + '…'
+    return f'Продолжить КП: {shown_recipient}, сделка {deal_id}'
+
+
+def deals_keyboard(chat_id):
+    """Deal menu enriched with a resumable proposal without mutating the constant."""
+    label = proposal_resume_label(current_deal_ui_state(chat_id))
+    if not label:
+        return DEALS_KEYBOARD
+    keyboard = dict(DEALS_KEYBOARD)
+    keyboard['keyboard'] = [[{'text': label}]] + [list(row) for row in DEALS_KEYBOARD['keyboard']]
+    return keyboard
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
@@ -4128,7 +4151,7 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, "Работа со сделками — выберите действие.", deals_keyboard(chat_id))
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
@@ -4144,6 +4167,7 @@ def handle_global_navigation(token, chat_id, text):
         update_deal_ui_state(
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
+            **({'proposal_draft': None} if value == '❌ Отмена' else {}),
         )
         text = (
             "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены."
@@ -4358,6 +4382,17 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, f'Кому адресовать КП по сделке №{target}?\nУкажите имя/ФИО или готовое обращение, например: «Уважаемая Татьяна,». Клиента самой сделки это не меняет.', PAYER_UPLOAD_KEYBOARD)
         return True
     proposal_state = current_deal_ui_state(chat_id)
+    resume_label = proposal_resume_label(proposal_state)
+    if resume_label and value == resume_label:
+        draft = proposal_state['proposal_draft']
+        target, recipient = str(draft['deal_id']), draft['recipient']
+        send_message(token, chat_id, f'📄 Возобновляю КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
+        if _background:
+            send_deal_proposal(token, chat_id, target, recipient=recipient)
+        else:
+            run_background_job(lambda: send_deal_proposal(token, chat_id, target, recipient=recipient), token, chat_id,
+                               operation=f'КП по сделке:{target}')
+        return True
     if proposal_state.get('pending') == 'proposal_recipient':
         navigation = {b['text'] for row in DEAL_ACTIONS_KEYBOARD['keyboard'] for b in row}
         navigation |= {'❌ Отмена', '⬅️ Главное меню', '🤝 Работа со сделками', '➕ Создать сделку'}
@@ -4367,7 +4402,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             if not target or not recipient or len(recipient) > 200:
                 send_message(token, chat_id, 'Введите имя/ФИО или обращение длиной до 200 символов.', PAYER_UPLOAD_KEYBOARD)
                 return True
-            update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
+            update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None,
+                                 proposal_draft={'deal_id': str(target), 'recipient': recipient})
             send_message(token, chat_id, f'📄 Формирую КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
             if _background:
                 send_deal_proposal(token, chat_id, target, recipient=recipient)
@@ -5006,7 +5042,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if value in ("🤝 Сделки", "🤝 Работа со сделками", "/deals"):
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, "Работа со сделками — выберите действие.", deals_keyboard(chat_id))
         return True
     if value == "⬅️ Главное меню":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
@@ -5014,7 +5050,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if value == "⬅️ К списку сделок":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Выберите способ поиска сделки.", DEALS_KEYBOARD)
+        send_message(token, chat_id, "Выберите способ поиска сделки.", deals_keyboard(chat_id))
         return True
 
     recent = re.fullmatch(r"🕘 (?:Последние )?(5|10|15)", value)
@@ -7098,6 +7134,10 @@ def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None)
         return False
     caption = f"КП КЛИВЭЛ по сделке №{deal_id}: {result['count']} позиций, {bank_money(result['total'])} ₽. Копия сохранена в сделке."
     sent = send_document(token, chat_id, result['path'], caption)
+    draft = current_deal_ui_state(chat_id).get('proposal_draft') or {}
+    if (sent and str(draft.get('deal_id')) == str(deal_id)
+            and draft.get('recipient') == recipient):
+        update_deal_ui_state(chat_id, proposal_draft=None)
     if sent and automatic:
         run_deal_proposal({'action': 'ack', 'deal_id': str(deal_id)})
     if not sent:
