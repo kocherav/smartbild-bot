@@ -105,6 +105,24 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office)
         self.assertEqual(0, len(stand.model.prompts), 'Список сделок по фразе не должен уходить в ИИ')
 
+    def test_search_result_opens_full_invoice_preview_in_one_action(self):
+        def journey(person):
+            yield say('Покажи 1 сделку с Альфа Климат')
+            person.sees_button('🧾 Запросить общий счёт №990002',
+                               expected='У найденной сделки есть прямое продолжение к предпросмотру счёта')
+            yield press('🧾 Запросить общий счёт №990002')
+            person.sees('Выставить общий счёт по сделке №990002?',
+                        'Плательщик:', 'Сумма:',
+                        expected='Одно нажатие открыло безопасный предпросмотр общего счёта')
+            person.sees_button('✅ Выставить общий счёт',
+                               expected='Хозяйственная запись остаётся за отдельным подтверждением')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(2, stand.receipt()['actions'],
+                         'один поиск и одно действие от результата до предпросмотра')
+        self.assertEqual([], stand.crm.writes, 'Предпросмотр не создаёт счёт')
+        self.assertEqual(0, len(stand.model.prompts))
+
     def test_assistant_list_of_deals_gets_buttons(self):
         listing = ('Нашёл такие сделки:\n\n1. №990001 — Кондиционирование офиса\n   Этап: Заявка\n\n'
                    '2. №990002 — Вентиляция склада\n   Этап: Закупка\n\nСчёт №311 — выставлен.')

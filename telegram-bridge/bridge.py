@@ -3194,7 +3194,13 @@ def deal_essence(deal, limit=90):
 
 
 def deal_selection_keyboard(deals):
-    rows = [[{"text": f"№{d['id']} · {deal_essence(d, 38)}"}] for d in deals]
+    rows = [
+        [
+            {"text": f"№{d['id']} · {deal_essence(d, 38)}"},
+            {"text": f"🧾 Запросить общий счёт №{d['id']}"},
+        ]
+        for d in deals
+    ]
     rows.append([{"text": "⬅️ К списку сделок"}, {"text": "⬅️ Главное меню"}])
     return {"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": True}
 
@@ -4057,6 +4063,7 @@ def handle_global_navigation(token, chat_id, text):
     """
     value = (text or "").strip()
     if (re.match(r"^№\d+\b", value)
+            or re.fullmatch(r"🧾 Запросить общий счёт №\d+", value)
             or re.search(r"(?i)\b(?:перейти|открыть|показать)\w*\b.*\bкарточк\w*\b.*\bсделк\w*\b", value)):
         return handle_deal_ui(token, chat_id, value)
     if value == "🧪 Ошибки тестировщика":
@@ -4209,6 +4216,26 @@ def show_qa_findings(token, chat_id, only_unnotified=False):
 def handle_deal_ui(token, chat_id, text, _background=False):
     """Handle deterministic deal navigation without sending menu commands to the LLM."""
     value = text.strip()
+    invoice_from_search = re.fullmatch(r"🧾 Запросить общий счёт №(\d+)", value)
+    if invoice_from_search:
+        selected_id = invoice_from_search.group(1)
+        if not _background:
+            run_background_job(lambda: handle_deal_ui(token, chat_id, text, _background=True), token, chat_id,
+                               operation=f"сделка:предпросмотр-счёта:{selected_id}")
+            return True
+        preview = run_contract_invoice({'action': 'preview_full', 'deal_id': selected_id})
+        if not preview.get('ok'):
+            send_message(token, chat_id, 'Счёт не подготовлен: ' + invoice_error_text(preview.get('error')),
+                         deal_selection_keyboard([{'id': selected_id, 'description': 'Открыть карточку сделки'}]))
+            return True
+        update_deal_ui_state(chat_id, current_deal_id=selected_id, pending="invoice_full_confirm",
+                             invoice_full_preview=preview, invoice_origin="search")
+        send_message(token, chat_id,
+                     f"Выставить общий счёт по сделке №{selected_id}?\n"
+                     f"Плательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\n"
+                     f"Сумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}",
+                     INVOICE_FULL_CONFIRM_KEYBOARD)
+        return True
     # A bound deal button is navigation, never free-form input for whichever
     # wizard happened to be left pending. This boundary must precede every
     # pending handler, including the developer-task prompt.
