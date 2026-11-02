@@ -40,7 +40,9 @@ class HumanIntentTests(unittest.TestCase):
     def test_payment_variants(self):
         variants = ("Давай проверим, сколько у нас оплачено по сделке №900",
                     "Покажи поступившую оплату по 900 сделке",
-                    "Какой остаток долга по сделке номер 900?")
+                    "Какой остаток долга по сделке номер 900?",
+                    "Сделка 900 оплачена и какой остаток по выставленным счетам?",
+                    "По сделке 900 сколько оплачено и какой остаток по выставленным счетам?")
         for text in variants:
             with self.subTest(text=text): self.assert_intent(text, h.CHECK_PAYMENT, "900")
 

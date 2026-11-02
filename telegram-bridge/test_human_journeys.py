@@ -96,6 +96,27 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('Сделка №990001', 'Остаток по выставленным счетам', expected='Бот ответил по оплате сделки')
         self.play(journey, setup=office)
 
+    def test_qa_payment_check_is_read_only_for_combined_phrasings(self):
+        phrases = (
+            'Сделка 990001 оплачена и какой остаток по выставленным счетам?',
+            'Сделка 990001 оплачена, какой остаток по выставленным счетам?',
+            'По сделке 990001 сколько оплачено и какой остаток по выставленным счетам?',
+        )
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                def journey(person, phrase=phrase):
+                    yield say(phrase)
+                    person.sees(
+                        'Сделка №990001',
+                        'Счетов в Мегаплане: 1, на 114 000,00 ₽',
+                        'Остаток по выставленным счетам: 114 000,00 ₽',
+                        expected='Бот сразу показал read-only сводку по счетам и оплате',
+                    )
+
+                stand = self.play(journey, setup=office)
+                self.assertEqual([], stand.crm.writes, phrase)
+                self.assertEqual([], stand.model.prompts, phrase)
+
 
 class PayerJourneys(HumanJourneyCase, unittest.TestCase):
     def test_change_payer_in_one_phrase(self):
