@@ -187,7 +187,14 @@ def classify(text):
         missing = tuple(x for x, value in (("deal", deal_id), ("installer", target)) if not value)
         return Intent(CHANGE_INSTALLER, deal_id, target, missing=missing)
 
-    if (re.search(r"\b(?:назнач|поменя|замени|смени|долж|сдела)\w*\b", folded)
+    # A passive fact question such as «кто назначен исполнителем?» contains the
+    # same stem as «назначь», but must never open a mutating workflow.  Require
+    # an actual change request (imperative/infinitive or «должен быть»).
+    executor_change = (
+        re.search(r"\b(?:назначь|назначить|назначим|поменя|замени|смени|сдела)\w*\b", folded)
+        or re.search(r"\bисполнител\w*\s+долж\w*\s+быть\b", folded)
+    )
+    if (executor_change
             and re.search(r"\bисполнител", folded)):
         target = _tail(original, (
             r"исполнител\w*\s+сделк\w*\s*(?:№|номер\s*)?\d+[\s,—:-]+(.+?)(?=[.;\n]|$)",

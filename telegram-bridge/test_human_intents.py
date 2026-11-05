@@ -37,6 +37,12 @@ class HumanIntentTests(unittest.TestCase):
         for text in variants:
             with self.subTest(text=text): self.assert_intent(text, h.ASSIGN_EXECUTOR, "900")
 
+    def test_executor_fact_question_is_not_a_change(self):
+        self.assertIsNone(h.classify(
+            "Подскажите по сделке 990001: кто назначен исполнителем, какая сумма сделки, "
+            "сколько в ней позиций и какова их общая себестоимость?"
+        ))
+
     def test_payment_variants(self):
         variants = ("Давай проверим, сколько у нас оплачено по сделке №900",
                     "Покажи поступившую оплату по 900 сделке",

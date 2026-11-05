@@ -123,7 +123,7 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
-    """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
+    """QA 01.11: viewing is read-only; explicit confirmed saving remains idempotent."""
 
     @staticmethod
     def economics(person):
@@ -133,49 +133,67 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     def writes(self, stand):
         return [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
 
-    def test_three_presses_write_once_and_always_deliver(self):
+    def test_three_presses_never_write_and_always_deliver(self):
         def journey(person):
             yield from open_deal_by_number(person)
             for attempt in range(3):
                 yield from self.economics(person)
                 person.sees('выручка 114 000,00 ₽', expected=f'Нажатие {attempt + 1}: цифры показаны')
                 person.got_document('Рентабельность', expected=f'Нажатие {attempt + 1}: файл пришёл')
-                if attempt:
-                    person.sees('файл в сделке актуален', expected='Без изменений бот не переписал файл и сказал об этом')
+                person.sees('в CRM ничего не записано', expected='Просмотр явно обозначен как чтение')
         stand = self.play(journey, setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
-    def test_changed_position_publishes_a_new_version(self):
+    def test_explicit_save_publishes_one_version(self):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.stand.crm.deals[DEAL]['positions'][0]['qty'] = 3
-            yield from self.economics(person)
-            person.not_sees('файл в сделке актуален', expected='После изменения данных файл обновлён')
+            yield press('💾 Сохранить расчёт в CRM')
+            person.sees('Сохранить актуальный файл', expected='Перед записью показано подтверждение')
+            yield press('✅ Сохранить расчёт в CRM')
+            person.sees('сохранён в CRM', expected='Явно подтверждённая запись выполнена')
         stand = self.play(journey, setup=office)
-        self.assertEqual(2, len(self.writes(stand)))
+        self.assertEqual(1, len(self.writes(stand)))
 
-    def test_restart_without_changes_does_not_rewrite(self):
+    def test_repeated_confirmed_save_without_changes_does_not_rewrite(self):
         def before(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
+            yield press('💾 Сохранить расчёт в CRM')
+            yield press('✅ Сохранить расчёт в CRM')
         def after(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('файл в сделке актуален')
+            yield press('💾 Сохранить расчёт в CRM')
+            yield press('✅ Сохранить расчёт в CRM')
+            person.sees('повторной записи не было')
         stand = self.play([before, after], setup=office)
         self.assertEqual(1, len(self.writes(stand)))
 
-    def test_crm_failure_still_delivers_the_file(self):
+    def test_view_ignores_crm_write_failure(self):
         def setup(crm):
             office(crm)
             crm.failures[('deal_browser', 'upsert_profitability_file')] = 'Megaplan timeout'
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('выручка 114 000,00 ₽', 'не сохранён в сделке', expected='Цифры и честное предупреждение')
+            person.sees('выручка 114 000,00 ₽', 'в CRM ничего не записано', expected='Просмотр не вызывает запись')
             person.got_document('Рентабельность', expected='Файл пришёл, несмотря на сбой CRM')
-        self.play(journey, setup=setup)
+        stand = self.play(journey, setup=setup)
+        self.assertEqual(0, len(self.writes(stand)))
+
+
+class DealFactsReadOnlyJourney(HumanJourneyCase, unittest.TestCase):
+    def test_direct_fact_question_answers_without_crm_write(self):
+        def journey(person):
+            yield say('Подскажите по сделке 990001: кто назначен исполнителем, какая сумма сделки, '
+                      'сколько в ней позиций и какова их общая себестоимость?')
+            person.sees('Сергей Деревянко', '114 000,00 ₽', 'Позиций: 2',
+                        'Общая себестоимость позиций: 72 000,00 ₽',
+                        expected='Все факты получены одним read-only ответом')
+            person.not_sees('Кого назначить исполнителем', expected='Вопрос не стал командой изменения')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
 
 
 class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
