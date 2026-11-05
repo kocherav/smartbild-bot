@@ -6,6 +6,7 @@ the way a person checks it (what the bot said, which file arrived) and in the
 CRM double (what was actually written).  Registry: docs/architecture/HUMAN_JOURNEYS.json.
 """
 import unittest
+from datetime import date
 
 from human_qa_harness import HumanJourneyCase, press, say
 
@@ -144,6 +145,16 @@ class PayerJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class InvoiceJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_voice_find_then_invoice_ranks_the_matching_object_first(self):
+        def journey(person):
+            yield say('найди сделку Альфа кондиционирование офиса кабинет 103 и выстави по ней новый счёт сегодняшним числом')
+            person.sees_button('№990001 · Кондиционирование офиса на Тверской')
+        stand = self.play(journey, setup=office)
+        listing = next(item['text'] for item in stand.telegram.events
+                       if item.get('actor') == 'bot' and 'Найденные сделки:' in item.get('text', ''))
+        self.assertLess(listing.index('№990001'), listing.index('№990002'))
+        self.assertEqual([], stand.crm.writes)
+
     def test_issue_full_invoice_from_deal_menu(self):
         def journey(person):
             yield from open_deal_by_number(person)
@@ -157,6 +168,11 @@ class InvoiceJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office)
         created = [w for w in stand.crm.writes if w['action'] == 'create_full']
         self.assertEqual(1, len(created))
+        invoice = max(stand.crm.invoices.values(), key=lambda item: int(item['id']))
+        self.assertEqual(date.today().strftime('%d.%m.%Y'), invoice['date'])
+        document = next(item for item in stand.telegram.events
+                        if item.get('kind') == 'document' and 'Счёт №' in item.get('text', ''))
+        self.assertIn('114 000,00 ₽', document['text'])
 
     def test_issue_stage_invoice_by_contract_clause(self):
         def journey(person):

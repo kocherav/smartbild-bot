@@ -59,6 +59,20 @@ class HumanFixtureTests(unittest.TestCase):
             (root / 'fixtures' / 'crm.json').write_text('{}')
             self.assertIsNone(human_fixtures.verified_snapshot(registry)[0])
 
+    def test_snapshot_preserves_real_transition_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            crm = FakeMegaplan(Path(temporary))
+            snapshot = {'deals': [{'deal': {
+                'id': '1', 'status_id': '129', 'status': 'Новая',
+                'transitions': [{'transition_id': '77', 'state_id': '135',
+                                 'name': 'Закупка', 'enabled': True}]},
+                'client_id': '1', 'client_name': 'Клиент', 'payers': [],
+                'ledger': [], 'invoices': []}]}
+            human_fixtures.load(crm, snapshot)
+            transition = next(item for item in crm.summary(crm.deals['1'])['transitions']
+                              if item['name'] == 'Закупка')
+            self.assertEqual('135', transition['state_id'])
+
     def test_live_journeys_run_on_a_captured_snapshot(self):
         import human_live_journeys
         with tempfile.TemporaryDirectory() as temporary:

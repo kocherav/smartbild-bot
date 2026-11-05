@@ -156,7 +156,7 @@ def load(crm, snapshot):
         crm.add_deal(deal['id'], client_id, deal.get('description') or deal.get('name') or '',
                      status_id=str(deal.get('status_id') or '1'), address=deal.get('address') or '',
                      executors=deal.get('executors') or [], payer_id=selected, positions=positions,
-                     created_at=deal.get('created_at'))
+                     created_at=deal.get('created_at'), transitions=deal.get('transitions') or [])
         for invoice in item.get('invoices') or []:
             amount = float(invoice.get('sum') or 0)
             rows = [{'name': invoice.get('line') or 'Счёт по спецификации', 'qty': 1, 'price': amount}]

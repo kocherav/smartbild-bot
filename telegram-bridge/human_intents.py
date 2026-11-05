@@ -81,12 +81,17 @@ def _strip_deal_ref(value):
 def _invoice_intent(folded, deal_id):
     # «счёт на оплату» names the document; any other «оплат…» asks about money received.
     folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
-    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
+    # Speech recognition and hurried typing commonly glue the words together
+    # («пришлипдфпоследнегосчета»).  An explicit send/download verb plus an
+    # embedded invoice noun is still deterministic; it must not fall through to
+    # payment checking merely because «пришли» starts with «пришл».
+    has_invoice = bool(re.search(r"сч[её]т", folded))
+    if not has_invoice or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
         return None
     missing = () if deal_id else ("deal",)
     if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):
         return Intent(ISSUE_INVOICE, deal_id, missing=missing)
-    if re.search(r"\b(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди|где)\b", folded):
+    if re.search(r"(?:^|\b)(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди|где)", folded):
         return Intent(GET_INVOICE, deal_id, missing=missing)
     return None
 
@@ -208,7 +213,7 @@ def classify(text):
     if invoice:
         return invoice
 
-    if (re.search(r"\b(?:оплачен|оплат|поступил|пришл|долг|остаток)\w*", folded)
+    if (re.search(r"\b(?:оплачен|оплат|поступил|приш[её]л|долг|остаток)\w*", folded)
             and (re.search(r"\bсделк", folded) or (deal_id and len(deal_id) >= 3 and not re.search(r"сч[её]т", folded)))):
         return Intent(CHECK_PAYMENT, deal_id=deal_id,
                       missing=(() if deal_id else ("deal",)))

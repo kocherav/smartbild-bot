@@ -203,14 +203,15 @@ class FakeMegaplan:
         return self.contractors[str(client_id)]
 
     def add_deal(self, deal_id, client_id, description='', status_id='1', address='', executors=(),
-                 payer_id=None, positions=(), contract=None, created_at=None):
+                 payer_id=None, positions=(), contract=None, created_at=None, transitions=None):
         positions = [dict(name=p[0], qty=p[1], price=p[2], cost_material=(p[3] if len(p) > 3 else None),
                           cost_work=(p[4] if len(p) > 4 else None)) for p in positions]
         self.deals[str(deal_id)] = {
             'id': str(deal_id), 'client_id': str(client_id), 'description': description,
             'status_id': str(status_id), 'address': address, 'executors': list(executors),
             'payer_id': str(payer_id) if payer_id else None, 'positions': positions,
-            'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00'}
+            'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00',
+            'transitions': copy.deepcopy(transitions)}
         return self.deals[str(deal_id)]
 
     def add_invoice(self, deal_id, rows, number=None, status='drawn'):
@@ -218,7 +219,8 @@ class FakeMegaplan:
         invoice_id = str(self.next_invoice)
         self.invoices[invoice_id] = {
             'id': invoice_id, 'deal_id': str(deal_id), 'number': number or invoice_id[-3:],
-            'date': '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'date': dt.date.today().strftime('%d.%m.%Y'),
+            'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
             'status': status, 'rows': rows,
             'sum': round(sum(r['qty'] * r['price'] for r in rows), 2)}
         return self.invoices[invoice_id]
@@ -232,8 +234,10 @@ class FakeMegaplan:
 
     def summary(self, deal):
         client = self.contractors.get(deal['client_id']) or {}
-        transitions = [{'transition_id': 't' + sid, 'state_id': sid, 'name': name, 'enabled': True}
-                       for sid, name in self.statuses.items() if sid != deal['status_id']]
+        transitions = deal.get('transitions')
+        if transitions is None:
+            transitions = [{'transition_id': 't' + sid, 'state_id': sid, 'name': name, 'enabled': True}
+                           for sid, name in self.statuses.items() if sid != deal['status_id']]
         return {'id': deal['id'], 'name': deal['description'][:60], 'description': deal['description'],
                 'client': client.get('name') or 'не указан', 'address': deal['address'],
                 'executors': list(deal['executors']), 'status_id': deal['status_id'],
@@ -320,7 +324,14 @@ class FakeMegaplan:
                     return summary['address']
                 return ' '.join([summary['name'] or '', summary['client'], summary['address']])
             words = [w for w in re.split(r'\W+', query) if len(w) > 2] or [query]
-            found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
+            if action == 'search_any':
+                def exact_score(deal):
+                    value = haystack(deal).casefold().replace('ё', 'е')
+                    return sum(min(len(word), 20) for word in words if word in value)
+                found = sorted((d for d in ordered if exact_score(d)),
+                               key=lambda d: (exact_score(d), int(d['id'])), reverse=True)
+            else:
+                found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
             if action == 'search_any' and not found:
                 # Mirrors deal_browser.stem_match_score: case endings ignored.
                 stems = {w[:max(4, len(w) - 2)] for w in words if len(w) >= 4}
@@ -520,8 +531,9 @@ class FakeMegaplan:
             invoice = own[-1]
         path = self.root / f"invoice-{invoice['id']}-{time.monotonic_ns()}.pdf"
         path.write_bytes(b'%PDF-1.4 invoice ' + invoice['id'].encode())
+        amount = f"{invoice['sum']:,.2f}".replace(',', ' ').replace('.', ',')
         return {'ok': True, 'path': str(path), 'filename': f"Счёт №{invoice['number']}.pdf",
-                'caption': f"Счёт №{invoice['number']} от {invoice['date']} на {invoice['sum']:.2f} ₽ (сделка №{invoice['deal_id']})"}
+                'caption': f"Счёт №{invoice['number']} от {invoice['date']} на {amount} ₽ (сделка №{invoice['deal_id']})"}
 
     def cli_megaplan_api(self, action, spec):
         if action == 'search-contractors':
