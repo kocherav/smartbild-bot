@@ -3,7 +3,7 @@ from datetime import date
 from unittest.mock import patch,Mock
 import contract_invoice as ci
 
-from contract_invoice import basis_from_deal, build_invoice_v1_forms, contract_basis, parse_contract, full_invoice_rows
+from contract_invoice import basis_from_deal, build_invoice_v1_forms, confirmed_invoice_date, contract_basis, parse_contract, full_invoice_rows
 
 
 TEXT = """
@@ -16,6 +16,12 @@ TEXT = """
 
 
 class ContractInvoiceTests(unittest.TestCase):
+    def test_confirmation_receipt_is_invoice_date_source(self):
+        self.assertEqual(date(2026, 11, 5), confirmed_invoice_date({
+            'reconcile_confirmed_at': '2026-11-05T21:19:44.441287+00:00'}))
+        with self.assertRaisesRegex(ValueError, 'время подтверждения'):
+            confirmed_invoice_date({'reconcile_confirmed_at': 'not-a-date'})
+
     def test_docx_payment_clauses_separated_by_soft_breaks(self):
         import tempfile
         from pathlib import Path

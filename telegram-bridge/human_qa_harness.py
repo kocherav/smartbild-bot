@@ -213,12 +213,12 @@ class FakeMegaplan:
             'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00'}
         return self.deals[str(deal_id)]
 
-    def add_invoice(self, deal_id, rows, number=None, status='drawn'):
+    def add_invoice(self, deal_id, rows, number=None, status='drawn', invoice_date=None):
         self.next_invoice += 1
         invoice_id = str(self.next_invoice)
         self.invoices[invoice_id] = {
             'id': invoice_id, 'deal_id': str(deal_id), 'number': number or invoice_id[-3:],
-            'date': '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'date': invoice_date or '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
             'status': status, 'rows': rows,
             'sum': round(sum(r['qty'] * r['price'] for r in rows), 2)}
         return self.invoices[invoice_id]
@@ -461,7 +461,10 @@ class FakeMegaplan:
                 return {'ok': False, 'no_effect': True,
                         'error': 'Спецификация, плательщик или наша организация изменены. Подготовьте счёт заново.'}
             self._write('contract_invoice', action, spec)
-            invoice = self.add_invoice(deal['id'], [{'name': r['name'], 'qty': r['quantity'], 'price': r['price']} for r in rows])
+            confirmed = str(spec.get('reconcile_confirmed_at') or '')[:10]
+            invoice_date = dt.date.fromisoformat(confirmed).strftime('%d.%m.%Y') if confirmed else None
+            invoice = self.add_invoice(deal['id'], [{'name': r['name'], 'qty': r['quantity'], 'price': r['price']} for r in rows],
+                                       invoice_date=invoice_date)
             if ('contract_invoice', action) in self.duplicate_after_write:
                 self.add_invoice(deal['id'], copy.deepcopy(invoice['rows']))
             return {'ok': True, 'deal_id': deal['id'], 'invoice_id': invoice['id'], 'invoice_number': invoice['number'],

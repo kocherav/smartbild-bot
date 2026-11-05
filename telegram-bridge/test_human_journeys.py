@@ -154,6 +154,7 @@ class InvoiceJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('✅ Выставить общий счёт')
             person.sees('выставлен', expected='Бот сообщил номер нового счёта')
             person.got_document('Счёт', expected='Пришёл PDF выставленного счёта')
+            person.sees('05.11.2026', expected='Дата PDF взята из квитанции подтверждения')
         stand = self.play(journey, setup=office)
         created = [w for w in stand.crm.writes if w['action'] == 'create_full']
         self.assertEqual(1, len(created))

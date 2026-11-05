@@ -79,14 +79,21 @@ def _strip_deal_ref(value):
 
 
 def _invoice_intent(folded, deal_id):
+    # Voice/phone input often glues the whole document request together. Keep
+    # this conservative: a compact request still needs an explicit deal id,
+    # an invoice noun and a read verb.
+    compact = re.sub(r"[^a-zа-я0-9]", "", folded)
+    compact_get = bool(deal_id and re.search(r"сч[её]т", compact)
+                       and any(verb in compact for verb in (
+                           "пришли", "скинь", "отправ", "покажи", "получ", "скачай")))
     # «счёт на оплату» names the document; any other «оплат…» asks about money received.
     folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
-    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
+    if (not re.search(r"\bсч[её]т", folded) and not compact_get) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
         return None
     missing = () if deal_id else ("deal",)
     if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):
         return Intent(ISSUE_INVOICE, deal_id, missing=missing)
-    if re.search(r"\b(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди|где)\b", folded):
+    if compact_get or re.search(r"\b(?:пришли|скинь\w*|отправ\w*|дай|покажи|получ\w*|скача\w*|достан\w*|найди|где)\b", folded):
         return Intent(GET_INVOICE, deal_id, missing=missing)
     return None
 

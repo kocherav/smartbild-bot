@@ -304,7 +304,7 @@ def normalized_invoice_text(value):
     return ' '.join(str(value or '').split())
 
 
-def verify_created_invoice(api, invoice_id, data, rows, auth=None):
+def verify_created_invoice(api, invoice_id, data, rows, auth=None, invoice_date=None):
     """Read back an issued invoice; safe both after creation and during recovery."""
     from seller_documents import invoice_settings
     recipient_id, template_id = invoice_settings(data['deal_id'])
@@ -320,6 +320,10 @@ def verify_created_invoice(api, invoice_id, data, rows, auth=None):
             or len(invoice.get('rows') or []) != len(rows)
             or normalized_invoice_text(saved.get('PaymentOrderNumber')) != normalized_invoice_text(data['basis'])):
         raise ValueError('Мегаплан создал счёт, но не сохранил требуемые параметры')
+    saved_date = invoice.get('invoiceDate') or {}
+    if invoice_date and (saved_date.get('year'), saved_date.get('month'), saved_date.get('day')) != (
+            invoice_date.year, invoice_date.month - 1, invoice_date.day):
+        raise ValueError('Мегаплан создал счёт, но сохранил неверную дату')
     for actual, expected in zip(invoice['rows'], rows):
         if (normalized_invoice_text(actual.get('name')) != normalized_invoice_text(expected['name'])
                 or Decimal(str(actual.get('quantity'))) != Decimal(str(expected['quantity']))
@@ -334,7 +338,18 @@ def verify_created_invoice(api, invoice_id, data, rows, auth=None):
     return invoice
 
 
-def create_v1_invoice(api, data, rows):
+def confirmed_invoice_date(spec):
+    """Use the confirmation receipt as the source of the user's 'today'."""
+    value = str(spec.get('reconcile_confirmed_at') or '')
+    if not value:
+        return date.today()
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00')).date()
+    except ValueError as exc:
+        raise ValueError('неверное время подтверждения счёта') from exc
+
+
+def create_v1_invoice(api, data, rows, invoice_date=None):
     from seller_documents import invoice_settings
     recipient_id, template_id = invoice_settings(data['deal_id'])
     if (data.get('recipient_id') and data['recipient_id']!=recipient_id) or (data.get('template_id') and data['template_id']!=template_id):
@@ -343,7 +358,7 @@ def create_v1_invoice(api, data, rows):
     if not recipient.get('currentAccount'):
         raise ValueError('У получателя счёта отсутствует расчётный счёт')
     common = {"Model[Recipient]": recipient_id, "Model[Payer]": data["payer_id"],
-              "Model[Consignee]": data["payer_id"], "Model[Date]": date.today().isoformat(),
+              "Model[Consignee]": data["payer_id"], "Model[Date]": (invoice_date or date.today()).isoformat(),
               "Model[InvoiceTemplate]": template_id,
               "Model[PaymentOrderNumber]": data["basis"], "Deal": data["deal_id"]}
     auth = v1_auth(api)
@@ -361,7 +376,7 @@ def create_v1_invoice(api, data, rows):
             v1_call(api, "/BumsInvoiceApiV01/InvoiceRow/save.api", form, auth)
         v1_call(api, "/BumsInvoiceApiV01/Invoice/save.api",
                 {**common, "Model[Status]": 2, "Id": invoice_id}, auth)
-        return verify_created_invoice(api, invoice_id, data, rows, auth)
+        return verify_created_invoice(api, invoice_id, data, rows, auth, invoice_date)
     except Exception as exc:
         if invoice_id:
             # A timeout can happen after issue succeeded. Deleting a potentially
@@ -385,7 +400,8 @@ def create(spec, api):
             raise ValueError(f"счёт по пункту {data['clause']} этого договора уже существует: №{invoice.get('number')}")
     offer = payment_offer(api, data["line"], data["tax_id"])
     invoice = create_v1_invoice(api, data, [{"name": data["line"], "offer_id": offer["id"],
-                                             "quantity": 1, "price": data["amount"], "tax_id": data["tax_id"]}])
+                                             "quantity": 1, "price": data["amount"], "tax_id": data["tax_id"]}],
+                                confirmed_invoice_date(spec))
     if (invoice.get("rows") or [{}])[0].get("name") != data["line"]:
         raise ValueError("Мегаплан изменил текст строки счёта")
     return {**data, "invoice_id": str(invoice["id"]), "invoice_number": invoice.get("number"),
@@ -449,7 +465,7 @@ def create_full(spec, api):
     if spec.get('expected_fingerprint') and data['fingerprint']!=spec['expected_fingerprint']:
         return {'ok':False,'no_effect':True,'error':'Спецификация, плательщик или наша организация изменены. Подготовьте счёт заново.'}
     deal_id=data['deal_id']; rows=data['rows']; basis=data['basis']
-    invoice = create_v1_invoice(api, data, rows)
+    invoice = create_v1_invoice(api, data, rows, confirmed_invoice_date(spec))
     return {"ok": True, "deal_id": deal_id, "invoice_id": str(invoice["id"]),
             "invoice_number": invoice.get("number"), "invoice_status": invoice.get("status"),
             "rows_count": len(rows), "basis": basis,

@@ -123,7 +123,7 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
-    """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
+    """QA-32F2B6B23C6901FEEE80: reading economics never writes a CRM file."""
 
     @staticmethod
     def economics(person):
@@ -133,27 +133,26 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     def writes(self, stand):
         return [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
 
-    def test_three_presses_write_once_and_always_deliver(self):
+    def test_three_presses_never_write_and_always_deliver(self):
         def journey(person):
             yield from open_deal_by_number(person)
             for attempt in range(3):
                 yield from self.economics(person)
                 person.sees('выручка 114 000,00 ₽', expected=f'Нажатие {attempt + 1}: цифры показаны')
                 person.got_document('Рентабельность', expected=f'Нажатие {attempt + 1}: файл пришёл')
-                if attempt:
-                    person.sees('файл в сделке актуален', expected='Без изменений бот не переписал файл и сказал об этом')
+                person.sees('без записи файла', expected='Бот явно сообщил read-only семантику')
         stand = self.play(journey, setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
-    def test_changed_position_publishes_a_new_version(self):
+    def test_changed_position_is_still_read_only(self):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
             person.stand.crm.deals[DEAL]['positions'][0]['qty'] = 3
             yield from self.economics(person)
-            person.not_sees('файл в сделке актуален', expected='После изменения данных файл обновлён')
+            person.sees('без записи файла')
         stand = self.play(journey, setup=office)
-        self.assertEqual(2, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
     def test_restart_without_changes_does_not_rewrite(self):
         def before(person):
@@ -162,9 +161,9 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def after(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('файл в сделке актуален')
+            person.sees('без записи файла')
         stand = self.play([before, after], setup=office)
-        self.assertEqual(1, len(self.writes(stand)))
+        self.assertEqual(0, len(self.writes(stand)))
 
     def test_crm_failure_still_delivers_the_file(self):
         def setup(crm):
@@ -173,7 +172,7 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('выручка 114 000,00 ₽', 'не сохранён в сделке', expected='Цифры и честное предупреждение')
+            person.sees('выручка 114 000,00 ₽', 'без записи файла', expected='Цифры и read-only статус')
             person.got_document('Рентабельность', expected='Файл пришёл, несмотря на сбой CRM')
         self.play(journey, setup=setup)
 

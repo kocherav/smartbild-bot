@@ -3572,14 +3572,14 @@ def format_profitability(deal_id, result):
 
 
 def send_current_profitability(token, chat_id, deal_id):
+    """Read and render current economics without publishing anything to CRM."""
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-    result = build_and_store_profitability(deal_id)
-    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
+    result = run_build_profitability_report(deal_id)
+    if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
-            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
-    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
+    send_message(token, chat_id, format_profitability(deal_id, result) +
+                 "\n\nДанные прочитаны без записи файла в сделку.", DEAL_ACTIONS_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
