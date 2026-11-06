@@ -199,6 +199,37 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
         self.play(journey, setup=office)
 
 
+class ContractSubjectJourneys(HumanJourneyCase, unittest.TestCase):
+    """06.11 (owner, deal 905): the contract subject could not be changed through the bot."""
+
+    def test_change_subject_by_phrase_with_preview_and_button(self):
+        def journey(person):
+            yield say('990002')
+            yield say('Измени в сделке 990001 предмет договора на: поставка и монтаж автоматики котельной')
+            person.sees('Сделка №990001', 'Станет: «Поставка и монтаж автоматики котельной»', 'не записаны',
+                        expected='Предпросмотр с номером сделки до записи')
+            yield press(bridge_confirm())
+            person.sees('✅ Предмет договора в сделке №990001 записан', expected='Записано и подтверждено чтением')
+        stand = self.play(journey, setup=office)
+        self.assertEqual('Поставка и монтаж автоматики котельной', stand.crm.deals[DEAL]['contract_subject'])
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'update_contract_fields']))
+        self.assertEqual(0, len(stand.model.prompts), 'Изменение предмета не должно уходить в ИИ')
+
+    def test_without_number_the_open_deal_is_named_before_writing(self):
+        def journey(person):
+            yield say('990001')
+            yield say('Измени предмет договора на поставка оборудования')
+            person.sees('Сделка №990001', expected='Без номера — открытая сделка, и это видно до записи')
+            yield press('❌ Отмена')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] == 'update_contract_fields'])
+
+
+def bridge_confirm():
+    import bridge
+    return bridge.CONTRACT_SUBJECT_CONFIRM
+
+
 class ReplyContextJourneys(HumanJourneyCase, unittest.TestCase):
     """QA 27.10: «Адресат КП – Татьяна» in reply to the deal №903 notice went to the open deal №890."""
 

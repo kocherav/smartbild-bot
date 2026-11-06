@@ -236,6 +236,7 @@ class FakeMegaplan:
                        for sid, name in self.statuses.items() if sid != deal['status_id']]
         return {'id': deal['id'], 'name': deal['description'][:60], 'description': deal['description'],
                 'client': client.get('name') or 'не указан', 'address': deal['address'],
+                'contract_subject': deal.get('contract_subject') or '',
                 'executors': list(deal['executors']), 'status_id': deal['status_id'],
                 'status': self.statuses.get(deal['status_id'], 'не указан'), 'program': 'Продажи',
                 'created_at': deal['created_at'], 'price': self.price(deal),
@@ -364,13 +365,15 @@ class FakeMegaplan:
             # Mirrors deal_browser.update_contract_fields: date and/or object address,
             # one POST, then the fresh card is read back.
             deal = self._deal(spec)
-            if not spec.get('contract_date') and not spec.get('address'):
-                raise ValueError('не переданы дата договора или адрес объекта')
+            if not spec.get('contract_date') and not spec.get('address') and not spec.get('subject'):
+                raise ValueError('не переданы дата договора, адрес объекта или предмет договора')
             self._write('deal_browser', action, spec)
             if spec.get('address'):
                 deal['address'] = str(spec['address']).strip()
             if spec.get('contract_date'):
                 deal['contract_date'] = str(spec['contract_date'])
+            if spec.get('subject'):
+                deal['contract_subject'] = str(spec['subject']).strip()
             return {'ok': True, 'deal': self.summary(deal)}
         if action == 'upload_contracts':
             deal = self._deal(spec)

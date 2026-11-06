@@ -88,6 +88,7 @@ def summary(d):
         "description": d.get("description") or "",
         "client": contractor.get("name") or " ".join(filter(None, [contractor.get("firstName"), contractor.get("lastName")])) or "не указан",
         "address": d.get("Category1000068CustomFieldAdresObEkta") or "",
+        "contract_subject": d.get("Category1000068CustomFieldPredmetDogovora") or "",
         "executors": ref_names(d.get("Category1000068CustomFieldIspolnitel")),
         "status_id": str(state.get("id")) if state.get("id") is not None else None,
         "status": state.get("name") or "не указан",
@@ -486,8 +487,11 @@ def main():
             }
         if spec.get("address"):
             payload["Category1000068CustomFieldAdresObEkta"] = str(spec["address"]).strip()
+        if spec.get("subject"):
+            # 06.11: the owner could not change the contract subject through the bot.
+            payload["Category1000068CustomFieldPredmetDogovora"] = str(spec["subject"]).strip()
         if len(payload) == 1:
-            raise ValueError("не переданы дата договора или адрес объекта")
+            raise ValueError("не переданы дата договора, адрес объекта или предмет договора")
         api._call("POST", f"/deal/{deal_id}", json_body=payload)
         updated = api._call("GET", f"/deal/{deal_id}")["data"]
         update_cached_deal(updated)
