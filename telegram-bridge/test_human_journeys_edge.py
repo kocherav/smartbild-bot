@@ -246,6 +246,19 @@ class InvoiceEdgeCases(HumanJourneyCase, unittest.TestCase):
         self.assertEqual([], writes(stand, 'create_full'))
 
 
+    def test_long_invoice_write_is_acknowledged_and_double_tap_writes_once(self):
+        # Deal 905 session 06.11: no instant «accepted», the owner pressed again; one retry took 92 s.
+        def journey(person):
+            yield from open_deal_by_number(person)
+            yield press('📄 Документы сделки')
+            yield press('🧾 Работа со счетами')
+            yield press('📋 Общий счёт по спецификации')
+            yield press('✅ Выставить общий счёт')
+            person.sees('⏳ Принято, выполняю', expected='Подтверждение получило мгновенный ответ «принято»')
+            yield press_old('✅ Выставить общий счёт')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, len(writes(stand, 'create_full')), 'Повторное нажатие не создало второй счёт')
+
 class DealCreationVariants(HumanJourneyCase, unittest.TestCase):
     def test_create_deal_for_unknown_client(self):
         def journey(person):
