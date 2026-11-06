@@ -36,6 +36,7 @@ import invoice_continuation
 import order_continuation
 import creation_attachment
 import human_intents
+import net_prefs
 import statement_document_context
 import periodic_schedule
 import qa_schedule
@@ -1591,13 +1592,55 @@ def retry_supplier_invoice_document(token, chat_id, job):
                  SUPPLIER_DISTRIBUTION_KEYBOARD if unallocated else SUPPLIER_INVOICE_CONFIRM_KEYBOARD)
 
 
+TELEGRAM_HEALTH_FILE = os.path.join(BASE_DIR, "telegram_health_state.json")
+TELEGRAM_SLOW_SECONDS = 2.0
+
+
+def record_telegram_health(method, elapsed, failed):
+    """Per-day counts of slow or failed Telegram calls (06.11: 5–40 s delays went unnoticed
+    by the tester for weeks; now they reach the digest)."""
+    if method == "getUpdates" or (not failed and elapsed < TELEGRAM_SLOW_SECONDS):
+        return
+    day = datetime.now(timezone(timedelta(hours=3))).date().isoformat()
+    try:
+        state = durable_json.read(TELEGRAM_HEALTH_FILE, dict)
+        today = state.setdefault(day, {"slow": 0, "failed": 0, "max": 0.0})
+        today["failed" if failed else "slow"] += 1
+        today["max"] = round(max(float(today.get("max") or 0), elapsed), 2)
+        for old in sorted(state)[:-7]:
+            state.pop(old, None)
+        durable_json.save(TELEGRAM_HEALTH_FILE, state)
+    except (OSError, ValueError):
+        pass
+
+
+def telegram_health_line(day=None):
+    day = day or datetime.now(timezone(timedelta(hours=3))).date().isoformat()
+    try:
+        today = durable_json.read(TELEGRAM_HEALTH_FILE, dict).get(day) or {}
+    except (OSError, ValueError):
+        return ""
+    if not today.get("slow") and not today.get("failed"):
+        return ""
+    return (f"📶 Связь бота с Telegram сегодня: медленных ответов (> {TELEGRAM_SLOW_SECONDS:g} с) — "
+            f"{today.get('slow', 0)}, сбоев — {today.get('failed', 0)}, самый долгий — "
+            f"{float(today.get('max') or 0):g} с. Тестировщик и разработчик разбирают.")
+
+
 def tg_api(token, method, params=None, timeout=40):
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = None
     if params is not None:
         data = urllib.parse.urlencode(params).encode()
-    with urllib.request.urlopen(url, data=data, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(url, data=data, timeout=timeout) as resp:
+            answer = json.loads(resp.read().decode())
+    except Exception:
+        record_telegram_health(method, time.monotonic() - started, True)
+        raise
+    record_telegram_health(method, time.monotonic() - started, False)
+    return answer
 
 
 def get_offset():
@@ -9453,7 +9496,9 @@ def qa_night_plan(schedule=None):
 
 def send_owner_digest(token, chat_id, schedule=None, now=None):
     """Evening digest; then new ideas with decision buttons; on Fridays the week's ideas."""
-    send_message(token, chat_id, qa_autopilot.digest(now=now) + "\n\n" + qa_night_plan(schedule), MAIN_KEYBOARD)
+    health = telegram_health_line()
+    send_message(token, chat_id, qa_autopilot.digest(now=now) + ("\n\n" + health if health else "")
+                 + "\n\n" + qa_night_plan(schedule), MAIN_KEYBOARD)
     try:
         waiting = qa_ideas.register(qa_ideas.recent(qa_handoff._read(qa_handoff.PRODUCTION_STATE), now), now=now)
         if waiting:
@@ -9991,6 +10036,7 @@ def main():
     offset = get_offset()
     configure_bot_commands(token)
 
+    net_prefs.install()
     print(f"{LOG_PREFIX} started, session_id={session_id}, offset={offset}")
     announce_reload(token, authorized_chat_id)
     report_interrupted_operations(token, interrupted_operations)
