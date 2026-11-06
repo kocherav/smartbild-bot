@@ -15,6 +15,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import net_prefs
+
+# 06.11: an IPv6 route that does not answer cost a full timeout before IPv4 was tried.
+net_prefs.install()
+
 DB = os.path.join(os.path.dirname(__file__), 'megaplan_transport.sqlite3')
 MINUTE_LIMIT = 20
 HOUR_LIMIT = 600
