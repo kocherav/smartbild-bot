@@ -3773,8 +3773,10 @@ def record_operation_timing(operation, elapsed_seconds, chat_id="", outcome="ok"
         print(f"{LOG_PREFIX} slow-operation log failed: {error}", file=sys.stderr)
 
 
-def run_background_job(job, token, chat_id, operation="background", allow_stale=False):
+def run_background_job(job, token, chat_id, operation="background", allow_stale=False, write=False):
     """Fork one bounded CRM/report job so Telegram polling never waits on network I/O."""
+    if write:
+        send_message(token, chat_id, f"⏳ Принято, выполняю: {operation}…")
     pid = os.fork()
     if pid == 0:
         started = time.monotonic()
@@ -3956,7 +3958,8 @@ def prepare_contract_preview(token, chat_id, deal_id):
         send_message(token, chat_id, "Договор пока нельзя сформировать:\n- " + "\n- ".join(missing), CONTRACT_KEYBOARD)
         return
     keyboard = {"keyboard": [[{"text": "✅ Сформировать договор"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
-    update_deal_ui_state(chat_id,pending='contract_generate_confirm',contract_deal_id=str(deal_id),contract_data_fingerprint=preview.get('fingerprint'))
+    update_deal_ui_state(chat_id,pending='contract_generate_confirm',contract_deal_id=str(deal_id),
+                         contract_data_fingerprint=preview.get('fingerprint'),contract_preview=preview)
     send_message(token, chat_id, format_contract_preview(preview) + "\n\nПроверьте данные перед формированием.", keyboard)
 
 
@@ -5589,7 +5592,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             'expected_fingerprint':prepared.get('fingerprint'), 'reconcile_total':prepared.get('amount'),
             'reconcile_lines':[prepared.get('line')], 'reconcile_confirmed_at':datetime.now(timezone.utc).isoformat()})
         if not result.get("ok"):
-            send_message(token, chat_id, f"Не удалось выставить счёт: {result.get('error')}", CONTRACT_INVOICE_CONFIRM_KEYBOARD)
+            keyboard=INVOICE_RECONCILE_KEYBOARD if result.get('uncertain') else CONTRACT_INVOICE_CONFIRM_KEYBOARD
+            send_message(token, chat_id, f"Не удалось выставить счёт: {result.get('error')}", keyboard)
             return True
         update_deal_ui_state(chat_id, pending="invoice_menu" if state.get("invoice_origin") == "menu" else None, contract_invoice_preview=None, invoice_origin=None)
         send_message(token, chat_id, f"Счёт №{result.get('invoice_number') or result['invoice_id']} выставлен и привязан к сделке №{deal_id}.", return_keyboard)
@@ -5908,6 +5912,14 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value == "📤 Отправить по ЭДО":
         return send_offered_edo(token, chat_id, state)
     if value in ("🧾 Работа со счетами", "🧾 Выставить счёт") and deal_id:
+        unresolved=[op for op in WorkflowStore(WORKFLOW_DB_FILE).unresolved(str(chat_id))
+                    if str(op.get('scenario') or '') in ('run_contract_invoice:create','run_contract_invoice:create_full')
+                    and str((op.get('target') or {}).get('deal_id') or '')==str(deal_id)]
+        if unresolved:
+            store=WorkflowStore(WORKFLOW_DB_FILE)
+            for operation in unresolved:
+                _send_invoice_reconciliation(token,chat_id,_readback_interrupted_invoice(store,operation))
+            return True
         update_deal_ui_state(chat_id, pending="invoice_menu", invoice_downloads=None)
         send_message(token, chat_id, "Работа со счетами — можно выставить общий счёт, счёт по отдельному этапу оплаты или скачать любой ранее созданный счёт.", INVOICE_MENU_KEYBOARD)
         return True
@@ -6630,6 +6642,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending="contract_invoice_clause", contract_invoice_preview=None)
         send_message(token, chat_id, "По какому пункту последнего загруженного договора выставить счёт?", CONTRACT_INVOICE_CLAUSE_KEYBOARD)
         return True
+    if value == "🔄 Обновить предпросмотр" and deal_id:
+        prepare_contract_preview(token, chat_id, deal_id)
+        return True
     if value == "✅ Сформировать договор" and deal_id:
         cleanup_generated_contract(current_deal_ui_state(chat_id))
         update_deal_ui_state(chat_id, generated_contract=None)
@@ -6641,6 +6656,19 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                        "customer_signatory_payer_id": signer_payer_id,
                                        "expected_fingerprint":current_deal_ui_state(chat_id).get('contract_data_fingerprint')})
         if not result.get("ok"):
+            if result.get('no_effect') and 'изменил' in str(result.get('error') or ''):
+                refreshed=run_contract_builder({'action':'preview','deal_id':deal_id,
+                    'customer_signatory':signer,'customer_signatory_payer_id':signer_payer_id})
+                before=current_deal_ui_state(chat_id).get('contract_preview') or {}
+                after=refreshed.get('preview') or {}
+                labels={'date':'Дата','payer_name':'Плательщик','address':'Объект','subject':'Предмет',
+                        'equipment':'Оборудование','materials':'Материалы','works':'Работы и услуги','total':'Итого'}
+                changes=[f"{labels[k]}: {before.get(k)} → {after.get(k)}" for k in labels
+                         if before.get(k)!=after.get(k)]
+                update_deal_ui_state(chat_id,pending='contract_preview_refresh')
+                send_message(token,chat_id,'Данные изменились после просмотра:\n'+'\n'.join(changes or ['Изменилась версия данных договора.']),
+                    {'keyboard':[[{'text':'🔄 Обновить предпросмотр'}]],'resize_keyboard':True,'one_time_keyboard':True})
+                return True
             details = "\n- " + "\n- ".join(result.get("missing") or []) if result.get("missing") else ""
             send_message(token, chat_id, f"Не удалось сформировать договор: {result.get('error')}{details}", CONTRACT_KEYBOARD)
             return True
@@ -11775,8 +11803,11 @@ def main():
                     or (human_route and human_route.name != human_intents.CREATE_DEAL)
                     or human_pending
                     or str(current_deal_ui_state(chat_id).get('pending') or '').startswith('payer_')):
+                callback_label=str(msg.get('text') or '')
+                is_write=bool(msg.get('_workflow_callback') and callback_label.startswith(('✅','💾','📤')))
                 run_background_job(lambda: process_business_message(msg,chat_id,is_owner,is_installer), token,chat_id,
-                                   operation='получение файла/плательщик', allow_stale=True)
+                                   operation=callback_label or 'получение файла/плательщик', allow_stale=True,
+                                   write=is_write)
             else:
                 run_foreground(lambda: process_business_message(msg,chat_id,is_owner,is_installer))
 
