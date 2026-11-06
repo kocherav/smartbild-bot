@@ -9,6 +9,11 @@ from workflow_runtime import Store
 
 
 class IntegrationTest(unittest.TestCase):
+    def test_background_write_is_acknowledged_before_fork(self):
+        with patch.object(bridge,'send_message') as send,patch.object(bridge.os,'fork',return_value=123):
+            bridge.run_background_job(lambda:None,'token','owner',operation='Клиентский счёт',write=True)
+        self.assertIn('⏳ Принято, выполняю',send.call_args.args[2])
+        self.assertIn('Клиентский счёт',send.call_args.args[2])
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

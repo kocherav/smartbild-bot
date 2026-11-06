@@ -1,5 +1,5 @@
 """Explicit creation instructions survive separate attachment/model turns."""
-import json,re
+import json,re,uuid
 import human_intents
 
 def explicit(text):
@@ -12,6 +12,8 @@ def initial_state(text):
     if intent and intent.name==human_intents.CREATE_DEAL and intent.target:
         spec['client_name']=intent.target
     return {'deal_creation_active':True,'deal_creation_request':text,
+            'deal_creation_request_id':uuid.uuid4().hex,
+            'deal_creation_text_spec':None,'deal_creation_source_path':None,
             'deal_create_spec':spec,'deal_creation_items':None,'deal_creation_result':None,
             'deal_creation_economics_path':None,'deal_create_clients':None,
             'current_deal_id':None,'contract_deal_id':None,'pending':'deal_create_items'}

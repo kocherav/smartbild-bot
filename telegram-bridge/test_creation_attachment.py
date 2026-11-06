@@ -8,6 +8,11 @@ TODAY_REQUEST=('Создай по этому счёту новую сделку 
                'светильники. Закупочную цену возьми из счёта. Продажную цену я пока не указал.')
 
 class CreationAttachmentTests(unittest.TestCase):
+ def test_new_request_has_new_identity_and_clears_every_previous_draft_field(self):
+  first=route.initial_state('создай сделку A');second=route.initial_state('создай сделку B')
+  self.assertNotEqual(first['deal_creation_request_id'],second['deal_creation_request_id'])
+  for field in ('deal_creation_text_spec','deal_creation_source_path','deal_creation_result'):
+   self.assertIn(field,second);self.assertIsNone(second[field])
  def test_saved_instruction(self):
   s=route.initial_state(REQUEST)
   self.assertEqual(s['deal_create_spec']['client_name'],'Jet car')
