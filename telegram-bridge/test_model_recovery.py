@@ -7,7 +7,9 @@ class ModelRecoveryTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
   self.session=self.root/'session';self.session.write_text('stale-thread')
-  self.patches=[patch.object(bridge,'SESSION_FILE',str(self.session)),patch.object(bridge,'MODEL_FAILURES_FILE',str(self.root/'failures.json')),patch.object(bridge,'UI_CONTEXT',SimpleNamespace(chat_id='owner'))]
+  # A thread of today under the current rules: resumed (06.11 rotation keeps it).
+  (self.root/'thread.json').write_text(json.dumps({'key':bridge.assistant_thread_key(),'thread':'stale-thread'}))
+  self.patches=[patch.object(bridge,'SESSION_FILE',str(self.session)),patch.object(bridge,'SESSION_META_FILE',str(self.root/'thread.json')),patch.object(bridge,'MODEL_FAILURES_FILE',str(self.root/'failures.json')),patch.object(bridge,'UI_CONTEXT',SimpleNamespace(chat_id='owner'))]
   for p in self.patches:p.start()
  def tearDown(self):
   for p in reversed(self.patches):p.stop()

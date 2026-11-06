@@ -59,6 +59,7 @@ OFFSET_FILE = os.path.join(BASE_DIR, "offset.txt")
 PROCUREMENT_WATCH_FILE = os.path.join(BASE_DIR, "procurement_status_watch.json")
 PENDING_TRANSITIONS_FILE = os.path.join(BASE_DIR, "pending_deal_transitions.json")
 SESSION_FILE = os.path.join(BASE_DIR, "session_id.txt")
+SESSION_META_FILE = os.path.join(BASE_DIR, "session_thread_state.json")
 DEVELOPER_SESSION_FILE = os.path.join(BASE_DIR, "developer_session_id.txt")
 DEAL_UI_STATE_FILE = os.path.join(BASE_DIR, "deal_ui_state.json")
 DEAL_UI_STATE_LOCK_FILE = os.path.join(BASE_DIR, "deal_ui_state.lock")
@@ -786,7 +787,15 @@ INSTALLATION_CASH_CONFIRM_KEYBOARD = {
     "resize_keyboard": True, "one_time_keyboard": True,
 }
 
-SYSTEM_PROMPT = """Дополнительный контекст: на сервере claude.smartbild.su через rclone
+SYSTEM_PROMPT = """Запись в Мегаплан из этого диалога невозможна по правилам безопасности: ты только читаешь.
+Если человек просит что-то изменить в сделке, не пиши «соединение недоступно» и не проси «Да» —
+это не поможет. Скажи прямо, что изменение делается кнопкой бота с предпросмотром, и назови путь:
+предмет договора — фразой «Измени в сделке N предмет договора на …»; плательщик — «Смени плательщика
+в сделке N на …»; статус — «Переведи сделку N в …»; счёт — «Выстави счёт по сделке N»; договор —
+«📄 Документы сделки» → «📑 Работа с договором». Всегда называй номер сделки, о которой говоришь,
+и не подставляй сделку из прошлого разговора, если человек назвал другую или не назвал никакую.
+
+Дополнительный контекст: на сервере claude.smartbild.su через rclone
 смонтированы локальные папки OneDrive: ~/OneDrive-SmartBild, ~/OneDrive-Rabota,
 ~/OneDrive-Documenty — это обычные пути на диске, доступные через Read/Glob/Grep,
 а не облачный коннектор. Все материалы проекта SmartBild.pro (брендбук, логотипы,
@@ -3247,6 +3256,62 @@ def select_deal(token, chat_id, deal_id):
         values["installation_deal_id"] = None
     update_deal_ui_state(chat_id, **values)
     send_message(token, chat_id, format_deal_card(deal), DEAL_ACTIONS_KEYBOARD)
+    return True
+
+
+CONTRACT_SUBJECT_RE = re.compile(
+    r"(?i)\b(?:измени|поменяй|смени|исправь|укажи|задай|поставь|замени)\w*\b[^\n]*?\bпредмет\w*\s+договор\w*"
+    r"\s*(?:на|:|—|–|-)\s*(?P<subject>.+?)\s*[.!]?\s*$"
+)
+CONTRACT_SUBJECT_CONFIRM = "✅ Записать предмет договора"
+
+
+def handle_contract_subject(token, chat_id, text):
+    """«Измени в сделке 905 предмет договора на …» (06.11: the owner could not do it; the
+    assistant, which cannot write, answered «соединение недоступно» and picked deal №865)."""
+    value = (text or "").strip()
+    state = current_deal_ui_state(chat_id)
+    if value == CONTRACT_SUBJECT_CONFIRM and state.get("pending") == "contract_subject_confirm":
+        saved = state.get("contract_subject") or {}
+        update_deal_ui_state(chat_id, pending=None, contract_subject=None)
+        run_background_job(lambda: write_contract_subject(token, chat_id, saved), token, chat_id,
+                           operation=f"предмет договора:{saved.get('deal_id')}")
+        return True
+    match = CONTRACT_SUBJECT_RE.search(value)
+    if not match:
+        return False
+    subject = match.group("subject").strip(" «»\":—–-")
+    subject = subject[:1].upper() + subject[1:]
+    deal_id = human_intents._deal_id(value) or state.get("current_deal_id")
+    if not deal_id:
+        send_message(token, chat_id, "Для какой сделки? Напишите, например: «Измени в сделке 905 предмет договора на …».",
+                     DEALS_KEYBOARD)
+        return True
+    if not subject or len(subject) > 300:
+        send_message(token, chat_id, "Напишите новый предмет договора после слова «на», до 300 знаков.")
+        return True
+    found = run_deal_browser({"action": "get_cached", "deal_id": str(deal_id)}, timeout=8)
+    deal = found.get("deal") or {}
+    current = deal.get("contract_subject") or "не заполнен (в договор идёт суть сделки)"
+    update_deal_ui_state(chat_id, pending="contract_subject_confirm", current_deal_id=str(deal_id),
+                         contract_subject={"deal_id": str(deal_id), "subject": subject})
+    send_message(token, chat_id,
+                 f"Сделка №{deal_id}" + (f" — {deal_essence(deal, 60)}" if deal else "") +
+                 f"\nПредмет договора сейчас: {current}\nСтанет: «{subject}»\n\nДанные ещё не записаны.",
+                 {"keyboard": [[{"text": CONTRACT_SUBJECT_CONFIRM}], [{"text": "❌ Отмена"}]], "resize_keyboard": True})
+    return True
+
+
+def write_contract_subject(token, chat_id, saved):
+    deal_id, subject = saved.get("deal_id"), saved.get("subject")
+    result = run_deal_browser({"action": "update_contract_fields", "deal_id": str(deal_id), "subject": subject})
+    written = (result.get("deal") or {}).get("contract_subject")
+    if not result.get("ok") or (written is not None and written.strip() != subject.strip()):
+        send_message(token, chat_id, f"Предмет договора в сделке №{deal_id} НЕ записан: "
+                     f"{result.get('error') or 'Мегаплан вернул другое значение'}. Повторите позже.", DEAL_ACTIONS_KEYBOARD)
+        return False
+    send_message(token, chat_id, f"✅ Предмет договора в сделке №{deal_id} записан: «{subject}».\n"
+                 "Договор: «📄 Документы сделки» → «📑 Работа с договором».", DEAL_ACTIONS_KEYBOARD)
     return True
 
 
@@ -8988,9 +9053,25 @@ def _model_failure(prompt, kind, mode):
     return model_recovery.ModelUnavailable(model_recovery.failure_message(kind, mode), kind, ident)
 
 
+def assistant_thread_key():
+    """A thread lives one Moscow day and one version of the rules (06.11: a weeks-long
+    thread was slow, recalled deal №865 instead of №905 and never saw new rules)."""
+    day = datetime.now(timezone(timedelta(hours=3))).date().isoformat()
+    return day + ":" + hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()[:12]
+
+
+def current_assistant_thread():
+    if not os.path.exists(SESSION_FILE):
+        return ""
+    meta = durable_json.read(SESSION_META_FILE, dict)
+    if meta.get("key") != assistant_thread_key():
+        return ""
+    return open(SESSION_FILE).read().strip()
+
+
 def ask_claude(session_id, prompt):
     """Resume valid chat threads; preserve failures rather than blaming user input."""
-    session_id = open(SESSION_FILE).read().strip() if os.path.exists(SESSION_FILE) else ""
+    session_id = current_assistant_thread()
     model_recovery.begin_request(MODEL_FAILURES_FILE, _model_chat_id(), prompt, "chat")
     try:
         result = _run_codex(session_id, prompt)
@@ -9011,6 +9092,7 @@ def ask_claude(session_id, prompt):
     if new_thread_id and new_thread_id != session_id:
         with open(SESSION_FILE, "w") as f:
             f.write(new_thread_id)
+        durable_json.save(SESSION_META_FILE, {"key": assistant_thread_key(), "thread": new_thread_id})
     model_recovery.mark_answered(MODEL_FAILURES_FILE, _model_chat_id(), prompt, "chat")
     return out
 
@@ -10331,6 +10413,8 @@ def main():
                 return
             if is_owner and handle_explicit_deal_comparison(token, chat_id, text):
                 return
+            if is_owner and handle_contract_subject(token, chat_id, text):
+                return
             if is_owner and handle_explicit_deal_read(token, chat_id, text):
                 return
             if is_owner and handle_deal_search_phrase(token, chat_id, text):
@@ -10591,6 +10675,11 @@ def main():
         if creation_document_mode:
             text += '\n\n[СОХРАНЁННЫЙ ЧЕРНОВИК — НЕ БРАТЬ ДАННЫЕ ДРУГОЙ СДЕЛКИ]\n' + json.dumps(creation_state.get('deal_create_spec') or {},ensure_ascii=False)
         reply = ask_fresh_document_model(text) if supplier_invoice_mode or creation_document_mode else ask_current_model(text)
+        if isinstance(reply, str) and not reply.strip():
+            # 06.11: an empty assistant answer left the owner without any reply to a PDF.
+            reply = ("Не получилось ответить: ассистент вернул пустой ответ. Ничего не записано. "
+                     "Повторите сообщение или напишите, что сделать с файлом, например «создай сделку по этой "
+                     "спецификации», — файл повторно присылать не нужно.")
         model_elapsed = round(time.monotonic() - model_started, 2)
         if creation_document_mode and (
                 not request_is_current()

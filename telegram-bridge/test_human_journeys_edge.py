@@ -111,6 +111,14 @@ class UnsupportedInputJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual([], stand.crm.writes)
 
 
+    def test_empty_assistant_answer_is_not_silence(self):
+        # 06.11: after a PDF the assistant returned an empty answer and the owner got nothing.
+        def journey(person):
+            yield say('Подбери, пожалуйста, вариант кондиционирования для серверной')
+            person.answered('Бот ответил, даже если ассистент промолчал')
+            person.not_sees('Traceback')
+        self.play(journey, setup=office, model_rules=[('серверной', ' ')])
+
 class PayerEdgeCases(HumanJourneyCase, unittest.TestCase):
     def test_unknown_payer_name_shows_choices(self):
         def journey(person):
