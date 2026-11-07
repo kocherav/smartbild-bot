@@ -1,5 +1,5 @@
 status: done
-commits: da9544283a0e937e20fa997fdc2dc48ab003359e
+commits: da95442aa91ef3507b05e04f298c4d6b53ab888b
 branch: handoff/IDEA-DF04D6C4
 
 Что сделано:
@@ -18,7 +18,7 @@ branch: handoff/IDEA-DF04D6C4
 - Browser runner: N/A, web-пульт не изменялся.
 
 Статусы:
-- Реализовано: да, commit `da9544283a0e937e20fa997fdc2dc48ab003359e`, опубликован в GitHub.
+- Реализовано: да, commit `da95442aa91ef3507b05e04f298c4d6b53ab888b`, опубликован в GitHub.
 - Проверено изолированно: да, СИНТЕТИЧЕСКИЙ Human Journey и полный offline gate.
 - Выпущено: нет; это `kind: code`, merge в `main` и safe reload не выполнялись.
 - Подтверждено в работающей системе: нет; живой Telegram/CRM-маршрут не запускался.
