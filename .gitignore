@@ -71,3 +71,6 @@ telegram-bridge/watcher_schedule.json
 # is for customer files).
 !handoff/inbox/
 !handoff/outbox/
+
+# quality_gate.py --run receipts (runtime output, not source)
+telegram-bridge/docs/architecture/audit-20261012/
