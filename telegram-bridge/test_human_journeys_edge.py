@@ -15,6 +15,35 @@ def writes(stand, action=None):
 
 
 class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
+    def test_find_deal_button_accepts_one_smart_search_line(self):
+        legacy_route = ('🤝 Сделки', '🔎 Найти сделку', '📍 Найти по адресу', 'Химки')
+
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            person.sees('сути', 'адресу', 'клиенту', expected='Бот сразу просит одно свободное описание')
+            yield say('Альфа склад Химки')
+            person.sees('№990002', expected='Одна строка нашла сделку по клиенту, сути и адресу')
+            person.not_sees('№990003', expected='В выдаче нет сделки другого клиента')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(4, len(legacy_route), 'до изменения маршрут содержал 4 действия')
+        self.assertEqual(3, stand.receipt()['actions'], 'после изменения до результата — 3 действия')
+        self.assertEqual(0, len(stand.model.prompts), 'Умный поиск не должен уходить в ИИ')
+
+    def test_smart_search_can_be_refined_after_no_matches(self):
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield say('бассейн в Сочи')
+            person.sees('Уточните', expected='Пустая выдача не закрыла поиск')
+            yield say('Иванов квартира')
+            person.sees('№990003', expected='Следующая строка в том же состоянии нашла сделку')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+        self.assertEqual(0, len(stand.model.prompts))
+
     def test_status_question_in_plain_words(self):
         def journey(person):
             yield say('Какой статус у сделки 990002?')
@@ -32,7 +61,6 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('🔢 Найти по номеру')
             yield say('99001')
             person.sees('99001', expected='Бот повторил номер, по которому ничего не нашёл')
             person.not_sees('Traceback', 'KeyError', expected='Человек не видит технический мусор')
@@ -46,7 +74,6 @@ class DealReadingVariants(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('📍 Найти по адресу')
             yield say('Химки')
             person.sees('№990002', expected='Найдена сделка по адресу')
             person.not_sees('№990001', expected='Чужие сделки не попали в выдачу')

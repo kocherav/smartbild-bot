@@ -68,8 +68,8 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
 
         stand = self.play(journey, setup=setup)
         actions = [event for event in stand.telegram.events if event['actor'] == 'tester']
-        self.assertEqual(7, len(actions),
-                         'Маршрут до подтверждения предпросмотра: 7 действий вместо прежних 10')
+        self.assertEqual(6, len(actions),
+                         'Маршрут до подтверждения предпросмотра: 6 действий вместо прежних 10')
         saves = [w for w in stand.crm.writes if w['action'] == 'save_signatory']
         self.assertEqual([], saves, 'Автоподстановка не создаёт отдельную запись подписанта')
     def test_prepare_contract_then_stage_invoice(self):
@@ -221,8 +221,8 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
                         expected='Экономика сделки в понятном формате')
             person.got_document('Рентабельность')
         stand = self.play(journey, setup=office)
-        self.assertEqual(6, stand.receipt()['actions'],
-                         'Контрольный маршрут через меню требует шесть действий на стенде')
+        self.assertEqual(5, stand.receipt()['actions'],
+                         'Контрольный маршрут через меню требует пять действий на стенде')
         writes = [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
         self.assertEqual(0, len(writes), 'Просмотр экономики не должен сохранять файл в CRM')
 

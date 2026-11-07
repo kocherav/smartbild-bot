@@ -4654,11 +4654,6 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                operation=f"сделка:открыть:{current_id}")
         return True
     local_menus = {
-        "🔎 Найти сделку": (
-            "Как найти сделку?\n\nМожно одной фразой, например:\n"
-            "«найди сделку клиента Альфа Климат по офису на Тверской»",
-            DEAL_SEARCH_KEYBOARD,
-        ),
         "🕘 Последние сделки": ("Сколько последних сделок показать?", DEAL_RECENT_KEYBOARD),
         "📋 Основное": ("Основные действия со сделкой.", DEAL_BASIC_KEYBOARD),
         "📄 Документы сделки": ("Документы сделки.", DEAL_DOCUMENTS_KEYBOARD),
@@ -4666,6 +4661,18 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         "🧰 Монтаж сделки": ("Монтаж по сделке.", DEAL_INSTALLATION_KEYBOARD),
         "⬅️ Назад к сделке": ("Действия с текущей сделкой.", DEAL_ACTIONS_KEYBOARD),
     }
+    if value == "🔎 Найти сделку":
+        # One typed line searches essence, address and client at once; the narrow
+        # search buttons stay for people who prefer them.
+        update_deal_ui_state(chat_id, pending="search_any")
+        send_message(
+            token, chat_id,
+            "Опишите сделку одной строкой — ищу одновременно по сути, адресу и клиенту.\n\n"
+            "Можно одной фразой, например:\n"
+            "«найди сделку клиента Альфа Климат по офису на Тверской»",
+            DEAL_SEARCH_KEYBOARD,
+        )
+        return True
     if value in local_menus:
         title, menu = local_menus[value]
         send_message(token, chat_id, title, menu)
@@ -6059,7 +6066,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending=None)
         prepare_contract_preview(token, chat_id, deal_id)
         return True
-    if pending in ("search_client", "search_address", "get_number"):
+    if pending in ("search_any", "search_client", "search_address", "get_number"):
         update_deal_ui_state(chat_id, pending=None)
         if pending == "get_number":
             match = re.search(r"\d+", value)
@@ -6069,6 +6076,20 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                              {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True})
             elif not select_deal(token, chat_id, match.group(0)):
                 update_deal_ui_state(chat_id, pending="get_number")
+        elif pending == "search_any" and re.fullmatch(r"\d+", value):
+            if not select_deal(token, chat_id, value):
+                update_deal_ui_state(chat_id, pending="search_any")
+        elif pending == "search_any":
+            result = run_deal_browser({"action": "search_any", "query": value, "limit": 15})
+            if result.get("ok") and not result.get("deals"):
+                update_deal_ui_state(chat_id, pending="search_any")
+                send_message(
+                    token, chat_id,
+                    "Подходящих сделок не найдено. Уточните суть, адрес или клиента одной строкой.",
+                    {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True},
+                )
+            else:
+                send_deal_list(token, chat_id, None, result)
         else:
             send_deal_list(token, chat_id, {"action": pending, "query": value, "limit": 15})
         return True

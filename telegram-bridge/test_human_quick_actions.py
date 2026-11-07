@@ -148,12 +148,11 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         def menu_journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('📍 Найти по адресу')
             yield say('Химки')
             person.sees('№990002', 'Склад', expected='Кнопочный маршрут нашёл сделку')
 
         before = self.play(menu_journey, setup=office)
-        self.assertEqual(4, before.receipt()['actions'], 'до результата через меню — 4 действия')
+        self.assertEqual(3, before.receipt()['actions'], 'умный поиск через меню — 3 действия')
 
         def free_text_journey(person):
             yield say('/start')
