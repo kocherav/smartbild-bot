@@ -169,6 +169,7 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
             yield say(f"Сделай КП по сделке {item['deal']['id']}")
             person.sees('Кому адресовать')
             yield say('Алексей')
+            yield press('✅ Создать PDF КП')
             person.got_document('КП')
             person.sees(f"{len(item['ledger'])} позиций", expected='КП содержит все позиции сделки')
         self.play(journey, setup=self.setup)

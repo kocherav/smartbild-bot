@@ -310,9 +310,13 @@ class ProtocolTest(unittest.TestCase):
         with mock.patch.object(bridge, 'current_deal_ui_state', return_value={
                 'current_deal_id': '861', 'pending': 'proposal_recipient', 'proposal_deal_id': '896'}), \
              mock.patch.object(bridge, 'update_deal_ui_state'), mock.patch.object(bridge, 'send_message'), \
+             mock.patch.object(bridge, 'run_deal_proposal', return_value={
+                 'ok': True, 'rows': [], 'count': 0, 'total': 0, 'fingerprint': 'f'}) as preview, \
              mock.patch.object(bridge, 'send_deal_proposal') as generate:
             self.assertTrue(bridge.handle_deal_ui('token', 'chat', 'Уважаемая Татьяна,', _background=True))
-        generate.assert_called_once_with('token', 'chat', '896', recipient='Уважаемая Татьяна,')
+        # Since IDEA-0C9B7B6C the answer opens a confirmed preview of the bound deal; nothing is published yet.
+        self.assertEqual('896', preview.call_args.args[0]['deal_id'])
+        generate.assert_not_called()
 
     def test_auto_recipient_prompt_does_not_overwrite_busy_flow(self):
         import tempfile
