@@ -8,6 +8,49 @@ from test_human_journeys import DEAL, office
 
 
 class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_client_and_object_phrase_opens_unique_deal_before_invoice(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔎 Найти по клиенту')
+            yield say('Альфа Климат')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            yield press('📥 Получить счёт')
+            person.got_document('Счёт', expected='Получен счёт найденной сделки')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(6, before.receipt()['actions'], 'до изменения — 6 действий до счёта')
+
+        def phrase_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            person.sees('найди сделку клиента Альфа Климат по офису на Тверской',
+                        expected='На экране поиска виден пример целой фразы')
+            yield say('найди сделку клиента Альфа Климат по офису на Тверской')
+            person.sees('Сделка №990001', 'Тверская', expected='Единственное совпадение сразу открыто')
+            person.sees_button('📥 Получить счёт')
+            yield press('📥 Получить счёт')
+            person.got_document('Счёт')
+
+        after = self.play(phrase_journey, setup=office)
+        self.assertEqual(2, after.receipt()['actions'] - 2,
+                         'после входа в поиск — одно сообщение и одна кнопка')
+        self.assertEqual(0, len(after.model.prompts), 'Поиск сделки не должен уходить в ИИ')
+
+    def test_client_and_object_phrase_keeps_ambiguous_matches_as_a_list(self):
+        def two_offices(crm):
+            office(crm)
+            crm.add_deal('990004', '501', 'Кондиционирование офиса на Тверской, 12', status_id='1',
+                         address='Москва, Тверская ул., 12', payer_id='7101')
+
+        def journey(person):
+            yield say('найди сделку клиента Альфа Климат по офису на Тверской')
+            person.sees('Найденные сделки', '№990001', '№990004',
+                        expected='Неоднозначный поиск показал выбор, а не угадал сделку')
+            person.not_sees('Сделка №990001\nСуть', expected='Карточка не открыта без выбора')
+
+        self.play(journey, setup=two_offices)
+
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')
