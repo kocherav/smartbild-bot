@@ -278,6 +278,7 @@ def fetch_invoice_pdf_cli():
         print(json.dumps({
             "ok": True, "path": pdf_path,
             "filename": invoice_filename(invoice), "caption": invoice_caption(invoice),
+            "invoice_date": format_invoice_date(invoice.get("invoiceDate")),
         }, ensure_ascii=False))
     except (MegaplanAPIError, ValueError, urllib.error.URLError) as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))

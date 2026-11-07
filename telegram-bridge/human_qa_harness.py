@@ -213,12 +213,12 @@ class FakeMegaplan:
             'contract': contract, 'created_at': created_at or '2026-10-01T10:00:00+03:00'}
         return self.deals[str(deal_id)]
 
-    def add_invoice(self, deal_id, rows, number=None, status='drawn'):
+    def add_invoice(self, deal_id, rows, number=None, status='drawn', invoice_date=None):
         self.next_invoice += 1
         invoice_id = str(self.next_invoice)
         self.invoices[invoice_id] = {
             'id': invoice_id, 'deal_id': str(deal_id), 'number': number or invoice_id[-3:],
-            'date': '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'date': invoice_date or '20.10.2026', 'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
             'status': status, 'rows': rows,
             'sum': round(sum(r['qty'] * r['price'] for r in rows), 2)}
         return self.invoices[invoice_id]
@@ -478,18 +478,20 @@ class FakeMegaplan:
             data = {'ok': True, 'deal_id': deal['id'], 'payer_id': payer['id'], 'payer_name': payer['name'],
                     'basis': f"Спецификация к сделке №{deal['id']}", 'rows': rows,
                     'total': str(self.price(deal)), 'recipient_id': '1', 'template_id': '1',
-                    'fingerprint': fingerprint}
+                    'fingerprint': fingerprint, 'invoice_date': dt.date.today().isoformat()}
             if action == 'preview_full':
                 return data
             if spec.get('expected_fingerprint') and spec['expected_fingerprint'] != fingerprint:
                 return {'ok': False, 'no_effect': True,
                         'error': 'Спецификация, плательщик или наша организация изменены. Подготовьте счёт заново.'}
             self._write('contract_invoice', action, spec)
-            invoice = self.add_invoice(deal['id'], [{'name': r['name'], 'qty': r['quantity'], 'price': r['price']} for r in rows])
+            invoice = self.add_invoice(deal['id'], [{'name': r['name'], 'qty': r['quantity'], 'price': r['price']} for r in rows],
+                                       invoice_date=dt.date.fromisoformat(data['invoice_date']).strftime('%d.%m.%Y'))
             if ('contract_invoice', action) in self.duplicate_after_write:
                 self.add_invoice(deal['id'], copy.deepcopy(invoice['rows']))
             return {'ok': True, 'deal_id': deal['id'], 'invoice_id': invoice['id'], 'invoice_number': invoice['number'],
                     'invoice_status': 'drawn', 'rows_count': len(rows), 'basis': data['basis'],
+                    'invoice_date': data['invoice_date'],
                     'public_download_link': None}
         if action in ('preview', 'create'):
             contract = deal.get('contract')
@@ -544,8 +546,10 @@ class FakeMegaplan:
             invoice = own[-1]
         path = self.root / f"invoice-{invoice['id']}-{time.monotonic_ns()}.pdf"
         path.write_bytes(b'%PDF-1.4 invoice ' + invoice['id'].encode())
-        return {'ok': True, 'path': str(path), 'filename': f"Счёт №{invoice['number']}.pdf",
-                'caption': f"Счёт №{invoice['number']} от {invoice['date']} на {invoice['sum']:.2f} ₽ (сделка №{invoice['deal_id']})"}
+        return {'ok': True, 'path': str(path),
+                'filename': f"Счёт №{invoice['number']} от {invoice['date']}.pdf",
+                'caption': f"Счёт №{invoice['number']} от {invoice['date']} на {invoice['sum']:.2f} ₽ (сделка №{invoice['deal_id']})",
+                'invoice_date': invoice['date']}
 
     def cli_megaplan_api(self, action, spec):
         if action == 'search-contractors':

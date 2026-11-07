@@ -1,4 +1,5 @@
 """Owner-approved improvements (QA_IDEAS.md И-1, И-2, И-4, И-5), checked as a person uses them."""
+import datetime as dt
 import unittest
 from unittest.mock import patch
 
@@ -191,6 +192,49 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(4, stand.receipt()['actions'], 'от номера до счёта — 4 действия вместо 8')
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
         self.assertEqual(0, len(stand.model.prompts))
+
+    def test_full_invoice_pdf_keeps_confirmed_date_and_current_status(self):
+        def already_in_status_with_duplicate_transition(crm):
+            office(crm)
+            # Reproduces the QA payload: the card says the target status while
+            # Megaplan still advertises a transition with the same display name.
+            crm.statuses['99'] = 'Выставление счета'
+
+        def journey(person):
+            yield say('990001')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            person.sees('Дата:', expected='Предпросмотр содержит закреплённую дату счёта')
+            person.not_sees('Перевести её', expected='Уже установленный статус не записывается повторно')
+            yield press('✅ Выставить общий счёт')
+            person.got_document(dt.date.today().strftime('%d.%m.%Y'),
+                                expected='PDF нового счёта имеет подтверждённую дату')
+        stand = self.play(journey, setup=already_in_status_with_duplicate_transition)
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] == 'move_status'])
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+
+    def test_mismatched_invoice_pdf_is_not_delivered_or_offered_for_edo(self):
+        def mismatched_pdf(crm):
+            office(crm)
+            original = crm.add_invoice
+            crm.add_invoice = lambda deal_id, rows, **kwargs: original(
+                deal_id, rows, invoice_date='20.10.2026',
+                **{key: value for key, value in kwargs.items() if key != 'invoice_date'})
+
+        def journey(person):
+            yield say('990001')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            yield press('✅ Выставить общий счёт')
+            person.sees('дата PDF не совпала', 'повторно счёт не создавайте',
+                        expected='Расхождение блокирует доставку и безопасно продолжает сценарий')
+            person.not_sees('Дальше: отправить договор', expected='Несверенный файл не предлагается для ЭДО')
+            documents = [event for event in person.stand.telegram.events
+                         if event.get('actor') == 'bot' and event.get('kind') == 'document']
+            person.check('Несверенный PDF не отправлен', documents, not documents)
+
+        stand = self.play(journey, setup=mismatched_pdf)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
 
     def test_invoice_route_offers_required_status_inline(self):
         def needs_invoice_status(crm):

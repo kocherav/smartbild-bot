@@ -244,6 +244,7 @@ def preview(spec, api):
     data={"ok": True, "deal_id": deal_id, "payer_id": str(payer["id"]),
             "payer_name": payer.get("name") or "", "contract_file_id": str(selected.get("id")),
             "contract_filename": selected.get("name") or "", 'recipient_id':recipient_id,'template_id':template_id, **parsed}
+    data['invoice_date'] = date.today().isoformat()
     return {**data,'fingerprint':preview_fingerprint(data)}
 
 
@@ -304,11 +305,22 @@ def normalized_invoice_text(value):
     return ' '.join(str(value or '').split())
 
 
+def format_invoice_date_value(value):
+    """Return Megaplan's zero-based DateOnly value as an ISO calendar date."""
+    if not value:
+        return None
+    try:
+        return f"{int(value['year']):04d}-{int(value['month']) + 1:02d}-{int(value['day']):02d}"
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def verify_created_invoice(api, invoice_id, data, rows, auth=None):
     """Read back an issued invoice; safe both after creation and during recovery."""
     from seller_documents import invoice_settings
     recipient_id, template_id = invoice_settings(data['deal_id'])
-    invoice = api._call('GET', f'/invoice/{invoice_id}', params={'fields': ['rows', 'deal', 'invoiceTemplate']})['data']
+    invoice = api._call('GET', f'/invoice/{invoice_id}',
+                        params={'fields': ['rows', 'deal', 'invoiceTemplate', 'invoiceDate']})['data']
     saved = v1_call(api, '/BumsInvoiceApiV01/Invoice/card.api', {
         'Id': str(invoice_id), 'RequestedFields[0]': 'PaymentOrderNumber',
     }, auth).get('data', {}).get('invoice', {})
@@ -317,6 +329,7 @@ def verify_created_invoice(api, invoice_id, data, rows, auth=None):
             or str((invoice.get('recipient') or {}).get('id')) != str(recipient_id)
             or str((invoice.get('invoiceTemplate') or {}).get('id')) != str(template_id)
             or invoice.get('status') not in ('drawn', 'paid', 'partially_paid')
+            or format_invoice_date_value(invoice.get('invoiceDate')) != data.get('invoice_date')
             or len(invoice.get('rows') or []) != len(rows)
             or normalized_invoice_text(saved.get('PaymentOrderNumber')) != normalized_invoice_text(data['basis'])):
         raise ValueError('Мегаплан создал счёт, но не сохранил требуемые параметры')
@@ -346,6 +359,7 @@ def create_v1_invoice(api, data, rows):
               "Model[Consignee]": data["payer_id"], "Model[Date]": date.today().isoformat(),
               "Model[InvoiceTemplate]": template_id,
               "Model[PaymentOrderNumber]": data["basis"], "Deal": data["deal_id"]}
+    common["Model[Date]"] = data.get("invoice_date") or date.today().isoformat()
     auth = v1_auth(api)
     invoice_id = None
     try:
@@ -440,7 +454,7 @@ def preview_full(spec, api):
     recipient_id,template_id=invoice_settings(deal_id)
     data={'ok':True,'deal_id':deal_id,'payer_id':str(payer['id']),'payer_name':payer.get('name') or '',
           'basis':basis,'rows':rows,'total':str((deal.get('price') or {}).get('value')),
-          'recipient_id':recipient_id,'template_id':template_id}
+          'recipient_id':recipient_id,'template_id':template_id,'invoice_date':date.today().isoformat()}
     return {**data,'fingerprint':preview_fingerprint(data)}
 
 
@@ -452,7 +466,7 @@ def create_full(spec, api):
     invoice = create_v1_invoice(api, data, rows)
     return {"ok": True, "deal_id": deal_id, "invoice_id": str(invoice["id"]),
             "invoice_number": invoice.get("number"), "invoice_status": invoice.get("status"),
-            "rows_count": len(rows), "basis": basis,
+            "rows_count": len(rows), "basis": basis, "invoice_date": data["invoice_date"],
             "public_download_link": invoice.get("publicDownloadLink")}
 
 
