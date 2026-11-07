@@ -5812,7 +5812,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             return True
         update_deal_ui_state(chat_id, pending_transition=pending_transition)
         keyboard = {"keyboard": [[{"text": "✅ Подтвердить"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
-        send_message(token, chat_id, f"Подтвердите перевод сделки №{deal_id} в статус «{transition['name']}».", keyboard)
+        preview = state.get("human_status_preview") or {}
+        if str(preview.get("id") or "") == str(deal_id):
+            text = (f"Сделка №{deal_id} — {preview.get('client') or 'клиент не указан'}\n"
+                    f"Суть: {deal_essence(preview)}\n"
+                    f"Текущий статус: {preview.get('status') or 'не указан'}\n"
+                    f"Новый статус: {transition['name']}\n\n"
+                    "Подтвердите перевод. До нажатия кнопки ничего не изменено.")
+        else:
+            text = f"Подтвердите перевод сделки №{deal_id} в статус «{transition['name']}»."
+        send_message(token, chat_id, text, keyboard)
         return True
 
     if pending == "transition_invoice_type" and value in (
@@ -9930,7 +9939,7 @@ def _start_human_status(token, chat_id, deal_id, target=None):
     deal = result["deal"]
     transitions = {f"➡️ {t['name']}": t for t in deal.get("transitions", []) if t.get("enabled")}
     update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending=None, transitions=transitions,
-                         pending_transition=None)
+                         pending_transition=None, human_status_preview=deal)
     if not transitions:
         send_message(token, chat_id, f"Для сделки №{deal_id} сейчас нет доступных переходов. Текущий статус: {deal.get('status')}.",
                      DEAL_ACTIONS_KEYBOARD)
@@ -9947,6 +9956,30 @@ def _start_human_status(token, chat_id, deal_id, target=None):
     keyboard = [[{"text": label}] for label in transitions] + [[{"text": "❌ Отмена"}]]
     send_message(token, chat_id, f"{note}Сделка №{deal_id}, текущий статус: {deal.get('status')}. Куда перевести сделку?",
                  {"keyboard": keyboard, "resize_keyboard": True, "one_time_keyboard": True})
+    return True
+
+
+def _start_human_status_search(token, chat_id, query, target):
+    """Resolve a descriptive deal reference without authorizing a write."""
+    result = run_deal_browser({'action': 'search_any', 'query': query, 'limit': 10})
+    if not result.get('ok'):
+        send_message(token, chat_id, 'Поиск сделки не выполнен: ' + str(result.get('error')), DEALS_KEYBOARD)
+        return True
+    deals = result.get('deals') or []
+    if not deals:
+        send_message(token, chat_id, f'По описанию «{query}» сделки не найдены. Уточните клиента или суть сделки.', DEALS_KEYBOARD)
+        return True
+    if len(deals) == 1:
+        return _start_human_status(token, chat_id, deals[0]['id'], target)
+    choices = {f"№{deal['id']} · {deal_essence(deal, 38)}": str(deal['id']) for deal in deals}
+    update_deal_ui_state(chat_id, pending='human_status_select',
+                         human_intent={'name': human_intents.MOVE_STATUS, 'target': target, 'query': query},
+                         human_choices=choices)
+    lines = [f"№{deal['id']} — {deal.get('client') or 'без клиента'}; {deal_essence(deal)}; статус: {deal.get('status') or 'не указан'}"
+             for deal in deals]
+    keyboard = [[{'text': label}] for label in choices] + [[{'text': '❌ Отмена'}]]
+    send_message(token, chat_id, 'Найдено несколько сделок. Выберите нужную; запись ещё не выполнялась:\n\n' +
+                 '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True, 'one_time_keyboard': True})
     return True
 
 
@@ -10042,6 +10075,11 @@ def handle_human_workflow(token,chat_id,text):
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
         return _start_human_status(token,chat_id,match.group(),saved.get('target'))
+    elif pending=='human_status_select':
+        deal_id=(state.get('human_choices') or {}).get(value)
+        if not deal_id:send_message(token,chat_id,'Выберите сделку кнопкой или отмените.');return True
+        saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        return _start_human_status(token,chat_id,deal_id,saved.get('target'))
     elif pending=='human_invoice_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
@@ -10058,6 +10096,9 @@ def handle_human_workflow(token,chat_id,text):
                                     tuple(x for x in intent.missing if x!='deal'),intent.confidence)
     if intent.name==human_intents.MOVE_STATUS:
         if not intent.deal_id:
+            query=(intent.fields or {}).get('deal_query')
+            if query:
+                return _start_human_status_search(token,chat_id,query,intent.target)
             update_deal_ui_state(chat_id,pending='human_status_deal',human_intent={'name':intent.name,'target':intent.target})
             send_message(token,chat_id,'Какую сделку перевести? Укажите номер.');return True
         return _start_human_status(token,chat_id,intent.deal_id,intent.target)

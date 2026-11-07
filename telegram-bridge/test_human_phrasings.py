@@ -75,12 +75,36 @@ class PhrasingTests(HumanJourneyCase, unittest.TestCase):
             with self.subTest(phrase=phrase):
                 def journey(person, phrase=phrase):
                     yield say(phrase)
-                    person.sees('Подтвердите перевод сделки №990003 в статус «Закупка»')
+                    person.sees('Сделка №990003', 'Текущий статус:', 'Новый статус: Закупка',
+                                'До нажатия кнопки ничего не изменено')
                     yield press('✅ Подтвердить')
                     person.sees('Закупка')
                 stand = self.play(journey, setup=office)
                 self.assertEqual('3', stand.crm.deals['990003']['status_id'], phrase)
                 self.assertEqual(1, len(stand.crm.writes), phrase)
+
+    def test_status_by_client_and_subject_needs_one_confirmation(self):
+        def journey(person):
+            yield say('Переведи сделку Иванова про кондиционер в Закупку')
+            person.sees('Сделка №990003', 'Иванов Пётр Сергеевич',
+                        'Кондиционер в квартиру', 'Текущий статус:', 'Новый статус: Закупка',
+                        expected='По клиенту и сути найден единственный кандидат и показан preview')
+            person.sees_button('✅ Подтвердить')
+            yield press('✅ Подтвердить')
+            person.sees('Статус действительно изменён на «Закупка»')
+        stand = self.play(journey, setup=office)
+        self.assertEqual('3', stand.crm.deals['990003']['status_id'])
+        self.assertEqual(2, self.qa_receipt['actions'], 'фраза и одно подтверждение')
+        self.assertEqual(1, len(stand.crm.writes))
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_ambiguous_status_search_requires_deal_choice_before_confirmation(self):
+        def journey(person):
+            yield say('Переведи сделку Альфа в Закупку')
+            person.sees('Найдено несколько сделок', '№990001', '№990002')
+            person.sees_button('№990001 · Кондиционирование офиса на Тверской')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
 
     def test_unknown_status_name_offers_the_real_choices(self):
         def journey(person):
