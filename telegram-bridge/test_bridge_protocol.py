@@ -339,7 +339,9 @@ class ProtocolTest(unittest.TestCase):
             bridge.ui_state_store().save({'chat': {'pending': 'supplier_invoice_confirm'}})
             self.assertFalse(bridge.try_begin_proposal_recipient('chat', '896'))
 
-    def test_auto_recipient_prompt_preserves_selected_deal(self):
+    def test_auto_recipient_prompt_opens_the_deal_it_asks_about(self):
+        # 07.11 (one open deal): the bot asking «Кому адресовать КП по №896?» makes №896 the
+        # deal of the conversation; keeping №861 open mixed the two deals.
         import tempfile
         import json
         with tempfile.TemporaryDirectory() as d, \
@@ -349,7 +351,7 @@ class ProtocolTest(unittest.TestCase):
             bridge.ui_state_store().save({'chat': {'current_deal_id': '861'}})
             self.assertTrue(bridge.try_begin_proposal_recipient('chat', '896'))
             with open(d + '/state.json') as f: state = json.load(f)['chat']
-            self.assertEqual(state['current_deal_id'], '861')
+            self.assertEqual(state['current_deal_id'], '896')
             self.assertEqual(state['proposal_deal_id'], '896')
 
     def test_tax_answer_is_strict_and_deterministic(self):

@@ -266,6 +266,9 @@ class FakeMegaplan:
         return deal
 
     def _write(self, script, action, spec):
+        hook = getattr(self, 'write_hook', None)
+        if hook:
+            hook(script, action, spec)
         self.writes.append({'script': script, 'action': action, 'spec': copy.deepcopy(spec)})
         self.pending_crash = (script, action) in self.crash_after_write
 
@@ -849,6 +852,25 @@ class Stand:
         self.speech_calls = 0
         self.blocked_writes = []
         self.finished = False
+        # Invariant (incident 865/888): a CRM write about a deal happens only while that
+        # deal is the open one in the person's chat. Checked for every journey.
+        self.context_violations = []
+        self.crm.write_hook = self.check_write_context
+
+    def check_write_context(self, script, action, spec):
+        spec = spec or {}
+        deal = str(spec.get('deal_id') or spec.get('dealId') or '')
+        if not deal:
+            return
+        try:
+            import bridge
+            state = (bridge.load_deal_ui_state() or {}).get(str(self.owner_chat)) or {}
+        except Exception:
+            return
+        current = str(state.get('current_deal_id') or '')
+        if current and current != deal:
+            self.context_violations.append(f'{script}.{action}: запись в сделку №{deal}, '
+                                           f'а у человека открыта №{current}')
 
     # -- driver -------------------------------------------------------------
     def next_updates(self):
@@ -1200,6 +1222,9 @@ class HumanJourneyCase:
                                     if stand.unexpected else ''))
         if stand.blocked_writes:
             raise AssertionError('Бот обращался к рабочим хранилищам вне песочницы: ' + ', '.join(stand.blocked_writes[:5]))
+        if stand.context_violations and getattr(self, 'context_invariant', True):
+            raise AssertionError('Запись не в ту сделку (прыжок контекста):\n' + '\n'.join(stand.context_violations)
+                                 + '\n\n' + render_transcript(receipt))
         if not stand.finished:
             raise AssertionError('Бот завершил работу раньше, чем человек закончил сценарий.\n\n' + render_transcript(receipt))
         return stand
