@@ -3634,9 +3634,10 @@ def handle_bare_deal_number(token, chat_id, text):
         return False
     state = current_deal_ui_state(chat_id)
     pending = str(state.get("pending") or "")
-    # A preview waiting for its button never asks for a number: a lone deal number there
-    # opens that deal, and the preview of the previous deal is dropped (deal_context.py).
-    if (pending and "confirm" not in pending) or state.get("deal_creation_active"):
+    # A preview waiting for its button, or a step waiting for a name or a file, never asks
+    # for a number: a lone deal number there opens that deal, and everything of the
+    # previous deal is dropped (deal_context.py).
+    if not deal_context.number_opens_deal(pending) or state.get("deal_creation_active"):
         return False
     if not pending and time.time() - float(state.get("assistant_turn_at") or 0) < ASSISTANT_CONTEXT_SECONDS:
         return False
@@ -3748,6 +3749,15 @@ def handle_deal_search_phrase(token, chat_id, text):
     return True
 
 
+def drop_unfinished_deal_step(chat_id):
+    """Two deals in one request: an unfinished step of one of them no longer has an
+    unambiguous target, so it is dropped (a file or «да» after it does nothing)."""
+    state = current_deal_ui_state(chat_id)
+    pending = str(state.get("pending") or "")
+    if pending.startswith(deal_context.DEAL_SCOPED_PENDING):
+        update_deal_ui_state(chat_id, pending=None, installation_project_upload_deal_id=None)
+
+
 def handle_explicit_deal_comparison(token, chat_id, text):
     match = DEAL_COMPARE_RE.search(text or "")
     if not match:
@@ -3756,6 +3766,7 @@ def handle_explicit_deal_comparison(token, chat_id, text):
     if deal_ids[0] == deal_ids[1]:
         send_message(token, chat_id, "Сравнение НЕ ПРОВЕРЕНО: укажите две разные сделки.", DEALS_KEYBOARD)
         return True
+    drop_unfinished_deal_step(chat_id)
     deals = []
     failures = []
     for deal_id in deal_ids:
@@ -10612,6 +10623,14 @@ TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделк�
                         "/dashboard", "🧪 Ошибки тестировщика"}
 
 
+def is_new_request(text):
+    """An explicit new command (not an answer to the current step's question)."""
+    value = str(text or "")
+    if human_intents.classify(value):
+        return True
+    return any(pattern.search(value) for pattern in (DEAL_FIND_THEN_ACT_RE, DEAL_READ_RE, CONTRACT_SUBJECT_RE))
+
+
 def handle_human_workflow(token,chat_id,text):
     value=str(text or '').strip();state=current_deal_ui_state(chat_id);pending=state.get('pending') or ''
     if value in TOP_LEVEL_NAVIGATION:
@@ -10638,6 +10657,14 @@ def handle_human_workflow(token,chat_id,text):
         update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,payer_then=None,
                              suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
+    if (pending.startswith('human_') and value not in (state.get('human_choices') or {})
+            and not value.startswith(('✅','❌','⬅️')) and is_new_request(value)):
+        # Context-hop matrix 07.11: «найди сделку … и выстави счёт» typed while the bot
+        # waited for an employee was answered «Выберите сотрудника из списка» — the person
+        # was locked in the old step. A new explicit request replaces any unfinished step;
+        # nothing was written for it.
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        state=current_deal_ui_state(chat_id);pending=''
     if pending=='human_payer_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
