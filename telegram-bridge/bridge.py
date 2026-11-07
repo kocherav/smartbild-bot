@@ -3371,6 +3371,11 @@ def write_contract_subject(token, chat_id, saved):
 
 
 DEAL_ECONOMICS_WORD_RE = re.compile(r"(?i)экономик|рентабельн|маржинальн|маржу|маржа|прибыл")
+ECONOMICS_SAVE_BUTTON = "💾 Сохранить расчёт в CRM"
+ECONOMICS_PREVIEW_KEYBOARD = {
+    "keyboard": [[{"text": ECONOMICS_SAVE_BUTTON}], [{"text": "❌ Отмена"}]],
+    "resize_keyboard": True,
+}
 
 
 def handle_explicit_deal_read(token, chat_id, text):
@@ -3693,18 +3698,43 @@ def format_profitability(deal_id, result):
 
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-    result = build_and_store_profitability(deal_id)
-    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
+    result = run_build_profitability_report(deal_id)
+    if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
-            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
-    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
+    update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending="economics_save",
+                         economics_preview_deal_id=str(deal_id))
+    send_message(token, chat_id, format_profitability(deal_id, result) +
+                 "\n\nПредпросмотр: в CRM ничего не записано. Чтобы сохранить актуальный расчёт в сделку, нажмите отдельную кнопку.",
+                 ECONOMICS_PREVIEW_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
     except OSError:
         pass
+
+
+def save_current_profitability(token, chat_id, deal_id):
+    """Rebuild at confirmation time, then publish that fresh version and report the write result."""
+    send_message(token, chat_id, "💾 Пересчитываю и сохраняю актуальный расчёт в CRM...")
+    result = build_and_store_profitability(deal_id)
+    update_deal_ui_state(chat_id, pending=None, economics_preview_deal_id=None)
+    if not result.get("ok"):
+        send_message(token, chat_id, f"Расчёт НЕ сохранён в CRM: {result.get('error') or 'неизвестная ошибка'}.",
+                     DEAL_ACTIONS_KEYBOARD)
+    elif result.get("unchanged"):
+        send_message(token, chat_id, f"✅ Расчёт сделки №{deal_id} уже актуален в CRM; повторной записи не было.",
+                     DEAL_ACTIONS_KEYBOARD)
+    else:
+        send_message(token, chat_id, f"✅ Актуальный расчёт сделки №{deal_id} сохранён в CRM.",
+                     DEAL_ACTIONS_KEYBOARD)
+    path = result.get("path")
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return bool(result.get("ok"))
 
 
 def run_contract_builder(spec):
@@ -5101,7 +5131,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     # upload a file runs outside the polling process. Previously a slow API response
     # froze even unrelated menu clicks for up to the subprocess/network timeout.
     slow_values = {
-        "🔄 Изменить статус", "✅ Подтвердить", "💰 Экономика",
+        "🔄 Изменить статус", "✅ Подтвердить", "💰 Экономика", ECONOMICS_SAVE_BUTTON,
         "📝 Подготовить договор", "👁 Проверить данные договора",
         "✅ Сформировать договор", "📑 Получить договор",
         "🧾 Выставить счёт по договору", "✅ Выставить счёт",
@@ -5918,6 +5948,14 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if value == "💰 Экономика" and deal_id:
         send_current_profitability(token, chat_id, deal_id)
+        return True
+    if value == ECONOMICS_SAVE_BUTTON:
+        preview_deal_id = state.get("economics_preview_deal_id")
+        if pending_now != "economics_save" or not preview_deal_id:
+            send_message(token, chat_id, "Предпросмотр устарел. Сначала снова откройте «💰 Экономика».",
+                         DEAL_ACTIONS_KEYBOARD)
+            return True
+        save_current_profitability(token, chat_id, preview_deal_id)
         return True
     if value == "👷 Монтаж по сделке" and deal_id:
         result=run_installation_workflow({"action":"get","deal_id":str(deal_id)})
@@ -10606,18 +10644,7 @@ def main():
                 return
             economics_match = ECONOMICS_CMD_RE.match(text.strip())
             if economics_match:
-                deal_id = economics_match.group(1)
-                send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-                result = build_and_store_profitability(deal_id)
-                if result.get("ok"):
-                    send_message(token, chat_id, format_profitability(deal_id, result), MAIN_KEYBOARD)
-                    send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
-                    try:
-                        os.remove(result["path"])
-                    except OSError:
-                        pass
-                else:
-                    send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error', 'неизвестная ошибка')}", MAIN_KEYBOARD)
+                send_current_profitability(token, chat_id, economics_match.group(1))
                 return
             print(f"{LOG_PREFIX} received: {text[:200]!r}")
 
