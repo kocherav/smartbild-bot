@@ -223,6 +223,8 @@ class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office)
         self.assertEqual(6, stand.receipt()['actions'],
                          'Контрольный маршрут через меню требует шесть действий на стенде')
+        writes = [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
+        self.assertEqual(0, len(writes), 'Просмотр экономики не должен сохранять файл в CRM')
 
 
 class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
@@ -235,6 +237,8 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
             person.got_document('Рентабельность', expected='Пришёл файл рентабельности')
         stand = self.play(journey, setup=office)
         self.assertEqual(0, len(stand.model.prompts))
+        writes = [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
+        self.assertEqual(0, len(writes), 'Фраза о просмотре экономики не должна сохранять файл в CRM')
 
     def test_economics_button_in_the_deal_card(self):
         def journey(person):
@@ -246,7 +250,7 @@ class EconomicsFindableJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
-    """Owner decision 23.10: the CRM file is rewritten only when the numbers change."""
+    """Просмотр — два действия без записи; сохранение — третье явное действие менеджера."""
 
     @staticmethod
     def economics(person):
@@ -256,25 +260,36 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
     def writes(self, stand):
         return [w for w in stand.crm.writes if w['action'] == 'upsert_profitability_file']
 
-    def test_three_presses_write_once_and_always_deliver(self):
+    def test_preview_then_explicit_save_writes_once(self):
         def journey(person):
             yield from open_deal_by_number(person)
-            for attempt in range(3):
-                yield from self.economics(person)
-                person.sees('выручка 114 000,00 ₽', expected=f'Нажатие {attempt + 1}: цифры показаны')
-                person.got_document('Рентабельность', expected=f'Нажатие {attempt + 1}: файл пришёл')
-                if attempt:
-                    person.sees('файл в сделке актуален', expected='Без изменений бот не переписал файл и сказал об этом')
+            yield from self.economics(person)
+            person.sees('выручка 114 000,00 ₽', expected='Просмотр: цифры показаны')
+            person.got_document('Рентабельность', expected='Просмотр: файл пришёл')
+            person.sees_button('💾 Сохранить расчёт в CRM', expected='Сохранение отделено явной кнопкой')
+            self.assertEqual(0, len(self.writes(person.stand)), 'До явной кнопки CRM не меняется')
+            yield press('💾 Сохранить расчёт в CRM')
+            person.sees('сохранён в CRM', expected='После явной кнопки есть квитанция сохранения')
         stand = self.play(journey, setup=office)
         self.assertEqual(1, len(self.writes(stand)))
+
+    def test_save_button_without_active_preview_is_rejected(self):
+        def journey(person):
+            yield from open_deal_by_number(person)
+            yield say('💾 Сохранить расчёт в CRM')
+            person.sees('Предпросмотр устарел', expected='Старая кнопка не создаёт файл')
+        stand = self.play(journey, setup=office)
+        self.assertEqual(0, len(self.writes(stand)))
 
     def test_changed_position_publishes_a_new_version(self):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
+            yield press('💾 Сохранить расчёт в CRM')
             person.stand.crm.deals[DEAL]['positions'][0]['qty'] = 3
             yield from self.economics(person)
-            person.not_sees('файл в сделке актуален', expected='После изменения данных файл обновлён')
+            yield press('💾 Сохранить расчёт в CRM')
+            person.sees('сохранён в CRM', expected='После изменения данных файл обновлён')
         stand = self.play(journey, setup=office)
         self.assertEqual(2, len(self.writes(stand)))
 
@@ -282,10 +297,12 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def before(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
+            yield press('💾 Сохранить расчёт в CRM')
         def after(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('файл в сделке актуален')
+            yield press('💾 Сохранить расчёт в CRM')
+            person.sees('уже актуален в CRM')
         stand = self.play([before, after], setup=office)
         self.assertEqual(1, len(self.writes(stand)))
 
@@ -296,8 +313,10 @@ class EconomicsWithoutRewritesJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield from open_deal_by_number(person)
             yield from self.economics(person)
-            person.sees('выручка 114 000,00 ₽', 'не сохранён в сделке', expected='Цифры и честное предупреждение')
+            person.sees('выручка 114 000,00 ₽', 'в CRM ничего не записано', expected='Предпросмотр без записи')
             person.got_document('Рентабельность', expected='Файл пришёл, несмотря на сбой CRM')
+            yield press('💾 Сохранить расчёт в CRM')
+            person.sees('НЕ сохранён в CRM', expected='После явной кнопки показан честный отказ CRM')
         self.play(journey, setup=setup)
 
 
