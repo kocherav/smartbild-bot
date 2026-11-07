@@ -33,7 +33,7 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
             yield say('Подготовь договор по сделке 990003, подписант Иванов Пётр Сергеевич как физлицо')
             person.sees('Договор №990003-Д', 'Иванов Пётр Сергеевич', '38 000,00 ₽',
                         expected='Одна фраза сразу показала предпросмотр договора')
-            person.sees_button('✅ Сформировать договор')
+            person.sees_button('✅ Сформировать и загрузить Word и PDF')
 
         stand = self.play(journey, setup=office)
         self.assertEqual(1, self.qa_receipt['actions'], 'После: одно действие вместо прежних восьми')
@@ -64,7 +64,7 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('👁 Проверить данные договора')
             person.sees('ФИО: Иванов Пётр Сергеевич', 'от своего имени',
                         expected='ФИО физлица подставлено в единый предпросмотр')
-            person.sees_button('✅ Сформировать договор')
+            person.sees_button('✅ Сформировать и загрузить Word и PDF')
 
         stand = self.play(journey, setup=setup)
         actions = [event for event in stand.telegram.events if event['actor'] == 'tester']
@@ -84,10 +84,10 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('Устав')
             person.sees('Договор №990001-Д', 'ООО «Альфа Климат»', '114 000,00',
                         expected='Показан предпросмотр договора с суммой')
-            yield press('✅ Сформировать договор')
+            person.sees_button('✅ Сформировать и загрузить Word и PDF')
+            yield press('✅ Сформировать и загрузить Word и PDF')
             person.got_document('.docx', expected='Пришёл Word договора')
             person.got_document('.pdf', expected='Пришёл подписанный PDF')
-            yield press('✅ Загрузить договоры в сделку')
             person.sees('загружены', expected='Договоры загружены в сделку')
             yield press('📄 Документы сделки')
             yield press('🧾 Работа со счетами')
