@@ -22,15 +22,16 @@ def to_contract_menu(person):
 class ContractJourneys(HumanJourneyCase, unittest.TestCase):
     def test_changed_contract_field_names_difference_and_refreshes_once(self):
         state={'current_deal_id':DEAL,'contract_deal_id':DEAL,'pending':'contract_generate_confirm',
-               'contract_data_fingerprint':'old','contract_preview':{'total':114000},
+               'contract_data_fingerprint':'old','contract_preview':{'total':114000,'date':'2026-11-06'},
                'contract_signatory':{},'contract_signatory_payer_id':'payer'}
         responses=[{'ok':False,'no_effect':True,'error':'Данные договора изменились после просмотра'},
-                   {'ok':True,'preview':{'total':204000,'fingerprint':'new'}}]
+                   {'ok':True,'preview':{'total':204000,'date':'2026-11-07','fingerprint':'new'}}]
         with patch.object(bridge,'current_deal_ui_state',return_value=state),\
              patch.object(bridge,'run_contract_builder',side_effect=responses),\
              patch.object(bridge,'send_message') as send,patch.object(bridge,'update_deal_ui_state'):
             self.assertTrue(bridge.handle_deal_ui('token','owner','✅ Сформировать договор',_background=True))
-        self.assertIn('Итого: 114000 → 204000',send.call_args.args[2])
+        self.assertIn('Итого: 114 000,00 ₽ → 204 000,00 ₽',send.call_args.args[2])
+        self.assertIn('Дата: 06.11.2026 → 07.11.2026',send.call_args.args[2])
         self.assertEqual('🔄 Обновить предпросмотр',send.call_args.args[3]['keyboard'][0][0]['text'])
     def test_prepare_contract_then_stage_invoice(self):
         def journey(person):

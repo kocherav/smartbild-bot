@@ -1972,6 +1972,18 @@ def bank_money(value):
         return str(value or "0")
 
 
+def _contract_change_value(field, value):
+    if field in ('equipment', 'materials', 'works', 'total'):
+        return f"{bank_money(value)} ₽"
+    if field == 'date' and value:
+        raw = str(value)
+        try:
+            return datetime.fromisoformat(raw[:10]).strftime('%d.%m.%Y')
+        except ValueError:
+            return raw
+    return str(value)
+
+
 def bank_operation_text(item, detailed=True):
     sign = "−" if item.get("direction") == "expense" else "+"
     title = f"{sign} {bank_money(item.get('amount'))} ₽ · {item.get('date')}"
@@ -5560,6 +5572,22 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if invoice_id:
             offer_edo(token, chat_id, deal_id, invoice_id)
         return True
+    if pending == "invoice_status_transition" and value == "🔄 Перевести и выставить счёт":
+        transition = state.get("invoice_status_transition") or {}
+        if str(transition.get("deal_id")) != str(deal_id):
+            send_message(token, chat_id, "Переход относится к другой сделке. Откройте счёт заново.", INVOICE_MENU_KEYBOARD)
+            return True
+        moved = run_deal_browser({"action": "move_status", "deal_id": str(deal_id), "state_id": transition.get("state_id")})
+        if not moved.get("ok"):
+            send_message(token, chat_id, f"Не удалось перевести сделку: {moved.get('error')}", INVOICE_MENU_KEYBOARD)
+            return True
+        preview = run_contract_invoice({'action': 'preview_full', 'deal_id': str(deal_id)})
+        if not preview.get('ok'):
+            send_message(token, chat_id, 'Статус изменён, но счёт не подготовлен: ' + invoice_error_text(preview.get('error')), INVOICE_MENU_KEYBOARD)
+            return True
+        update_deal_ui_state(chat_id, pending="invoice_full_confirm", invoice_full_preview=preview, invoice_status_transition=None)
+        send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
+        return True
     if pending == "invoice_download":
         invoice = (state.get("invoice_downloads") or {}).get(value)
         if not invoice:
@@ -5924,6 +5952,18 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, "Работа со счетами — можно выставить общий счёт, счёт по отдельному этапу оплаты или скачать любой ранее созданный счёт.", INVOICE_MENU_KEYBOARD)
         return True
     if value == "📋 Общий счёт по спецификации" and deal_id and pending == "invoice_menu":
+        deal_result = run_deal_browser({'action': 'get_cached', 'deal_id': str(deal_id)}, timeout=8)
+        deal = deal_result.get('deal') or {}
+        target = next((item for item in deal.get('transitions') or []
+                       if item.get('enabled') and 'выставление счет' in
+                       str(item.get('name') or '').casefold().replace('ё', 'е')), None)
+        if deal_result.get('ok') and target:
+            transition = {'deal_id': str(deal_id), 'state_id': target.get('state_id'), 'name': target.get('name')}
+            update_deal_ui_state(chat_id, pending='invoice_status_transition', invoice_status_transition=transition)
+            keyboard = {'keyboard': [[{'text': '🔄 Перевести и выставить счёт'}]],
+                        'resize_keyboard': True, 'one_time_keyboard': True}
+            send_message(token, chat_id, f"Для счёта сделку нужно перевести в «{target.get('name')}».", keyboard)
+            return True
         preview=run_contract_invoice({'action':'preview_full','deal_id':str(deal_id)})
         if not preview.get('ok'):
             send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
@@ -6663,7 +6703,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                 after=refreshed.get('preview') or {}
                 labels={'date':'Дата','payer_name':'Плательщик','address':'Объект','subject':'Предмет',
                         'equipment':'Оборудование','materials':'Материалы','works':'Работы и услуги','total':'Итого'}
-                changes=[f"{labels[k]}: {before.get(k)} → {after.get(k)}" for k in labels
+                changes=[f"{labels[k]}: {_contract_change_value(k, before.get(k))} → {_contract_change_value(k, after.get(k))}" for k in labels
                          if before.get(k)!=after.get(k)]
                 update_deal_ui_state(chat_id,pending='contract_preview_refresh')
                 send_message(token,chat_id,'Данные изменились после просмотра:\n'+'\n'.join(changes or ['Изменилась версия данных договора.']),
