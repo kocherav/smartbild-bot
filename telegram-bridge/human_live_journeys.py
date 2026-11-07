@@ -81,6 +81,9 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield say(f'Выстави счёт по сделке {deal_id}')
             yield press('📋 Общий счёт по спецификации')
+            if '🧾 Выставить без смены статуса' in person.visible_buttons():
+                # A real deal may be offered a status change first; this journey leaves it as is.
+                yield press('🧾 Выставить без смены статуса')
             person.sees('Плательщик', 'Сумма', expected='Предпросмотр счёта показан')
             yield press('✅ Выставить общий счёт')
             person.sees('выставлен')
@@ -197,6 +200,8 @@ class LiveSnapshotJourneys(HumanJourneyCase, unittest.TestCase):
         def before(person):
             yield say(f'Выстави счёт по сделке {deal_id}')
             yield press('📋 Общий счёт по спецификации')
+            if '🧾 Выставить без смены статуса' in person.visible_buttons():
+                yield press('🧾 Выставить без смены статуса')
             yield press('✅ Выставить общий счёт')
         def after(person):
             person.sees('Проверил Мегаплан', 'найден в единственном экземпляре',

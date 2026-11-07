@@ -54,7 +54,7 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
             yield say('990001')
             yield press('🧾 Выставить счёт')
             yield press('📋 Общий счёт по спецификации')
-            person.sees('Для счёта сделку нужно перевести в «Выставление счета»')
+            person.sees('Перевести её в «Выставление счета» и выставить счёт?')
             person.sees_button('🔄 Перевести и выставить счёт')
             yield press('🔄 Перевести и выставить счёт')
             person.sees('Выставить общий счёт', expected='После перевода показан обычный preview')
@@ -63,6 +63,25 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=needs_invoice_status)
         self.assertEqual(5, stand.receipt()['actions'], 'новый маршрут — 5 действий вместо 8 через отдельное меню')
         self.assertEqual('2', stand.crm.deals[DEAL]['status_id'])
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+
+    def test_invoice_without_changing_status_stays_possible(self):
+        # Review 07.11: the status prompt must never force a deal backwards.
+        def needs_invoice_status(crm):
+            office(crm)
+            crm.deals[DEAL]['status_id'] = '1'
+        def journey(person):
+            yield say('990001')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            person.sees_button('🧾 Выставить без смены статуса', expected='Можно не менять статус')
+            yield press('🧾 Выставить без смены статуса')
+            person.sees('Выставить общий счёт', expected='Сразу обычный предпросмотр счёта')
+            yield press('✅ Выставить общий счёт')
+            person.got_document('Счёт')
+        stand = self.play(journey, setup=needs_invoice_status)
+        self.assertEqual('1', stand.crm.deals[DEAL]['status_id'], 'статус не изменён')
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] == 'move_status'])
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
 
     def test_number_is_an_answer_when_the_bot_asked_for_it(self):

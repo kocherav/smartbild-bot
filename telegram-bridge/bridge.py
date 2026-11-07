@@ -5572,6 +5572,10 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if invoice_id:
             offer_edo(token, chat_id, deal_id, invoice_id)
         return True
+    if pending == "invoice_status_transition" and value == "🧾 Выставить без смены статуса":
+        update_deal_ui_state(chat_id, pending="invoice_menu", invoice_status_transition=None,
+                             invoice_skip_transition=str(deal_id))
+        return handle_deal_ui(token, chat_id, "📋 Общий счёт по спецификации", _background=_background)
     if pending == "invoice_status_transition" and value == "🔄 Перевести и выставить счёт":
         transition = state.get("invoice_status_transition") or {}
         if str(transition.get("deal_id")) != str(deal_id):
@@ -5957,13 +5961,18 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         target = next((item for item in deal.get('transitions') or []
                        if item.get('enabled') and 'выставление счет' in
                        str(item.get('name') or '').casefold().replace('ё', 'е')), None)
-        if deal_result.get('ok') and target:
+        if deal_result.get('ok') and target and state.get('invoice_skip_transition') != str(deal_id):
             transition = {'deal_id': str(deal_id), 'state_id': target.get('state_id'), 'name': target.get('name')}
             update_deal_ui_state(chat_id, pending='invoice_status_transition', invoice_status_transition=transition)
-            keyboard = {'keyboard': [[{'text': '🔄 Перевести и выставить счёт'}]],
+            # Review 07.11: never force a status change (a deal in «Монтаж» must not be sent back).
+            keyboard = {'keyboard': [[{'text': '🔄 Перевести и выставить счёт'}],
+                                     [{'text': '🧾 Выставить без смены статуса'}]],
                         'resize_keyboard': True, 'one_time_keyboard': True}
-            send_message(token, chat_id, f"Для счёта сделку нужно перевести в «{target.get('name')}».", keyboard)
+            send_message(token, chat_id, f"Сделка сейчас в статусе «{deal.get('status') or 'не указан'}». "
+                         f"Перевести её в «{target.get('name')}» и выставить счёт?", keyboard)
             return True
+        if state.get('invoice_skip_transition'):
+            update_deal_ui_state(chat_id, invoice_skip_transition=None)
         preview=run_contract_invoice({'action':'preview_full','deal_id':str(deal_id)})
         if not preview.get('ok'):
             send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
