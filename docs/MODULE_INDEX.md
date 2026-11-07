@@ -8,7 +8,7 @@
 | Файл | Тип | Назначение | Публичный интерфейс |
 |---|---|---|---|
 | `telegram-bridge/allocation_runtime.py` | Рабочий модуль | Resumable application of dashboard-confirmed supplier cost allocations. | `money`, `sync_deal`, `process`, `poll`, `poll_in_environment` |
-| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+214) |
+| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+228) |
 | `telegram-bridge/build_cumulative_deal_execution.py` | Рабочий модуль | Build a cumulative plan/fact workbook for one deal from a multi-period table. | `normalized`, `approved_table_totals`, `build` |
 | `telegram-bridge/build_current_execution.py` | Рабочий модуль | Build the best available cumulative execution workbook for a deal. | `safe`, `build_generic`, `build` |
 | `telegram-bridge/build_installer_report_mockups.py` | Рабочий модуль | Создание демонстрационных XLSX-макетов отчёта монтажника и сверки владельца. | `setup`, `style_body`, `reconciliation_sheet`, `owner_book`, `installer_book` |
@@ -46,7 +46,7 @@
 | `telegram-bridge/docs/architecture/position-types-20261014/refresh_books.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «refresh books»; интерфейс перечислен справа. | — |
 | `telegram-bridge/docs/architecture/position-types-20261014/verify_live.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «verify live»; интерфейс перечислен справа. | — |
 | `telegram-bridge/docs/architecture/prepare_act861_date.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «prepare act861 date»; интерфейс перечислен справа. | — |
-| `telegram-bridge/docs/architecture/qa_agent.py` | Архитектурный инструмент или исторический снимок | SmartBild QA orchestrator: evidence in, deduplicated developer tasks out. | `utc_now`, `load_json`, `atomic_save`, `report_failures`, `human_coverage_failures`, `is_external`, `task_kind`, `shared_provenance`, `severity`, `fingerprint`, `developer_prompt`, `Registry` (+6) |
+| `telegram-bridge/docs/architecture/qa_agent.py` | Архитектурный инструмент или исторический снимок | SmartBild QA orchestrator: evidence in, deduplicated developer tasks out. | `utc_now`, `load_json`, `acl_spec`, `atomic_save`, `report_failures`, `human_coverage_failures`, `is_external`, `task_kind`, `shared_provenance`, `severity`, `fingerprint`, `developer_prompt` (+7) |
 | `telegram-bridge/docs/architecture/quality_gate.py` | Архитектурный инструмент или исторический снимок | Release receipt: fail on tests, isolation escapes, skips or changed source. | `verify` |
 | `telegram-bridge/docs/architecture/scenario_contracts.py` | Архитектурный инструмент или исторический снимок | Versioned scenario ownership for the current bridge and its successor. | `owner`, `values`, `inventory` |
 | `telegram-bridge/docs/architecture/shipment-861-fix/before/closing_documents.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «closing documents»; интерфейс перечислен справа. | `font`, `p`, `heading`, `table`, `base`, `signs`, `floating_picture`, `special_notes`, `money`, `sign_block`, `validate_contract_rows`, `act_number` (+4) |
@@ -59,7 +59,7 @@
 | `telegram-bridge/docs/architecture/shipments-20261013/before/server.py` | Архитектурный инструмент или исторический снимок | Private dashboard API and static app, bound to loopback behind Caddy. | `read_env`, `credentials`, `verify_telegram`, `ClosingConnection`, `connect`, `initialize`, `digest`, `new_session`, `session_user`, `snapshot`, `task_rows`, `save_task` (+4) |
 | `telegram-bridge/docs/architecture/snapshot_runtime.py` | Архитектурный инструмент или исторический снимок | Protected local rollback evidence; never restores business registries automatically. | `main` |
 | `telegram-bridge/docs/architecture/test_inventory.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «test inventory»; интерфейс перечислен справа. | `InventoryTest` |
-| `telegram-bridge/docs/architecture/test_qa_agent.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «test qa agent»; интерфейс перечислен справа. | `QaAgentTests`, `HumanProfileTests` |
+| `telegram-bridge/docs/architecture/test_qa_agent.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «test qa agent»; интерфейс перечислен справа. | `QaAgentTests`, `CoverageGapTasksTest`, `HumanProfileTests` |
 | `telegram-bridge/docs/architecture/test_quality_gate.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «test quality gate»; интерфейс перечислен справа. | `QualityGateTests` |
 | `telegram-bridge/docs/architecture/vat5-20261013/before/bridge.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «bridge»; интерфейс перечислен справа. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+184) |
 | `telegram-bridge/docs/architecture/vat5-20261013/before/closing_documents.py` | Архитектурный инструмент или исторический снимок | Узкоспециализированная утилита «closing documents»; интерфейс перечислен справа. | `font`, `p`, `heading`, `table`, `base`, `signs`, `floating_picture`, `special_notes`, `money`, `sign_block`, `validate_contract_rows`, `generate_act` (+1) |
@@ -73,13 +73,13 @@
 | `telegram-bridge/durable_json.py` | Рабочий модуль | Small fail-closed storage for legacy ledgers while their readers coexist. | `locked`, `transaction`, `read`, `save` |
 | `telegram-bridge/effect_runner.py` | Рабочий модуль | Exactly-once local dispatch with honest handling of uncertain remote effects. | `execute` |
 | `telegram-bridge/extract_document_text.py` | Рабочий модуль | Read Office invoice cells without empty merged-cell noise; no external writes. | `extract` |
-| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start`, `finish` (+9) |
+| `telegram-bridge/handoff_watcher.py` | Рабочий модуль | Task exchange between the AI tester and the developer agent through Git. | `utc_now`, `parse`, `needs_owner`, `developer_prompt`, `repository`, `workspace`, `discover`, `read_state`, `save_state`, `plan`, `decide`, `start` (+11) |
 | `telegram-bridge/hogart_closing.py` | Рабочий модуль | Fetch verified Trio Climate closing originals before composing accountant hints. | `money`, `DocumentList`, `documents`, `candidates`, `validate_text`, `fetch`, `sync` |
 | `telegram-bridge/human_fixtures.py` | Рабочий модуль | Read-only CRM snapshots for human journeys. | `crm_cli`, `capture`, `provenance_path`, `register`, `current_provenance`, `verified_snapshot`, `load` |
 | `telegram-bridge/human_intents.py` | Рабочий модуль | Conservative routing of ordinary Russian business requests. | `Intent`, `name_stems`, `classify` |
 | `telegram-bridge/human_live_journeys.py` | Рабочий модуль | Human journeys on a read-only snapshot of the real CRM. | `money`, `LiveSnapshotJourneys` |
-| `telegram-bridge/human_qa_explorer.py` | Рабочий модуль | AI exploratory tester: a language model plays the manager on the QA stand. | `CodexBrain`, `CommandBrain`, `parse_json`, `load_missions`, `choose`, `screen_for_actor`, `explore`, `judge`, `case_from`, `fixture_from`, `live_model_stand`, `main` |
-| `telegram-bridge/human_qa_harness.py` | Рабочий модуль | Human QA stand: the real bridge.main() talks to a virtual operator. | `run_script_in_process`, `JourneyStop`, `SimulatedCrash`, `ForkedChildDone`, `FakeTelegram`, `FakeMegaplan`, `ScriptedModel`, `codex_jsonl`, `Action`, `say`, `press`, `press_old` (+8) |
+| `telegram-bridge/human_qa_explorer.py` | Рабочий модуль | AI exploratory tester: a language model plays the manager on the QA stand. | `CodexBrain`, `CommandBrain`, `parse_json`, `load_missions`, `choose`, `screen_for_actor`, `explore`, `judge`, `case_from`, `explorer_office`, `fixture_from`, `live_model_stand` (+1) |
+| `telegram-bridge/human_qa_harness.py` | Рабочий модуль | Human QA stand: the real bridge.main() talks to a virtual operator. | `run_script_in_process`, `JourneyStop`, `SimulatedCrash`, `ForkedChildDone`, `FakeTelegram`, `FakeMegaplan`, `ScriptedModel`, `codex_jsonl`, `Action`, `say`, `reply`, `press` (+9) |
 | `telegram-bridge/incoming_dispatch.py` | Рабочий модуль | Track routing separately from completion of background business operations. | `tracked` |
 | `telegram-bridge/installation_handoff.py` | Рабочий модуль | Durable handoff delivery, independent of dialog state and financial writes. | `deliver` |
 | `telegram-bridge/installer_material_delivery.py` | Рабочий модуль | Price-free material files, authorized against current installer assignment. | `authorize`, `build` |
@@ -101,13 +101,14 @@
 | `telegram-bridge/procurement_attachments.py` | Рабочий модуль | Verified originals for accountant delivery; OneDrive remains an internal archive. | `download`, `build`, `email_messages` |
 | `telegram-bridge/procurement_intake_runtime.py` | Рабочий модуль | Supplier document ingestion and new line matching, independent of visiting a deal. | `infer_document`, `status`, `process_commands`, `ingest`, `automatic`, `poll`, `poll_in_environment` |
 | `telegram-bridge/product_matching_runtime.py` | Рабочий модуль | Background semantic matching through the bot's existing Codex connection. | `infer`, `poll` |
-| `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `digest`, `ideas_text` |
-| `telegram-bridge/qa_handoff.py` | Рабочий модуль | Human-approved handoff from QA findings to the existing developer agent. | `now`, `ready`, `summarize`, `developer_prompt`, `mark_notified`, `decide`, `claim`, `finish`, `defer_external`, `resume_waiting` |
+| `telegram-bridge/qa_autopilot.py` | Рабочий модуль | Scheduled QA execution, technical handoff, and owner digest. | `run`, `owner_messages_allowed`, `reviewable`, `technical`, `approve_technical`, `defer_external`, `planned`, `failure_gist`, `task_gist`, `digest` |
+| `telegram-bridge/qa_handoff.py` | Рабочий модуль | Human-approved handoff from QA findings to the existing developer agent. | `acl_spec`, `now`, `ready`, `summarize`, `developer_prompt`, `handoff_task`, `mark_notified`, `decide`, `claim`, `finish`, `defer_external`, `resume_waiting` |
+| `telegram-bridge/qa_ideas.py` | Рабочий модуль | Tester ideas the owner decides on with one button (owner decision 25.10). | `utc_now`, `idea_id`, `read`, `save`, `recent`, `register`, `by_number`, `pending`, `card`, `decide`, `start`, `finish` (+2) |
 | `telegram-bridge/qa_schedule.py` | Рабочий модуль | The approved AI-tester schedule (docs/architecture/QA_SCHEDULE.json). | `validate`, `handoff_config`, `load`, `moscow`, `human_interval_seconds`, `full_daily_utc_hour`, `in_night_window`, `night_sequence`, `digest_due`, `morning_brief_config`, `morning_brief_due`, `focus` (+2) |
 | `telegram-bridge/reconcile_operations.py` | Рабочий модуль | Local operator tool. Never calls a remote write or automatically replays input. | `main` |
 | `telegram-bridge/requisites_card.py` | Рабочий модуль | Deterministic extraction of Russian company requisites from PDF/Word text. | `compact_digits`, `document_text`, `value_after_label`, `parse`, `is_requisites_card`, `parse_document`, `parse_document_from_text` |
 | `telegram-bridge/runtime_guards.py` | Рабочий модуль | Incremental adapter around existing business functions, not an AI router. | `install`, `decorate` |
-| `telegram-bridge/safe_reload.py` | Рабочий модуль | Reload only between polling batches and after all workers have exited. | `bundle_manifest`, `request`, `pending_reviewed`, `apply_if_idle` |
+| `telegram-bridge/safe_reload.py` | Рабочий модуль | Reload only between polling batches and after all workers have exited. | `bundle_manifest`, `request`, `pending_reviewed`, `stale_request`, `apply_if_idle` |
 | `telegram-bridge/settlement_view.py` | Рабочий модуль | Read-only combined settlement view. Never rewrites historical allocations. | `combined` |
 | `telegram-bridge/statement_document_context.py` | Рабочий модуль | Recognize requested statement documents locally; never infer a project or post money. | `match_document`, `prompt_context`, `recent_context`, `deal_candidates`, `exclude_documents` |
 | `telegram-bridge/supplier_completion.py` | Рабочий модуль | Keep committed procurement separate from completion of files and archives. | `pending_steps`, `record`, `summary` |
@@ -127,13 +128,13 @@
 | `telegram-bridge/test_effect_runner.py` | Тест | Узкоспециализированная утилита «test effect runner»; интерфейс перечислен справа. | `EffectsTest` |
 | `telegram-bridge/test_email_notification_ui.py` | Тест | Узкоспециализированная утилита «test email notification ui»; интерфейс перечислен справа. | `EmailNotificationTests` |
 | `telegram-bridge/test_full_transfer_stage_path.py` | Тест | Узкоспециализированная утилита «test full transfer stage path»; интерфейс перечислен справа. | `FullTransferPathTests` |
-| `telegram-bridge/test_handoff_watcher.py` | Тест | Узкоспециализированная утилита «test handoff watcher»; интерфейс перечислен справа. | `task_text`, `FakeGit`, `HandoffWatcherTests`, `ReportVerificationTests`, `BridgeHandoffTests` |
+| `telegram-bridge/test_handoff_watcher.py` | Тест | Узкоспециализированная утилита «test handoff watcher»; интерфейс перечислен справа. | `task_text`, `FakeGit`, `HandoffWatcherTests`, `ReportVerificationTests`, `BridgeHandoffTests`, `TaskWorkspaceTest`, `WaitingCardsTest`, `RetireOlderReleasesTest` |
 | `telegram-bridge/test_historical_partial_prepare.py` | Тест | Узкоспециализированная утилита «test historical partial prepare»; интерфейс перечислен справа. | `HistoricalPrepareTests`, `PartialPaymentContextTests`, `AdvanceDeadlineTests`, `ShipmentIdentityTests`, `ShipmentRoundingTests` |
 | `telegram-bridge/test_hogart_closing.py` | Тест | Узкоспециализированная утилита «test hogart closing»; интерфейс перечислен справа. | `HogartClosingTests` |
 | `telegram-bridge/test_human_fixtures.py` | Тест | Узкоспециализированная утилита «test human fixtures»; интерфейс перечислен справа. | `fake_crm`, `HumanFixtureTests` |
-| `telegram-bridge/test_human_intents.py` | Тест | Узкоспециализированная утилита «test human intents»; интерфейс перечислен справа. | `HumanIntentTests` |
+| `telegram-bridge/test_human_intents.py` | Тест | Узкоспециализированная утилита «test human intents»; интерфейс перечислен справа. | `HumanIntentTests`, `DealNumberInPhraseTest` |
 | `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
-| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `NavigationJourneys` |
+| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsFindableJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `ReplyContextJourneys`, `NavigationJourneys` |
 | `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `UnsupportedInputJourneys`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
 | `telegram-bridge/test_human_morning_brief.py` | Тест | Узкоспециализированная утилита «test human morning brief»; интерфейс перечислен справа. | `MorningBriefHumanQATests` |
 | `telegram-bridge/test_human_operator_journey.py` | Тест | Узкоспециализированная утилита «test human operator journey»; интерфейс перечислен справа. | `TelegramOperator`, `TelegramPollingMechanicsTests` |
@@ -142,6 +143,7 @@
 | `telegram-bridge/test_human_qa_isolation.py` | Тест | The QA stand must never read or write production business stores. | `StandIsolationTests` |
 | `telegram-bridge/test_human_quick_actions.py` | Тест | Owner-approved improvements (QA_IDEAS.md И-1, И-2, И-4, И-5), checked as a person uses them. | `QuickActionJourneys`, `EdoOfferJourneys` |
 | `telegram-bridge/test_human_recovery.py` | Тест | Human journeys across a bot restart: what a person sees and what is written. | `open_invoice_preview`, `writes`, `RestartJourneys` |
+| `telegram-bridge/test_human_voice.py` | Тест | Voice requests (owner decision 23.10: OpenAI transcription), as a person uses them. | `VoiceJourneys` |
 | `telegram-bridge/test_human_workflow.py` | Тест | Узкоспециализированная утилита «test human workflow»; интерфейс перечислен справа. | `HumanWorkflowTests` |
 | `telegram-bridge/test_incoming_dispatch.py` | Тест | Узкоспециализированная утилита «test incoming dispatch»; интерфейс перечислен справа. | `InboxTests` |
 | `telegram-bridge/test_installation_dialog_safety.py` | Тест | Узкоспециализированная утилита «test installation dialog safety»; интерфейс перечислен справа. | `InstallerDialogTest` |
@@ -168,18 +170,22 @@
 | `telegram-bridge/test_procurement_attachments.py` | Тест | Узкоспециализированная утилита «test procurement attachments»; интерфейс перечислен справа. | `AttachmentTests` |
 | `telegram-bridge/test_product_matching_runtime.py` | Тест | Узкоспециализированная утилита «test product matching runtime»; интерфейс перечислен справа. | `RuntimeMatchingTests` |
 | `telegram-bridge/test_qa_autopilot.py` | Тест | Узкоспециализированная утилита «test qa autopilot»; интерфейс перечислен справа. | `AutopilotTest` |
-| `telegram-bridge/test_qa_handoff.py` | Тест | Узкоспециализированная утилита «test qa handoff»; интерфейс перечислен справа. | `QaHandoffTests` |
+| `telegram-bridge/test_qa_handoff.py` | Тест | Узкоспециализированная утилита «test qa handoff»; интерфейс перечислен справа. | `QaHandoffTests`, `AclSpecTest`, `DeveloperSandboxTest` |
+| `telegram-bridge/test_qa_ideas.py` | Тест | Узкоспециализированная утилита «test qa ideas»; интерфейс перечислен справа. | `IdeasRegistryTest`, `IdeasOwnerFlowTest` |
 | `telegram-bridge/test_qa_schedule.py` | Тест | Узкоспециализированная утилита «test qa schedule»; интерфейс перечислен справа. | `QaScheduleTests` |
+| `telegram-bridge/test_reload_notice.py` | Тест | Узкоспециализированная утилита «test reload notice»; интерфейс перечислен справа. | `ReloadNoticeTest` |
 | `telegram-bridge/test_requisites_card.py` | Тест | Узкоспециализированная утилита «test requisites card»; интерфейс перечислен справа. | `RequisitesCardTests` |
 | `telegram-bridge/test_runtime_integration.py` | Тест | Узкоспециализированная утилита «test runtime integration»; интерфейс перечислен справа. | `IntegrationTest` |
 | `telegram-bridge/test_runtime_load.py` | Тест | Local contention/load checks. No Telegram, model, CRM or supplier requests. | `LoadTests` |
-| `telegram-bridge/test_safe_reload.py` | Тест | Узкоспециализированная утилита «test safe reload»; интерфейс перечислен справа. | `ReloadTests` |
+| `telegram-bridge/test_safe_reload.py` | Тест | Узкоспециализированная утилита «test safe reload»; интерфейс перечислен справа. | `ReloadTests`, `BridgeReloadAfterDeveloperTest` |
 | `telegram-bridge/test_settlement_view.py` | Тест | Узкоспециализированная утилита «test settlement view»; интерфейс перечислен справа. | `ViewTests` |
 | `telegram-bridge/test_smartbild_shipment.py` | Тест | Узкоспециализированная утилита «test smartbild shipment»; интерфейс перечислен справа. | `SmartBildShipmentTests` |
 | `telegram-bridge/test_supplier_completion.py` | Тест | Узкоспециализированная утилита «test supplier completion»; интерфейс перечислен справа. | `SupplierCompletionTests` |
 | `telegram-bridge/test_ui_context.py` | Тест | Узкоспециализированная утилита «test ui context»; интерфейс перечислен справа. | `ContextTests` |
+| `telegram-bridge/test_voice_intake.py` | Тест | Узкоспециализированная утилита «test voice intake»; интерфейс перечислен справа. | `Response`, `VoiceIntakeTests` |
 | `telegram-bridge/test_workflow_runtime.py` | Тест | Узкоспециализированная утилита «test workflow runtime»; интерфейс перечислен справа. | `RuntimeTests` |
 | `telegram-bridge/ui_context.py` | Рабочий модуль | Atomic legacy-state adapter with per-message snapshots and stale-worker guard. | `Context`, `StateStore` |
+| `telegram-bridge/voice_intake.py` | Рабочий модуль | Telegram voice messages → text through the OpenAI transcription API. | `VoiceError`, `configured`, `to_wav`, `request_transcription`, `transcribe` |
 | `telegram-bridge/workflow_runtime.py` | Рабочий модуль | Durable operations, receipts and owner questions; no Telegram/CRM dependency. | `Conflict`, `stamp`, `dump`, `Store` |
 
 ## `megaplan-crm`
@@ -191,15 +197,15 @@
 | `megaplan-crm/bank_matcher.py` | Рабочий модуль | Suggest unambiguous Megaplan deals for imported bank transactions. | `normalized_number`, `references`, `deal_id_from_standard_contract`, `fetch_invoices`, `build_index`, `load_index`, `match_transaction`, `suggest` |
 | `megaplan-crm/bank_statement.py` | Рабочий модуль | Import Alfa Bank XLSX statements and keep an auditable deal-assignment registry. | `text`, `amount`, `date_text`, `load_registry`, `save_registry`, `fingerprint`, `parse_xlsx`, `read_1c_text`, `parse_pairs`, `parse_1c`, `parse_statement`, `commission_group` (+6) |
 | `megaplan-crm/build_deal_work_statement.py` | Рабочий модуль | Build an installer-facing work statement without deal economics. | `normalize_status`, `is_post_signing_status`, `statement_rows`, `build_xlsx`, `main` |
-| `megaplan-crm/build_profitability_report.py` | Рабочий модуль | "Расчёт рентабельности сделки" (2026-08-25) - whole-deal economics, the second document | `norm`, `is_aggregate_montage_line`, `load_installation_items`, `load_procurement_items`, `compute_profitability`, `build_xlsx`, `data_fingerprint`, `money_field_matches`, `main` |
+| `megaplan-crm/build_profitability_report.py` | Рабочий модуль | "Расчёт рентабельности сделки" (2026-08-25) - whole-deal economics, the second document | `norm`, `is_aggregate_montage_line`, `load_installation_items`, `load_procurement_items`, `compute_profitability`, `sale_amount`, `row_remark`, `remarks_summary`, `build_xlsx`, `data_fingerprint`, `money_field_matches`, `main` |
 | `megaplan-crm/build_work_statement.py` | Рабочий модуль | "Ведомость работ" calculator (2026-08-25) - last piece of the roadmap item started by | `compute_statement`, `build_xlsx`, `main` |
 | `megaplan-crm/closing_documents.py` | Рабочий модуль | Общие функции оформления закрывающих DOCX-документов. | `font`, `p`, `heading`, `table`, `base`, `signs`, `floating_picture`, `special_notes`, `money`, `sign_block`, `validate_contract_rows`, `act_number` (+6) |
 | `megaplan-crm/contract_invoice.py` | Рабочий модуль | Create a one-line Megaplan invoice from a payment clause in the latest deal contract. | `money`, `megaplan_date`, `contract_basis`, `basis_from_deal`, `document_text`, `parse_contract`, `specification_text`, `contract_scope`, `latest_contract`, `preview_fingerprint`, `validate_contract_context`, `preview` (+14) |
 | `megaplan-crm/currency_fixation.py` | Рабочий модуль | Freeze sale rows from an explicitly approved contract total; never reprice by today's FX. | `dec`, `cents`, `signature`, `plan`, `target_matches`, `apply` |
 | `megaplan-crm/currency_planning.py` | Рабочий модуль | Safe planning conversion for supplier invoices in a foreign currency. | `CurrencyPlanningError`, `invoice_date`, `parse_cbr_markup`, `fetch_cbr_rate`, `plan_invoice_spec` |
-| `megaplan-crm/deal_browser.py` | Рабочий модуль | Read/search Megaplan deals and perform validated, explicit state transitions. | `contract_upload_preflight`, `megaplan_reachable`, `ref_names`, `money_value`, `summary`, `enrich_cached_deal`, `fetch_all`, `refresh_cache_background`, `update_cached_deal`, `search_employees`, `set_executor`, `hydrate` (+5) |
+| `megaplan-crm/deal_browser.py` | Рабочий модуль | Read/search Megaplan deals and perform validated, explicit state transitions. | `contract_upload_preflight`, `megaplan_reachable`, `ref_names`, `money_value`, `summary`, `enrich_cached_deal`, `fetch_all`, `refresh_cache_background`, `update_cached_deal`, `search_employees`, `set_executor`, `hydrate` (+6) |
 | `megaplan-crm/deal_ledger.py` | Рабочий модуль | Local per-deal cost/price ledger (2026-08-23, Phase 1b). | `load`, `save`, `atomic_json`, `record_deal`, `list_recent_deals` |
-| `megaplan-crm/deal_proposal.py` | Рабочий модуль | Client-only proposal from live CRM amounts. No supplier APIs or deal creation. | `dec`, `money`, `num`, `snapshot`, `render`, `read`, `save`, `publish`, `verify_attachment`, `scan`, `ack` |
+| `megaplan-crm/deal_proposal.py` | Рабочий модуль | Client-only proposal from live CRM amounts. No supplier APIs or deal creation. | `dec`, `money`, `num`, `snapshot`, `render`, `read`, `save`, `deal_snapshot`, `preview`, `publish`, `verify_attachment`, `scan` (+1) |
 | `megaplan-crm/document_bundle.py` | Рабочий модуль | Validate actual outgoing PDFs against current CRM parties, not filenames. | `validate_invoice`, `validate` |
 | `megaplan-crm/document_order.py` | Рабочий модуль | Finish a requested contract + full invoice with per-stage durable receipts. | `OrderStepError`, `document_fingerprint`, `named_invoice_file`, `norm`, `plan`, `fulfill`, `main` |
 | `megaplan-crm/document_renderer.py` | Рабочий модуль | Run the same LibreOffice build without requiring FUSE in the bot service. | `office_command` |
@@ -295,6 +301,7 @@
 | `megaplan-crm/test_payer_signatory_store.py` | Тест | Узкоспециализированная утилита «test payer signatory store»; интерфейс перечислен справа. | `PayerSignatoryStoreTests` |
 | `megaplan-crm/test_position_type_source.py` | Тест | Узкоспециализированная утилита «test position type source»; интерфейс перечислен справа. | `PositionTypeSourceTests`, `ExistingCatalogTypeTests` |
 | `megaplan-crm/test_procurement_workflow.py` | Тест | Узкоспециализированная утилита «test procurement workflow»; интерфейс перечислен справа. | `ProcurementPaymentTest` |
+| `megaplan-crm/test_profitability_layout.py` | Тест | Узкоспециализированная утилита «test profitability layout»; интерфейс перечислен справа. | `row`, `ProfitabilityLayoutTest` |
 | `megaplan-crm/test_reconcile_publications.py` | Тест | Узкоспециализированная утилита «test reconcile publications»; интерфейс перечислен справа. | `PublicationRecoveryTests` |
 | `megaplan-crm/test_replace_deal_preview.py` | Тест | Узкоспециализированная утилита «test replace deal preview»; интерфейс перечислен справа. | `PreviewTests` |
 | `megaplan-crm/test_restore_historical_detail.py` | Тест | Узкоспециализированная утилита «test restore historical detail»; интерфейс перечислен справа. | `RestoreTests` |
@@ -572,5 +579,5 @@
 
 ## Итого
 
-- Python: 536
+- Python: 543
 - JavaScript/MJS: 11

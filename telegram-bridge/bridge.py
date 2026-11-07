@@ -689,6 +689,10 @@ DEAL_CREATE_CONFIRM_KEYBOARD = {
                  [{'text': '✏️ Заменить спецификацию'}, {'text': '❌ Отмена'}]],
     'resize_keyboard': True,
 }
+DEAL_PROPOSAL_CONFIRM_KEYBOARD = {
+    'keyboard': [[{'text': '✅ Создать PDF КП'}], [{'text': '❌ Отмена'}]],
+    'resize_keyboard': True, 'one_time_keyboard': True,
+}
 HUMAN_PAYER_CONFIRM_KEYBOARD = {
     'keyboard': [[{'text': '✅ Сменить плательщика'}], [{'text': '❌ Отмена'}]],
     'resize_keyboard': True, 'one_time_keyboard': True,
@@ -4534,15 +4538,33 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             if not target or not recipient or len(recipient) > 200:
                 send_message(token, chat_id, 'Введите имя/ФИО или обращение длиной до 200 символов.', PAYER_UPLOAD_KEYBOARD)
                 return True
-            update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
-            send_message(token, chat_id, f'📄 Формирую КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
-            if _background:
-                send_deal_proposal(token, chat_id, target, recipient=recipient)
-            else:
-                run_background_job(lambda: send_deal_proposal(token, chat_id, target, recipient=recipient), token, chat_id,
-                                   operation=f'КП по сделке:{target}')
+            preview = run_deal_proposal({'action': 'preview', 'deal_id': str(target), 'recipient': recipient})
+            if not preview.get('ok'):
+                send_message(token, chat_id, 'Не удалось прочитать состав сделки: ' + preview.get('error', 'ошибка проверки'), PAYER_UPLOAD_KEYBOARD)
+                return True
+            rows = '\n'.join(f'• {row["name"]}: {row["qty"]} {row["unit"]} — {bank_money(row["total"])} ₽' for row in preview['rows'])
+            update_deal_ui_state(chat_id, pending='proposal_confirm', proposal_deal_id=str(target),
+                                 proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'])
+            send_message(token, chat_id,
+                         f'📄 Предпросмотр КП по сделке №{target}\nАдресат: {recipient}\n'
+                         f'{preview["count"]} позиции:\n\n{rows}\n\n'
+                         f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.', DEAL_PROPOSAL_CONFIRM_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
+    proposal_state = current_deal_ui_state(chat_id)
+    if proposal_state.get('pending') == 'proposal_confirm' and value == '✅ Создать PDF КП':
+        target = proposal_state.get('proposal_deal_id')
+        recipient = proposal_state.get('proposal_recipient')
+        fingerprint = proposal_state.get('proposal_fingerprint')
+        update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None, proposal_recipient=None, proposal_fingerprint=None)
+        send_message(token, chat_id, f'📄 Формирую КП №{target}.', DEAL_ACTIONS_KEYBOARD)
+        kwargs = {'recipient': recipient, 'expected_fingerprint': fingerprint}
+        if _background:
+            send_deal_proposal(token, chat_id, target, **kwargs)
+        else:
+            run_background_job(lambda: send_deal_proposal(token, chat_id, target, **kwargs), token, chat_id,
+                               operation=f'КП по сделке:{target}')
+        return True
     if value == '➕ Создать сделку':
         update_deal_ui_state(chat_id, pending='deal_create_title', deal_creation_active=True,
                              deal_create_spec={}, deal_creation_items=None,
@@ -7332,8 +7354,9 @@ def run_deal_proposal(spec):
         return {'ok': False, 'error': 'Не удалось завершить формирование КП. Повторная попытка не создаст новую сделку.'}
 
 
-def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None):
-    result = run_deal_proposal({'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient})
+def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None, expected_fingerprint=None):
+    result = run_deal_proposal({'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient,
+                                'expected_fingerprint': expected_fingerprint})
     if not result.get('ok'):
         send_message(token, chat_id, 'КП не сформировано: ' + result.get('error', 'ошибка проверки'), DEAL_ACTIONS_KEYBOARD)
         return False

@@ -602,9 +602,17 @@ class FakeMegaplan:
 
     def cli_deal_proposal(self, action, spec):
         deal = self._deal(spec)
+        rows = [{'name': p['name'], 'qty': str(p['qty']), 'unit': p.get('unit') or 'шт.',
+                 'total': str(p['qty'] * p['price'])} for p in deal['positions']]
+        fingerprint = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+        if action == 'preview':
+            return {'ok': True, 'deal_id': deal['id'], 'rows': rows, 'count': len(rows),
+                    'total': self.price(deal), 'fingerprint': fingerprint}
         if action == 'publish':
             if not deal['positions']:
                 return {'ok': False, 'error': 'в сделке нет позиций'}
+            if spec.get('expected_fingerprint') and spec['expected_fingerprint'] != fingerprint:
+                return {'ok': False, 'error': 'Сделка изменилась после предпросмотра. Повторите формирование'}
             self._write('deal_proposal', action, spec)
             path = self.root / f"КП по сделке {deal['id']}.pdf"
             path.write_bytes(b'%PDF-1.4 proposal')
