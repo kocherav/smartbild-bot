@@ -96,6 +96,10 @@ def _status_intent(original, folded, deal_id):
         or (re.search(r"\b(?:перевед|переведи|перевест)\w*\b", folded) and re.search(r"\bсделк", folded))
     if not asks:
         return None
+    descriptive = re.search(
+        r"(?i)\bсделк\w*\s+(?P<query>.+?)\s+(?:в|на)(?:\s+статус\w*)?\s+[«\"]?(?P<target>.+?)[»\"]?(?=[.;!?\n]|$)",
+        original,
+    )
     target = _tail(original, (
         r"статус\w*\s+(?:у\s+)?сделк\w*\s*(?:№|номер)?\s*\d+\S*\s+(?:на|в)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
         r"статус\w*\s+(?:на|в)?\s*[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
@@ -103,11 +107,16 @@ def _status_intent(original, folded, deal_id):
         r"\d+\S*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
         r"\bсделк\w*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
     ))
+    if descriptive:
+        target = descriptive.group("target").strip(" .,:;!?«»\"")
     if target and re.match(r"(?i)^(?:сделк|статус)", target):
         target = None
     target = _strip_deal_ref(target)
-    missing = tuple(x for x, value in (("deal", deal_id), ("status", target)) if not value)
-    return Intent(MOVE_STATUS, deal_id, target, missing=missing)
+    query = descriptive.group("query").strip(" .,:;!?«»\"") if descriptive and not deal_id else None
+    if query and re.fullmatch(r"(?:№|номер)?\s*\d+", query, re.I):
+        query = None
+    missing = tuple(x for x, value in (("deal", deal_id or query), ("status", target)) if not value)
+    return Intent(MOVE_STATUS, deal_id, target, fields={"deal_query": query} if query else {}, missing=missing)
 
 
 _NAME_ENDINGS = ("ого", "его", "ому", "ему", "ыми", "ими", "ой", "ей", "ым", "им", "ом", "ем",
