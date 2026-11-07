@@ -604,6 +604,21 @@ class FakeMegaplan:
         docx.write_bytes(b'PK docx'); pdf.write_bytes(b'%PDF-1.4 contract')
         return {'ok': True, 'preview': preview, 'docx_path': str(docx), 'pdf_path': str(pdf)}
 
+    def cli_installation_workflow(self, action, spec):
+        """The installation contour: project files and versions per deal (incident 865/888)."""
+        projects = self.__dict__.setdefault('projects', {})
+        deal_id = str(spec.get('deal_id') or '')
+        if action == 'project_candidates':
+            self._deal(spec)
+            return {'ok': True, 'result': [{'id': f'file-{deal_id}', 'name': f'Проект сделки {deal_id}.pdf'}]}
+        if action == 'attach_project':
+            self._deal(spec)
+            self._write('installation_workflow', 'attach_project', spec)
+            versions = projects.setdefault(deal_id, [])
+            versions.append({'files': list(spec.get('file_ids') or []) + [os.path.basename(p) for p in spec.get('local_paths') or []]})
+            return {'ok': True, 'result': {'version': len(versions), 'installation_status': 'draft'}}
+        return None
+
     def cli_deal_proposal(self, action, spec):
         deal = self._deal(spec)
         rows = [{'name': p['name'], 'qty': str(p['qty']), 'unit': p.get('unit') or 'шт.',

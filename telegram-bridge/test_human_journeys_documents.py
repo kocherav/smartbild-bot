@@ -490,3 +490,129 @@ class NavigationJourneys(HumanJourneyCase, unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TypedYesInsideScenarioJourneys(HumanJourneyCase, unittest.TestCase):
+    """06.11 (deal 905, report TASK-20261106-01 item 5): a subject change typed during contract
+    preparation and a short «Да» went to the assistant (48 s, no effect)."""
+
+    def _to_contract_preview(self, person):
+        yield from to_contract_menu(person)
+        yield press('👁 Проверить данные договора')
+        yield say('Петров Иван Сергеевич')
+        yield say('Генеральный директор')
+        yield press('Устав')
+        person.sees_button('✅ Сформировать и загрузить Word и PDF')
+
+    def test_subject_change_and_typed_yes_inside_contract_preparation(self):
+        def journey(person):
+            yield from self._to_contract_preview(person)
+            yield say('измени предмет договора на поставка и монтаж вентиляции')
+            person.sees('Сделка №990001', 'Станет: «Поставка и монтаж вентиляции»',
+                        expected='Фраза внутри договора — предпросмотр предмета, не ИИ')
+            yield say('Да')
+            person.sees('✅ Предмет договора в сделке №990001 записан',
+                        expected='«Да» сработало как единственная кнопка подтверждения')
+        stand = self.play(journey, setup=no_contract)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'update_contract_fields']),
+                         'Ровно одна запись предмета')
+        self.assertEqual(0, len(stand.model.prompts), 'Ни одно сообщение сценария не ушло в ИИ')
+
+    def test_typed_yes_confirms_contract_preview_once(self):
+        def journey(person):
+            yield from self._to_contract_preview(person)
+            yield say('да')
+            person.got_document('.docx', expected='«да» сформировало договор так же, как кнопка')
+            person.sees('загружены')
+        stand = self.play(journey, setup=no_contract)
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'upload_contracts']))
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_typed_yes_with_two_choices_asks_to_press_and_writes_nothing(self):
+        def needs_invoice_status(crm):
+            office(crm)
+            crm.deals[DEAL]['status_id'] = '1'
+
+        def journey(person):
+            yield say('990001')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            person.sees_button('🧾 Выставить без смены статуса')
+            yield say('да')
+            person.sees('«Да» здесь неоднозначно', '«🔄 Перевести и выставить счёт»',
+                        '«🧾 Выставить без смены статуса»', expected='Бот не угадал выбор, а попросил нажать')
+            yield press('🧾 Выставить без смены статуса')
+            person.sees('Выставить общий счёт', expected='Кнопки экрана остались рабочими')
+            yield say('да')
+            person.got_document('Счёт', expected='«да» под предпросмотром счёта выставило его')
+        stand = self.play(journey, setup=needs_invoice_status)
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] == 'move_status'])
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_yes_without_waiting_scenario_is_ordinary_text(self):
+        def journey(person):
+            yield say('990001')
+            yield say('да')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes, 'Без ожидающего сценария «да» ничего не подтверждает')
+
+
+class DealContractInvoiceRouteJourneys(HumanJourneyCase, unittest.TestCase):
+    """06.11 (owner, deal 905): deal → contract → invoice took three hours. The whole route in
+    one journey, one CRM write per operation, typed «да» where a person would type it."""
+
+    def test_new_deal_then_contract_then_stage_invoice(self):
+        block = ('Черновик готов.\nCREATE_MEGAPLAN_DEAL_BEGIN\n'
+                 '{"client_name": "ООО «Альфа Климат»", "description": "Переговорная", '
+                 '"selling_company_id": "cliwell", "tax_mode": "5", '
+                 '"items": [{"name": "Сплит-система Haier AS35", "qty": 2, "unit_price": 52000}, '
+                 '{"name": "Монтаж сплит-системы", "qty": 2, "unit_price": 14000}]}\n'
+                 'CREATE_MEGAPLAN_DEAL_END')
+
+        def journey(person):
+            yield say('Создай сделку для клиента Альфа Климат: Сплит-система Haier AS35 — 2 шт по 52000; монтаж — 2 шт по 14000')
+            yield press('✅ Создать подтверждённую сделку')
+            person.sees('Сделка создана', expected='Сделка создана после одного подтверждения')
+            yield press('📄 Документы сделки')
+            yield press('📑 Работа с договором')
+            yield press('👁 Проверить данные договора')
+            person.sees('не выбран плательщик', 'после записи сразу покажу предпросмотр договора',
+                        expected='Недостающий шаг предложен в том же маршруте, а не тупик')
+            yield press('ООО «Альфа Климат» · ИНН 7701000001')
+            yield say('да')
+            person.sees('Готовлю предпросмотр договора', expected='После записи плательщика маршрут продолжился сам')
+            yield from answer_contract_questions(person)
+            person.sees('Договор №', '132 000,00', expected='Предпросмотр договора новой сделки')
+            yield say('да')
+            person.got_document('.pdf', expected='Договор сформирован и загружен одним «да»')
+            yield press('📄 Документы сделки')
+            yield press('🧾 Работа со счетами')
+            yield press('6.4.1')
+            yield say('да')
+            person.sees('выставлен', expected='Счёт по пункту договора выставлен')
+
+        stand = self.play(journey, setup=office, model_rules=[('Сплит-система Haier AS35', block)])
+        writes = stand.crm.writes
+        self.assertEqual(1, len([w for w in writes if w['script'] == 'megaplan_api']), 'одна сделка')
+        self.assertEqual(1, len([w for w in writes if w['action'] == 'upload_contracts']), 'один договор')
+        self.assertEqual(1, len([w for w in writes if w['action'] == 'create']), 'один счёт')
+        self.assertEqual(0, len(stand.model.prompts) - 1, 'ИИ только разобрал текст новой сделки')
+
+
+def answer_contract_questions(person):
+    """Answer whatever the contract preview still needs, as a person would."""
+    for _ in range(6):
+        text = person.screen_text()
+        if 'Договор №' in text:
+            return
+        if 'ФИО подписанта' in text:
+            yield say('Петров Иван Сергеевич')
+        elif 'должность' in text:
+            yield say('Генеральный директор')
+        elif 'Устав' in person.visible_buttons():
+            yield press('Устав')
+        elif 'адрес' in text.casefold():
+            yield say('Москва, Тверская ул., 7')
+        else:
+            return

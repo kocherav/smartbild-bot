@@ -50,6 +50,7 @@ import procurement_intake_runtime
 import math
 from workflow_runtime import Store as WorkflowStore
 from ui_context import StateStore
+import deal_context
 from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
@@ -1737,7 +1738,9 @@ def send_message(token, chat_id, text, reply_markup=None):
         elif persistent:
             reply_markup={**reply_markup,'is_persistent':True,'one_time_keyboard':False}
         else:
-            reply_markup = WorkflowStore(WORKFLOW_DB_FILE).keyboard(chat_id, reply_markup['keyboard'])
+            reply_markup = WorkflowStore(WORKFLOW_DB_FILE).keyboard(
+                chat_id, reply_markup['keyboard'],
+                deal_id=ui_state_store().current(chat_id).get('current_deal_id'))
     # Telegram limit is 4096 chars per message
     chunks = [text[i:i + 3500] for i in range(0, len(text), 3500)] or [""]
     delivered = True
@@ -1835,6 +1838,7 @@ def update_deal_ui_state(chat_id, **values):
         fcntl.flock(state_lock, fcntl.LOCK_EX)
         all_state = load_deal_ui_state()
         state = all_state.setdefault(str(chat_id), {})
+        values = deal_context.switch_values(state, values)
         for key, value in values.items():
             if value is None:
                 state.pop(key, None)
@@ -3359,6 +3363,14 @@ def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     send_message(token, chat_id, "Найденные сделки" + shown + ":\n\n" + "\n\n".join(lines), deal_selection_keyboard(deals))
 
 
+def focus_deal(chat_id, deal_id):
+    """The deal named by the person becomes the open deal (deal_context.py): a request
+    about №N must never run with previews, files or ids left over from another deal."""
+    deal_id = str(deal_id or "")
+    if deal_id and str(current_deal_ui_state(chat_id).get("current_deal_id") or "") != deal_id:
+        update_deal_ui_state(chat_id, current_deal_id=deal_id)
+
+
 def select_deal(token, chat_id, deal_id):
     # Opening a card is read-only navigation and must not wait for a slow CRM.
     # Mutating actions below still validate against live Megaplan data.
@@ -3621,9 +3633,12 @@ def handle_bare_deal_number(token, chat_id, text):
     if not match:
         return False
     state = current_deal_ui_state(chat_id)
-    if state.get("pending") or state.get("deal_creation_active"):
+    pending = str(state.get("pending") or "")
+    # A preview waiting for its button never asks for a number: a lone deal number there
+    # opens that deal, and the preview of the previous deal is dropped (deal_context.py).
+    if (pending and "confirm" not in pending) or state.get("deal_creation_active"):
         return False
-    if time.time() - float(state.get("assistant_turn_at") or 0) < ASSISTANT_CONTEXT_SECONDS:
+    if not pending and time.time() - float(state.get("assistant_turn_at") or 0) < ASSISTANT_CONTEXT_SECONDS:
         return False
     try:
         tasks = invoice_tasks.read(chat_id)
@@ -4149,6 +4164,15 @@ def prepare_contract_preview(token, chat_id, deal_id):
     result = run_contract_builder({"action": "preview", "deal_id": deal_id,
                                    "customer_signatory": signer,
                                    "customer_signatory_payer_id": signer_payer_id})
+    if not result.get("ok") and "не выбран плательщик" in str(result.get("error") or ""):
+        # 07.11 stand route «сделка → договор → счёт»: a fresh deal of a client with two
+        # payers stopped here with no way on. The missing step is offered in place, and
+        # after the confirmed payer write the same contract preview continues.
+        send_message(token, chat_id, f"В сделке №{deal_id} не выбран плательщик — без него договор не сформировать. "
+                     "Выберите плательщика, после записи сразу покажу предпросмотр договора.")
+        _start_human_payer(token, chat_id, deal_id)
+        update_deal_ui_state(chat_id, payer_then={"deal_id": str(deal_id), "then": "contract_preview"})
+        return
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось проверить договор: {result.get('error')}", CONTRACT_KEYBOARD)
         return
@@ -4969,7 +4993,15 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                          "Черновик счёта не найден. Откройте закупку нужной сделки и загрузите счёт заново.",
                          PROCUREMENT_KEYBOARD)
             return True
-    if pending_now.startswith("contract_") and state.get("contract_deal_id"):
+    if (pending_now.startswith("contract_") and state.get("contract_deal_id")
+            and str(state.get("contract_deal_id")) != str(deal_id or "")):
+        if deal_id:
+            # A contract step of another deal must not run on this card (deal_context.py).
+            update_deal_ui_state(chat_id, pending=None, contract_deal_id=None, contract_preview=None)
+            send_message(token, chat_id, f"Подготовка договора относилась к сделке №{state.get('contract_deal_id')}, "
+                         f"а открыта сделка №{deal_id}. Ничего не сформировано; начните договор заново из этой сделки.",
+                         DEAL_ACTIONS_KEYBOARD)
+            return True
         deal_id = state.get("contract_deal_id")
 
     installation_values = {
@@ -5012,7 +5044,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token,chat_id,str(exc)); return True
         legacy_report_ui.stage(sys.modules[__name__],token,chat_id,updated)
         return True
-    installation_deal_id = str(state.get("installation_deal_id") or deal_id or "")
+    # The open card decides (incident 865/888); the bound id serves only a chat with no
+    # open card (the installer cabinet).
+    installation_deal_id = str(deal_id or state.get("installation_deal_id") or "")
     if value in ("👤 Выбрать контакт по монтажу","👤 Контакт по монтажу") and installation_deal_id:
         result=run_installation_workflow({"action":"contact_candidates","deal_id":installation_deal_id})
         if not result.get('ok'):
@@ -5110,8 +5144,10 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             update_deal_ui_state(chat_id,installation_project_selected=sorted(selected))
             send_message(token,chat_id,f"Выбрано файлов: {len(selected)}.",project_selection_keyboard(choices,selected)); return True
         if value=="📤 Загрузить новый файл":
-            update_deal_ui_state(chat_id,pending="installation_project_upload")
-            send_message(token,chat_id,"Пришлите файл проекта. Он будет сохранён как новая версия."); return True
+            # The target is fixed at the press and checked again when the file arrives.
+            update_deal_ui_state(chat_id,pending="installation_project_upload",
+                                 installation_project_upload_deal_id=installation_deal_id)
+            send_message(token,chat_id,f"Пришлите файл проекта для сделки №{installation_deal_id}. Он будет сохранён как новая версия проекта этой сделки."); return True
         if value=="✅ Привязать выбранные файлы":
             if not selected:
                 send_message(token,chat_id,"Сначала отметьте хотя бы один файл.",project_selection_keyboard(choices,selected)); return True
@@ -5339,7 +5375,12 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                  deal_creation_active=False, deal_creation_items=None,
                                  deal_creation_economics_path=None,
                                  current_deal_id=str(result.get("id") or ""))
-            send_message(token, chat_id, format_create_megaplan_deal_summary(spec, result), MAIN_KEYBOARD)
+            # 06.11 (deal 905): the new deal ended on the main menu and had to be found again
+            # before its contract and invoice. It is now the open deal with its actions.
+            created_id = str(result.get("id") or "")
+            send_message(token, chat_id, format_create_megaplan_deal_summary(spec, result) +
+                         (f"\n\nСделка №{created_id} открыта — договор, счёт и КП кнопками ниже." if created_id else ""),
+                         DEAL_ACTIONS_KEYBOARD if created_id else MAIN_KEYBOARD)
             if result.get("ledger"):
                 review = build_spec_review_xlsx(spec.get("client_name", "?"), result["ledger"])
                 if review:
@@ -6117,7 +6158,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if pending == "procurement_stock_confirm" and value in (
             "✅ Использовать найденные остатки", "⏭ Не использовать остатки"):
-        stock_deal_id = str(state.get("procurement_stock_deal_id") or deal_id or "")
+        stock_deal_id = str(deal_id or state.get("procurement_stock_deal_id") or "")
         suggestions = state.get("procurement_stock_suggestions") or []
         if value == "✅ Использовать найденные остатки":
             updates = [{"offer_id": x.get("offer_id"), "offer_row_id": x.get("offer_row_id"),
@@ -9671,12 +9712,18 @@ def ask_claude(session_id, prompt):
     """Resume valid chat threads; preserve failures rather than blaming user input."""
     session_id = current_assistant_thread()
     model_recovery.begin_request(MODEL_FAILURES_FILE, _model_chat_id(), prompt, "chat")
+    # The day-long assistant thread remembers other deals; each turn states the open one
+    # (06.11: «экономика по сделке 905» was answered about №865 from an earlier message).
     try:
-        result = _run_codex(session_id, prompt)
+        framed = deal_context.assistant_note(current_deal_ui_state(_model_chat_id())) + prompt
+    except Exception:
+        framed = prompt
+    try:
+        result = _run_codex(session_id, framed)
         kind = model_recovery.failure_kind(result)
         # A new conversation fixes a missing rollout, not expired credentials.
         if kind == "missing_thread" and session_id:
-            result = _run_codex("", prompt)
+            result = _run_codex("", framed)
             kind = model_recovery.failure_kind(result)
     except subprocess.TimeoutExpired:
         return _model_failure(prompt, "timeout", "chat")
@@ -10323,6 +10370,7 @@ def payer_choices(payers):
 
 
 def _start_human_payer(token,chat_id,deal_id,target=None):
+    focus_deal(chat_id,deal_id)
     result=run_payer_card_apply({'action':'list_deal_payers','deal_id':str(deal_id)})
     if not result.get('ok'):
         send_message(token,chat_id,'Не удалось прочитать плательщиков сделки: '+str(result.get('error')))
@@ -10361,6 +10409,7 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
 
 
 def _start_human_executor(token,chat_id,deal_id,query=None,kind=human_intents.ASSIGN_EXECUTOR):
+    focus_deal(chat_id,deal_id)
     if not query:
         update_deal_ui_state(chat_id,pending='human_executor_query',human_intent={'name':kind,'deal_id':str(deal_id)})
         send_message(token,chat_id,f"Кого назначить {'монтажником' if kind==human_intents.CHANGE_INSTALLER else 'исполнителем'} сделки №{deal_id}? Укажите имя или фамилию.")
@@ -10385,6 +10434,7 @@ def _start_human_executor(token,chat_id,deal_id,query=None,kind=human_intents.AS
 
 
 def _start_human_invoice(token,chat_id,deal_id,kind):
+    focus_deal(chat_id,deal_id)
     """«Выстави счёт…» opens the invoice menu of that deal; «пришли счёт…» sends the latest one."""
     if kind==human_intents.GET_INVOICE:
         update_deal_ui_state(chat_id,current_deal_id=str(deal_id))
@@ -10404,6 +10454,7 @@ def _status_stem(value):
 
 
 def _start_human_status(token, chat_id, deal_id, target=None):
+    focus_deal(chat_id,deal_id)
     """«Переведи сделку N в закупку»: the same confirmation screen as the status buttons."""
     result = run_deal_browser({"action": "get_cached", "deal_id": str(deal_id)}, timeout=8)
     if not result.get("ok"):
@@ -10486,6 +10537,7 @@ def _human_payment_summary(deal_id):
 
 def send_deal_payment_summary(token, chat_id, deal_id):
     """One read-only answer: issued invoices, confirmed bank receipts, remainder and status."""
+    focus_deal(chat_id, deal_id)
     result = _human_payment_summary(deal_id)
     if not result.get('ok'):
         send_message(token, chat_id, 'Оплата НЕ ПРОВЕРЕНА: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
@@ -10511,6 +10563,50 @@ def has_explicit_deal_economics(text):
 
 
 # Top-level menu entries: a person pressing one has left whatever they were doing.
+TYPED_YES_RE = re.compile(
+    r"(?i)^\s*(?:да|ага|ок|окей|ok|yes|подтверждаю|подтвердить|верно|согласен|согласна|давай|"
+    r"да,?\s*(?:всё|все)\s+верно|да,?\s*подтверждаю|да,?\s*давай)\s*[.!👍]*\s*$"
+)
+
+
+def typed_confirmation(token, msg):
+    """06.11 (deal 905): a typed «Да» under a preview went to the assistant (48 s, no effect).
+
+    One general rule for every preview: a bare «да» while a scenario waits for confirmation
+    is the screen's single «✅ …» button, consumed through the same one-shot control as a tap
+    (a second «да» or a tap after it is «уже использована»). With several ✅ choices the
+    bot asks to press one; nothing is guessed. Returns a callback-shaped message, False when
+    the message was answered here, or None to continue as ordinary text."""
+    text = str((msg or {}).get("text") or "")
+    chat_id = str(((msg or {}).get("chat") or {}).get("id") or "")
+    if not chat_id or not TYPED_YES_RE.match(text):
+        return None
+    if not current_deal_ui_state(chat_id).get("pending"):
+        return None
+    store = WorkflowStore(WORKFLOW_DB_FILE)
+    screen = store.active_labels(chat_id)
+    choices = [(tok, label) for tok, label in screen if label.startswith("✅")]
+    if len(choices) != 1:
+        options = choices or [(tok, label) for tok, label in screen
+                              if not label.startswith(("❌", "⬅️"))]
+        if not options:
+            return None
+        send_message(token, chat_id, "«Да» здесь неоднозначно — нажмите нужную кнопку: "
+                     + "; ".join(f"«{label}»" for _, label in options) + ".",
+                     # Sent before the update's UI context exists: mark it as the
+                     # person's own screen so the live-screen guard keeps the buttons.
+                     {"keyboard": [[{"text": label}] for _, label in screen], "resize_keyboard": True,
+                      "_status_action": True})
+        return False
+    control = store.take_control(chat_id, choices[0][0])
+    if not control.get("ok"):
+        return None
+    if deal_context.stale_button(control.get("text"), control.get("deal_id"), current_deal_ui_state(chat_id)):
+        return None
+    return {**msg, "text": control["text"], "_workflow_callback": True, "_view_id": control["view_id"],
+            "_typed_confirmation": text}
+
+
 TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделками", "/deals", "🏦 Деньги", "🏦 Банк и платежи",
                         "🧰 Монтаж", "☰ Ещё", "⬅️ Главное меню", "/menu", "/start", "📊 Пульт сделок",
                         "/dashboard", "🧪 Ошибки тестировщика"}
@@ -10539,7 +10635,7 @@ def handle_human_workflow(token,chat_id,text):
         target=state.get('suspended_payer_target')
         return _start_human_payer(token,chat_id,deal_id,target)
     if pending.startswith('human_') and value=='❌ Отмена':
-        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,payer_then=None,
                              suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
     if pending=='human_payer_deal':
@@ -10565,7 +10661,15 @@ def handle_human_workflow(token,chat_id,text):
         if not result.get('ok'):send_message(token,chat_id,'Плательщик не изменён: '+str(result.get('error')),HUMAN_PAYER_CONFIRM_KEYBOARD);return True
         check=run_payer_card_apply({'action':'list_deal_payers','deal_id':intent.get('deal_id')});selected=next((x for x in check.get('payers') or [] if x.get('selected')),None)
         if str((selected or {}).get('id'))!=str(payer.get('id')):send_message(token,chat_id,'Запись не подтверждена обратным чтением. Не повторяйте без сверки.');return True
-        update_deal_ui_state(chat_id,pending=None,human_intent=None);send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.\n\nДальше: «🧾 Выставить счёт» — счёт будет выставлен уже на нового плательщика.",DEAL_ACTIONS_KEYBOARD);return True
+        then=state.get('payer_then') or {}
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,payer_then=None)
+        if then.get('then')=='contract_preview' and str(then.get('deal_id'))==str(intent.get('deal_id')):
+            send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик — «{selected.get('name')}» (обратное чтение Мегаплана). Готовлю предпросмотр договора…")
+            update_deal_ui_state(chat_id,current_deal_id=str(intent.get('deal_id')),contract_deal_id=str(intent.get('deal_id')))
+            run_background_job(lambda: prepare_contract_preview(token,chat_id,str(intent.get('deal_id'))),token,chat_id,
+                               operation=f"предпросмотр договора:{intent.get('deal_id')}")
+            return True
+        send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.\n\nДальше: «🧾 Выставить счёт» — счёт будет выставлен уже на нового плательщика.",DEAL_ACTIONS_KEYBOARD);return True
     if pending=='human_executor_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
@@ -10621,6 +10725,8 @@ def handle_human_workflow(token,chat_id,text):
         # Every preview below names the deal, so a stale selection is visible before any write.
         intent=human_intents.Intent(intent.name,str(state['current_deal_id']),intent.target,intent.fields,
                                     tuple(x for x in intent.missing if x!='deal'),intent.confidence)
+    if intent.deal_id and intent.name!=human_intents.CREATE_DEAL:
+        focus_deal(chat_id,intent.deal_id)
     if intent.name==human_intents.MOVE_STATUS:
         if not intent.deal_id:
             query=(intent.fields or {}).get('deal_query')
@@ -10827,15 +10933,23 @@ def main():
             if report_pending == "installation_project_upload":
                 if os.path.getsize(source_document_path)>20*1024*1024:
                     send_message(token,chat_id,"Файл проекта превышает лимит 20 МБ. Пришлите файл меньшего размера."); return
-                project_deal_id=str(report_state.get("installation_deal_id") or report_state.get("current_deal_id") or "")
+                project_deal_id=str(report_state.get("installation_project_upload_deal_id") or "")
+                open_deal=str(report_state.get("current_deal_id") or "")
+                if not project_deal_id or (open_deal and open_deal!=project_deal_id):
+                    # Fail closed: no fixed target, or another deal is open now.
+                    update_deal_ui_state(chat_id,pending=None,installation_project_upload_deal_id=None)
+                    send_message(token,chat_id,"Файл НЕ прикреплён: не ясно, к какой сделке он относится. "
+                                 "Откройте нужную сделку → «🧰 Монтаж сделки» → «📐 Приложить проект» и пришлите файл ещё раз.",
+                                 DEAL_ACTIONS_KEYBOARD); return
                 result=run_installation_workflow({"action":"attach_project","deal_id":project_deal_id,
                     "local_paths":[source_document_path],"actor":str(chat_id)})
                 if not result.get("ok"):
                     send_message(token,chat_id,"Проект не привязан: "+str(result.get("error")),DEAL_ACTIONS_KEYBOARD); return
                 project=result["result"]; back=report_state.get("installation_project_return") or "deal"
                 update_deal_ui_state(chat_id,pending="installation_draft_review" if back=="draft" else None,
-                                     installation_project_choices=None,installation_project_selected=None,installation_project_return=None)
-                send_message(token,chat_id,f"✅ Файл сохранён как проект версии №{project['version']}.",INSTALLATION_DRAFT_KEYBOARD if back=="draft" else DEAL_ACTIONS_KEYBOARD)
+                                     installation_project_choices=None,installation_project_selected=None,installation_project_return=None,
+                                     installation_project_upload_deal_id=None)
+                send_message(token,chat_id,f"✅ Файл сохранён как проект версии №{project['version']} сделки №{project_deal_id}.",INSTALLATION_DRAFT_KEYBOARD if back=="draft" else DEAL_ACTIONS_KEYBOARD)
                 if project.get("installation_status") in ("transferred","in_progress","review") and INSTALLER_NOTIFY_CHAT_ID:
                     notify_installers(token,f"📐 По сделке №{project_deal_id} опубликована новая версия проекта №{project['version']}.")
                 return
@@ -10844,7 +10958,8 @@ def main():
             # valid file fall through to the legacy AI/payment interpreter.
             if (report_pending in ("installation_workbook_file", "installation_draft_review")
                     and original_ext == ".xlsx"
-                    and report_state.get("installation_deal_id")):
+                    and report_state.get("installation_deal_id")
+                    and str(report_state.get("current_deal_id") or report_state.get("installation_deal_id")) == str(report_state.get("installation_deal_id"))):
                 if original_ext != ".xlsx":
                     send_message(token, chat_id, "Нужен исправленный файл монтажной ведомости в формате .xlsx.", INSTALLATION_DRAFT_KEYBOARD)
                     return
@@ -12298,11 +12413,24 @@ def main():
                     pass
                 if not control.get('ok'):
                     continue
+                stale_for = deal_context.stale_button(control.get('text'), control.get('deal_id'),
+                                                      ui_state_store().current(callback_chat))
+                if stale_for:
+                    open_now = ui_state_store().current(callback_chat).get('current_deal_id')
+                    send_message(token, callback_chat,
+                                 f"Кнопка «{control.get('text')}» относилась к сделке №{stale_for}, "
+                                 f"а сейчас открыта сделка №{open_now}. Ничего не выполнено. "
+                                 f"Чтобы работать со сделкой №{stale_for}, откройте её заново.")
+                    continue
                 msg = {'chat': {'id': callback_chat}, 'from': callback.get('from') or {},
                        'message_id': 'callback:' + str(callback['id']), 'text': control['text'],
                        '_workflow_callback': True, '_view_id': control['view_id'], 'date': time.time()}
             else:
                 msg = update.get("message")
+                typed = typed_confirmation(token, msg)
+                if typed is False:
+                    continue
+                msg = typed or msg
             sender_chat = str(((msg or {}).get("chat") or {}).get("id") or "")
             if (msg and "voice" in msg and voice_intake.configured(env)
                     and (sender_chat == authorized_chat_id or sender_chat in linked_accounts)):
