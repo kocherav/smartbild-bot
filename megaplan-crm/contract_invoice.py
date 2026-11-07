@@ -491,6 +491,31 @@ def list_invoices(spec, api):
     return {"ok": True, "deal_id": deal_id, "invoices": result}
 
 
+def find_invoice_number(spec, api):
+    """Read the complete invoice index and return exact display-number matches."""
+    wanted = str(spec.get("number") or "").strip().casefold()
+    if not wanted:
+        raise ValueError("не указан номер счёта")
+    found, seen = [], set()
+    params = {"limit": 100, "fields": ["number", "deal", "timeCreated", "sum", "invoiceDate", "status"]}
+    while True:
+        response = api._call("GET", "/invoice", params=params)
+        page = response.get("data") or []
+        for invoice in page:
+            if str(invoice.get("number") or "").strip().casefold() == wanted:
+                found.append({"id": str(invoice["id"]), "number": invoice.get("number"),
+                              "deal_id": str((invoice.get("deal") or {}).get("id") or "")})
+        pagination = (response.get("meta") or {}).get("pagination") or {}
+        if not pagination.get("hasMoreNext"):
+            break
+        if not page or str(page[-1].get("id")) in seen:
+            raise ValueError("не получен полный список счетов")
+        seen.add(str(page[-1].get("id")))
+        params = {"limit": 100, "fields": params["fields"],
+                  "pageAfter": {"contentType": "Invoice", "id": page[-1]["id"]}}
+    return {"ok": True, "invoices": found}
+
+
 def delete_invoice(spec, api):
     deal_id, invoice_id = str(spec["deal_id"]), str(spec["invoice_id"])
     invoice = api._call("GET", f"/invoice/{invoice_id}")["data"]
@@ -515,6 +540,8 @@ def main():
             result = create_full(spec, api)
         elif action == "list":
             result = list_invoices(spec, api)
+        elif action == "find_number":
+            result = find_invoice_number(spec, api)
         elif action == 'validate_bundle':
             from document_bundle import validate
             result=validate(spec,api)
