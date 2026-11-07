@@ -3292,6 +3292,19 @@ def deal_selection_keyboard(deals):
     return {"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": True}
 
 
+def deal_list_price(value):
+    """Format the CRM deal total compactly without inventing a missing amount."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return "не указана"
+    if not amount.is_finite():
+        return "не указана"
+    rendered = f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+    compact = rendered[:-3] if rendered.endswith(",00") else rendered
+    return compact + " ₽"
+
+
 def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     result = result if result is not None else run_deal_browser(spec)
     if not result.get("ok"):
@@ -3307,7 +3320,8 @@ def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     lines = [
         f"№{d['id']} — {d.get('client') or 'без клиента'}\n"
         f"Суть: {deal_essence(d)}\n"
-        f"Статус: {d.get('status') or 'не указан'}"
+        f"Статус: {d.get('status') or 'не указан'}\n"
+        f"Сумма: {deal_list_price(d.get('price'))}"
         + (f"\nАдрес: {d['address']}" if d.get("address") else "")
         + f"\n{invoice_command_hint(d['id'])}"
         for d in deals
