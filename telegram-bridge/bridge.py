@@ -3367,7 +3367,7 @@ def select_deal(token, chat_id, deal_id):
     previous = old_state.get("current_deal_id")
     values = {"current_deal_id": str(deal_id), "pending": None, "transitions": None, "pending_transition": None,
               "invoice_origin": None, "invoice_downloads": None, "deal_creation_active": False,
-              "contract_deal_id": None}
+              "contract_deal_id": None, "find_then_act": None}
     if previous != str(deal_id):
         cleanup_generated_contract(old_state)
         values["contract_signatory"] = None
@@ -3640,14 +3640,16 @@ def handle_find_then_act(token, chat_id, text):
     result = run_deal_browser({"action": "search_any", "query": query, "limit": 10})
     if not result.get("ok") or not result.get("deals"):
         return False
-    update_deal_ui_state(chat_id, pending=None)
-    send_deal_list(token, chat_id, None, result)
     rest = match.group("rest").casefold()
-    notes = ["Выберите сделку кнопкой — откроется её карточка с меню действий."]
+    continuation = ({"action": "issue_full_invoice"}
+                    if re.search(r"выстав|оформ", rest) and re.search(r"сч[её]т", rest)
+                    else None)
+    update_deal_ui_state(chat_id, pending=None, find_then_act=continuation)
+    send_deal_list(token, chat_id, None, result)
+    notes = [("Выберите сделку кнопкой — сразу откроется предпросмотр общего счёта с сегодняшней датой."
+              if continuation else "Выберите сделку кнопкой — откроется её карточка с меню действий.")]
     if re.search(r"аннулир|отмен", rest):
         notes.append("Аннулировать счёт бот пока не умеет: это делается в Мегаплане.")
-    if re.search(r"выстав|оформ", rest):
-        notes.append("Новый счёт — кнопкой «🧾 Выставить счёт» в карточке; дата счёта — сегодняшняя.")
     send_message(token, chat_id, " ".join(notes))
     return True
 
@@ -4593,7 +4595,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if selected_button and not invoice_search_input:
         selected_id = selected_button.group(1)
         if _background:
-            select_deal(token, chat_id, selected_id)
+            continuation = current_deal_ui_state(chat_id).get("find_then_act") or {}
+            selected = select_deal(token, chat_id, selected_id)
+            if selected and continuation.get("action") == "issue_full_invoice":
+                update_deal_ui_state(chat_id, pending="invoice_menu", invoice_downloads=None)
+                handle_deal_ui(token, chat_id, "📋 Общий счёт по спецификации", _background=True)
         else:
             run_background_job(lambda: handle_deal_ui(token, chat_id, text, _background=True), token, chat_id,
                                operation=f"сделка:открыть:{selected_id}")
@@ -5901,7 +5907,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token, chat_id, 'Статус изменён, но счёт не подготовлен: ' + invoice_error_text(preview.get('error')), INVOICE_MENU_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="invoice_full_confirm", invoice_full_preview=preview, invoice_status_transition=None)
-        send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, full_invoice_preview_text(deal_id, preview), INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
     if pending == "invoice_download":
         invoice = (state.get("invoice_downloads") or {}).get(value)
@@ -6302,7 +6308,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if not preview.get('ok'):
             send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
         update_deal_ui_state(chat_id, pending="invoice_full_confirm",invoice_full_preview=preview)
-        send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, full_invoice_preview_text(deal_id, preview), INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
     if value == "📚 Скачать счёт" and deal_id and pending == "invoice_menu":
         result = run_contract_invoice({"action": "list", "deal_id": str(deal_id)})
@@ -9150,6 +9156,16 @@ def contract_invoice_preview_text(preview, deal_id):
     )
 
 
+def full_invoice_preview_text(deal_id, preview):
+    """One confirmation screen for every route to a full client invoice."""
+    return (f"Выставить общий счёт по сделке №{deal_id}?\n"
+            f"Дата: {datetime.now().strftime('%d.%m.%Y')}\n"
+            f"Плательщик: {preview['payer_name']}\n"
+            f"Позиций: {len(preview['rows'])}\n"
+            f"Сумма: {bank_money(preview['total'])} ₽\n"
+            f"Основание: {preview['basis']}")
+
+
 EDO_OFFER_KEYBOARD = {"keyboard": [[{"text": "📤 Отправить по ЭДО"}], [{"text": "⬅️ Назад к сделке"}]],
                       "resize_keyboard": True, "one_time_keyboard": True}
 
@@ -10436,15 +10452,15 @@ TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделк�
 def handle_human_workflow(token,chat_id,text):
     value=str(text or '').strip();state=current_deal_ui_state(chat_id);pending=state.get('pending') or ''
     if value in TOP_LEVEL_NAVIGATION:
-        if pending.startswith('human_'):
+        if pending.startswith('human_') or state.get('find_then_act'):
             intent=state.get('human_intent') or {}
             if value != '❌ Отмена' and pending.startswith('human_payer_') and intent.get('deal_id'):
                 payer=intent.get('payer') or {}
-                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,find_then_act=None,
                                      suspended_payer_deal_id=str(intent['deal_id']),
                                      suspended_payer_target=(payer.get('inn') or payer.get('name')))
             else:
-                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,find_then_act=None,
                                      suspended_payer_deal_id=None if value == '❌ Отмена' else state.get('suspended_payer_deal_id'),
                                      suspended_payer_target=None if value == '❌ Отмена' else state.get('suspended_payer_target'))
         return False

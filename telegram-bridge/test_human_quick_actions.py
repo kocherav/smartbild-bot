@@ -98,6 +98,24 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
                          'после входа в раздел до сделки — одно сообщение')
         self.assertEqual(0, len(after.model.prompts), 'Быстрый поиск по номеру не должен уходить в ИИ')
 
+    def test_find_then_issue_invoice_keeps_the_original_intent(self):
+        def journey(person):
+            yield say('найди сделку Альфа кондиционирование офиса кабинет 103 и выстави по ней новый счёт сегодняшним числом')
+            person.sees_button('№990001 · Кондиционирование офиса на Тверской',
+                               expected='По описанию найден нужный объект, а кабинет 103 не принят за номер сделки')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            person.sees('Выставить общий счёт по сделке №990001?', 'Дата:', 'ООО «Альфа Климат»', '114 000',
+                        expected='Выбор сделки сразу открыл предпросмотр общего счёта')
+            person.check('До единственной кнопки подтверждения записей нет', person.stand.crm.writes,
+                         not person.stand.crm.writes)
+            yield press('✅ Выставить общий счёт')
+            person.got_document('Счёт')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(3, stand.receipt()['actions'],
+                         'после изменения — фраза, выбор сделки и обязательное подтверждение вместо пяти действий')
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+        self.assertEqual(0, len(stand.model.prompts))
 
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
