@@ -282,6 +282,13 @@ WELCOME_TEXT = """Главное меню.
 
 Или выберите действие кнопкой."""
 
+DEALS_MENU_TEXT = """Работа со сделками — выберите действие.
+
+💬 Можно сразу написать:
+«назначь исполнителем сделки 990002 Алексея Смирнова».
+
+Перед записью бот покажет выбранного сотрудника и попросит подтверждение."""
+
 DASHBOARD_URL = "https://claude.smartbild.su/deal-dashboard/"
 DASHBOARD_INLINE = {"inline_keyboard": [[{"text": "📊 Открыть пульт сделок", "web_app": {"url": DASHBOARD_URL}}]]}
 
@@ -4251,7 +4258,7 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, DEALS_KEYBOARD)
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
@@ -5129,7 +5136,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if value in ("🤝 Сделки", "🤝 Работа со сделками", "/deals"):
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, DEALS_KEYBOARD)
         return True
     if value == "⬅️ Главное меню":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)

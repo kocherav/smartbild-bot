@@ -431,7 +431,7 @@ class ProtocolTest(unittest.TestCase):
         update_state.assert_called_once()
         self.assertEqual(send.call_count,1)
         self.assertEqual(send.call_args_list[0],mock.call(
-            "token", "chat", "Работа со сделками — выберите действие.", bridge.DEALS_KEYBOARD))
+            "token", "chat", bridge.DEALS_MENU_TEXT, bridge.DEALS_KEYBOARD))
 
     def test_compact_deal_submenus_are_local_and_contain_only_real_actions(self):
         cases = {
