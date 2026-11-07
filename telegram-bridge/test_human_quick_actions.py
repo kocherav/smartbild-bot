@@ -117,6 +117,33 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
         self.assertEqual(0, len(stand.model.prompts))
 
+    def test_deals_menu_suggests_direct_executor_command(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            person.sees('Можно сразу написать:',
+                        'назначь исполнителем сделки 990002 Алексея Смирнова',
+                        expected='Меню сделок показывает готовый пример прямой команды')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say('990002')
+            yield press('👤 Назначить исполнителя')
+            yield say('Смирнов')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            yield press('✅ Назначить исполнителя')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(8, before.receipt()['actions'], 'кнопочный маршрут — 8 действий')
+
+        def direct_journey(person):
+            yield say('назначь исполнителем сделки 990002 Алексея Смирнова')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            person.sees('Данные ещё не записаны', expected='Перед записью показан предпросмотр')
+            yield press('✅ Назначить исполнителя')
+
+        after = self.play(direct_journey, setup=office)
+        self.assertEqual(3, after.receipt()['actions'], 'прямой маршрут — 3 действия')
+        self.assertEqual(['Алексей Смирнов'], after.crm.deals['990002']['executors'])
+
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')
