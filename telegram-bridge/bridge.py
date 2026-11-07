@@ -3241,6 +3241,10 @@ def check_external_procurement_transitions(token, chat_id):
         durable_json.save(PROCUREMENT_WATCH_FILE,watched)
 
 
+def invoice_command_hint(deal_id):
+    return f"Можно написать: пришли счёт по сделке {deal_id}"
+
+
 def format_deal_card(deal):
     executors = ", ".join(deal.get("executors") or []) or "не назначен — кнопка «👤 Назначить исполнителя»"
     address = deal.get("address") or "не указан"
@@ -3257,7 +3261,8 @@ def format_deal_card(deal):
         f"Исполнитель: {executors}\n"
         f"Сумма: {price_text}\n"
         f"Позиций: {deal.get('positions_count') or 0}\n"
-        f"{url}"
+        f"{url}\n\n"
+        f"{invoice_command_hint(deal['id'])}"
     )
 
 
@@ -3302,6 +3307,7 @@ def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
         f"Суть: {deal_essence(d)}\n"
         f"Статус: {d.get('status') or 'не указан'}"
         + (f"\nАдрес: {d['address']}" if d.get("address") else "")
+        + f"\n{invoice_command_hint(d['id'])}"
         for d in deals
     ]
     total_count = int(result.get("total_count") or len(deals))

@@ -90,6 +90,23 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('Сделка №990002', 'Химки', expected='Выбранная из списка сделка открылась')
         self.play(journey, setup=office)
 
+    def test_search_result_and_card_suggest_direct_invoice_command(self):
+        """IDEA-026746AD: 4 menu actions become one explicit, read-only command."""
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔎 Найти по клиенту')
+            yield say('Альфа')
+            person.sees('Можно написать: пришли счёт по сделке 990001',
+                        expected='Прямая команда видна в результатах поиска')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            person.sees('Можно написать: пришли счёт по сделке 990001',
+                        expected='Прямая команда видна в карточке сделки')
+            yield say('пришли счёт по сделке 990001')
+            person.got_document('311', expected='Одна команда прислала последний счёт без записи в CRM')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
     def test_recent_deals(self):
         def journey(person):
             yield press('🤝 Сделки')
