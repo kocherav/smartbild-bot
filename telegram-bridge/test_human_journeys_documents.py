@@ -328,6 +328,37 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
             person.got_document('КП')
         self.play(journey, setup=office)
 
+    def test_failed_proposal_can_be_resumed_from_deals_in_one_action(self):
+        """A filled proposal draft must survive leaving the deal card."""
+        crm_ref = {}
+
+        def setup(crm):
+            office(crm)
+            crm.failures[('deal_proposal', 'publish')] = 'temporary generator failure'
+            crm_ref['crm'] = crm
+
+        def journey(person):
+            # Before: phrase + recipient, then after returning the manager had to
+            # reopen the deal, choose KP and type the recipient again (4 actions).
+            yield say('Сделай КП по сделке 990001')
+            yield say('Алексей')
+            yield press('✅ Создать PDF КП')
+            person.sees('КП не сформировано', expected='Сбой оставил незавершённое КП')
+            yield press('⬅️ К списку сделок')
+            person.sees_button('Продолжить КП: Алексей, сделка 990001')
+
+            # After: the saved deal and recipient are reused by one button.
+            crm_ref['crm'].failures.pop(('deal_proposal', 'publish'))
+            yield press('Продолжить КП: Алексей, сделка 990001')
+            person.got_document('КП', expected='Черновик КП возобновлён одним действием')
+
+        stand = self.play(journey, setup=setup)
+        publishes = [call for call in stand.crm.calls
+                     if call['script'] == 'deal_proposal' and call['action'] == 'publish']
+        self.assertEqual(2, len(publishes))
+        self.assertEqual('990001', publishes[-1]['spec']['deal_id'])
+        self.assertEqual('Алексей', publishes[-1]['spec']['recipient'])
+
 
 class ContractSubjectJourneys(HumanJourneyCase, unittest.TestCase):
     """06.11 (owner, deal 905): the contract subject could not be changed through the bot."""
