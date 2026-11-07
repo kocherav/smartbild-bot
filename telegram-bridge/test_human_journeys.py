@@ -40,9 +40,7 @@ def open_deal_by_number(person, deal_id=DEAL):
     yield press('🤝 Сделки')
     person.sees_button('🔎 Найти сделку')
     yield press('🔎 Найти сделку')
-    person.sees_button('🔢 Найти по номеру')
-    yield press('🔢 Найти по номеру')
-    person.answered('Бот спросил номер сделки')
+    person.answered('Бот спросил свободное описание или номер сделки')
     yield say(deal_id)
     person.sees(f'Сделка №{deal_id}', expected=f'Открылась карточка сделки №{deal_id}')
 
@@ -74,7 +72,6 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('🔎 Найти по клиенту')
             yield say('Альфа')
             person.sees('№990001', '№990002', expected='Найдены обе сделки клиента Альфа')
             person.sees_button('№990002 · Вентиляция склада')

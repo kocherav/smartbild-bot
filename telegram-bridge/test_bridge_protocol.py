@@ -435,7 +435,6 @@ class ProtocolTest(unittest.TestCase):
 
     def test_compact_deal_submenus_are_local_and_contain_only_real_actions(self):
         cases = {
-            "🔎 Найти сделку": bridge.DEAL_SEARCH_KEYBOARD,
             "🕘 Последние сделки": bridge.DEAL_RECENT_KEYBOARD,
             "📋 Основное": bridge.DEAL_BASIC_KEYBOARD,
             "📄 Документы сделки": bridge.DEAL_DOCUMENTS_KEYBOARD,
@@ -447,6 +446,14 @@ class ProtocolTest(unittest.TestCase):
             for label, menu in cases.items():
                 self.assertTrue(bridge.handle_deal_ui("token", "chat", label))
                 self.assertEqual(send.call_args.args[3], menu)
+
+    def test_find_deal_button_starts_smart_search_without_calling_crm(self):
+        with mock.patch.object(bridge, "update_deal_ui_state") as update_state, \
+             mock.patch.object(bridge, "send_message", return_value=True) as send, \
+             mock.patch.object(bridge, "run_deal_browser", side_effect=AssertionError("prompt called CRM")):
+            self.assertTrue(bridge.handle_deal_ui("token", "chat", "🔎 Найти сделку"))
+        update_state.assert_called_once_with("chat", pending="search_any")
+        self.assertIn("по сути, адресу и клиенту", send.call_args.args[2])
 
     def test_add_payer_button_is_available_only_in_contract_menu(self):
         main_labels = {button["text"] for row in bridge.MAIN_KEYBOARD["keyboard"] for button in row}
