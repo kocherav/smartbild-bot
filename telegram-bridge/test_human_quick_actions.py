@@ -8,16 +8,151 @@ from test_human_journeys import DEAL, office
 
 
 class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_client_and_object_phrase_opens_unique_deal_before_invoice(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔎 Найти по клиенту')
+            yield say('Альфа Климат')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            yield press('📥 Получить счёт')
+            person.got_document('Счёт', expected='Получен счёт найденной сделки')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(6, before.receipt()['actions'], 'до изменения — 6 действий до счёта')
+
+        def phrase_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            person.sees('найди сделку клиента Альфа Климат по офису на Тверской',
+                        expected='На экране поиска виден пример целой фразы')
+            yield say('найди сделку клиента Альфа Климат по офису на Тверской')
+            person.sees('Сделка №990001', 'Тверская', expected='Единственное совпадение сразу открыто')
+            person.sees_button('📥 Получить счёт')
+            yield press('📥 Получить счёт')
+            person.got_document('Счёт')
+
+        after = self.play(phrase_journey, setup=office)
+        self.assertEqual(2, after.receipt()['actions'] - 2,
+                         'после входа в поиск — одно сообщение и одна кнопка')
+        self.assertEqual(0, len(after.model.prompts), 'Поиск сделки не должен уходить в ИИ')
+
+    def test_client_and_object_phrase_keeps_ambiguous_matches_as_a_list(self):
+        def two_offices(crm):
+            office(crm)
+            crm.add_deal('990004', '501', 'Кондиционирование офиса на Тверской, 12', status_id='1',
+                         address='Москва, Тверская ул., 12', payer_id='7101')
+
+        def journey(person):
+            yield say('найди сделку клиента Альфа Климат по офису на Тверской')
+            person.sees('Найденные сделки', '№990001', '№990004',
+                        expected='Неоднозначный поиск показал выбор, а не угадал сделку')
+            person.not_sees('Сделка №990001\nСуть', expected='Карточка не открыта без выбора')
+
+        self.play(journey, setup=two_offices)
+
+    def test_welcome_offers_one_input_deal_number_search(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say('990001')
+            person.sees('Сделка №990001', expected='Кнопочный маршрут открыл сделку')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(4, before.receipt()['actions'],
+                         'до результата через меню — 3 нажатия и ввод номера')
+
+        def direct_journey(person):
+            yield say('/start')
+            person.sees('Просто отправьте номер сделки, например 990001',
+                        expected='На старте видна подсказка о прямом поиске по номеру')
+            yield say('990001')
+            person.sees('Сделка №990001', expected='Номер со старта открыл ту же сделку')
+
+        after = self.play(direct_journey, setup=office)
+        self.assertEqual(1, after.receipt()['actions'] - 1,
+                         'после приветствия до результата — один ввод')
+        self.assertEqual(0, len(after.model.prompts), 'Прямой поиск не должен уходить в ИИ')
+
+    def test_deals_section_prompts_for_one_message_number_search(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say(DEAL)
+            person.sees(f'Сделка №{DEAL}', expected='Старый кнопочный маршрут по-прежнему работает')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(4, before.receipt()['actions'], 'до результата через меню — 4 действия')
+
+        def hinted_journey(person):
+            yield press('🤝 Сделки')
+            person.sees('Просто отправьте номер сделки — например, 990001',
+                        expected='В разделе сделок видна подсказка о быстром вводе')
+            yield say(DEAL)
+            person.sees(f'Сделка №{DEAL}', expected='Номер открыл сделку одним сообщением после подсказки')
+
+        after = self.play(hinted_journey, setup=office)
+        self.assertEqual(1, after.receipt()['actions'] - 1,
+                         'после входа в раздел до сделки — одно сообщение')
+        self.assertEqual(0, len(after.model.prompts), 'Быстрый поиск по номеру не должен уходить в ИИ')
+
+    def test_find_then_issue_invoice_keeps_the_original_intent(self):
+        def journey(person):
+            yield say('найди сделку Альфа кондиционирование офиса кабинет 103 и выстави по ней новый счёт сегодняшним числом')
+            person.sees_button('№990001 · Кондиционирование офиса на Тверской',
+                               expected='По описанию найден нужный объект, а кабинет 103 не принят за номер сделки')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            person.sees('Выставить общий счёт по сделке №990001?', 'Дата:', 'ООО «Альфа Климат»', '114 000',
+                        expected='Выбор сделки сразу открыл предпросмотр общего счёта')
+            person.check('До единственной кнопки подтверждения записей нет', person.stand.crm.writes,
+                         not person.stand.crm.writes)
+            yield press('✅ Выставить общий счёт')
+            person.got_document('Счёт')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(3, stand.receipt()['actions'],
+                         'после изменения — фраза, выбор сделки и обязательное подтверждение вместо пяти действий')
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_deals_menu_suggests_direct_executor_command(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            person.sees('Можно сразу написать:',
+                        'назначь исполнителем сделки 990002 Алексея Смирнова',
+                        expected='Меню сделок показывает готовый пример прямой команды')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
+            yield say('990002')
+            yield press('👤 Назначить исполнителя')
+            yield say('Смирнов')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            yield press('✅ Назначить исполнителя')
+
+        before = self.play(menu_journey, setup=office)
+        self.assertEqual(8, before.receipt()['actions'], 'кнопочный маршрут — 8 действий')
+
+        def direct_journey(person):
+            yield say('назначь исполнителем сделки 990002 Алексея Смирнова')
+            yield press('Сотрудник ID 1000011 — Алексей Смирнов')
+            person.sees('Данные ещё не записаны', expected='Перед записью показан предпросмотр')
+            yield press('✅ Назначить исполнителя')
+
+        after = self.play(direct_journey, setup=office)
+        self.assertEqual(3, after.receipt()['actions'], 'прямой маршрут — 3 действия')
+        self.assertEqual(['Алексей Смирнов'], after.crm.deals['990002']['executors'])
+
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('📍 Найти по адресу')
             yield say('Химки')
             person.sees('№990002', 'Склад', expected='Кнопочный маршрут нашёл сделку')
 
         before = self.play(menu_journey, setup=office)
-        self.assertEqual(4, before.receipt()['actions'], 'до результата через меню — 4 действия')
+        self.assertEqual(3, before.receipt()['actions'], 'умный поиск через меню — 3 действия')
 
         def free_text_journey(person):
             yield say('/start')
@@ -31,6 +166,17 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, after.receipt()['actions'] - 1,
                          'после приветствия до результата — один свободный ввод')
         self.assertEqual(0, len(after.model.prompts), 'Поиск сделки не должен уходить в ИИ')
+
+    def test_search_result_shows_amount_without_opening_deal(self):
+        def journey(person):
+            yield say('найди сделку по складу в Химках')
+            person.sees('990002', 'Статус: Закупка', 'Сумма: 150 000',
+                        expected='В результате поиска сразу видны статус и сумма сделки')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, stand.receipt()['actions'],
+                         'после изменения сумма видна за одно действие без открытия карточки')
+        self.assertEqual([], stand.crm.writes, 'Поиск и просмотр суммы не изменяют CRM')
 
     def test_number_alone_opens_the_deal_and_invoice_takes_four_actions(self):
         def journey(person):
@@ -142,6 +288,24 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
             person.sees('Сделка №990002', expected='Нажатие сразу открыло карточку')
         stand = self.play(journey, setup=office)
         self.assertEqual(0, len(stand.model.prompts), 'Список сделок по фразе не должен уходить в ИИ')
+
+    def test_search_result_opens_full_invoice_preview_in_one_action(self):
+        def journey(person):
+            yield say('Покажи 1 сделку с Альфа Климат')
+            person.sees_button('🧾 Запросить общий счёт №990002',
+                               expected='У найденной сделки есть прямое продолжение к предпросмотру счёта')
+            yield press('🧾 Запросить общий счёт №990002')
+            person.sees('Выставить общий счёт по сделке №990002?',
+                        'Плательщик:', 'Сумма:',
+                        expected='Одно нажатие открыло безопасный предпросмотр общего счёта')
+            person.sees_button('✅ Выставить общий счёт',
+                               expected='Хозяйственная запись остаётся за отдельным подтверждением')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(2, stand.receipt()['actions'],
+                         'один поиск и одно действие от результата до предпросмотра')
+        self.assertEqual([], stand.crm.writes, 'Предпросмотр не создаёт счёт')
+        self.assertEqual(0, len(stand.model.prompts))
 
     def test_assistant_list_of_deals_gets_buttons(self):
         listing = ('Нашёл такие сделки:\n\n1. №990001 — Кондиционирование офиса\n   Этап: Заявка\n\n'

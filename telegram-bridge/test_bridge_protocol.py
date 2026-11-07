@@ -56,6 +56,19 @@ class ProtocolTest(unittest.TestCase):
         self.assertLessEqual(len(label),len('№901 · ')+38)
         self.assertNotIn('<p>',label)
 
+    def test_deal_list_shows_total_price_without_opening_card(self):
+        deal = {'id':'901','client':'Автосалон JetCar','description':'Поставка светильников',
+                'status':'Заявка','address':'','price':150000}
+        with mock.patch.object(bridge,'run_deal_browser',return_value={'ok':True,'deals':[deal]}), \
+             mock.patch.object(bridge,'send_message') as send:
+            bridge.send_deal_list('token','chat',{'action':'search_any','query':'светильники'})
+        self.assertIn('Сумма: 150 000 ₽',send.call_args.args[2])
+
+    def test_deal_list_price_preserves_kopecks_and_rejects_unknown_values(self):
+        self.assertEqual('150 000,50 ₽',bridge.deal_list_price('150000.50'))
+        self.assertEqual('не указана',bridge.deal_list_price(None))
+        self.assertEqual('не указана',bridge.deal_list_price('NaN'))
+
     def test_deal_essence_falls_back_to_address_then_client(self):
         self.assertEqual(bridge.deal_essence({'address':'Подвойского 5/19','client':'JetCar'}),'Подвойского 5/19')
         self.assertEqual(bridge.deal_essence({'client':'JetCar'}),'JetCar')
@@ -310,9 +323,13 @@ class ProtocolTest(unittest.TestCase):
         with mock.patch.object(bridge, 'current_deal_ui_state', return_value={
                 'current_deal_id': '861', 'pending': 'proposal_recipient', 'proposal_deal_id': '896'}), \
              mock.patch.object(bridge, 'update_deal_ui_state'), mock.patch.object(bridge, 'send_message'), \
+             mock.patch.object(bridge, 'run_deal_proposal', return_value={
+                 'ok': True, 'rows': [], 'count': 0, 'total': 0, 'fingerprint': 'f'}) as preview, \
              mock.patch.object(bridge, 'send_deal_proposal') as generate:
             self.assertTrue(bridge.handle_deal_ui('token', 'chat', 'Уважаемая Татьяна,', _background=True))
-        generate.assert_called_once_with('token', 'chat', '896', recipient='Уважаемая Татьяна,')
+        # Since IDEA-0C9B7B6C the answer opens a confirmed preview of the bound deal; nothing is published yet.
+        self.assertEqual('896', preview.call_args.args[0]['deal_id'])
+        generate.assert_not_called()
 
     def test_auto_recipient_prompt_does_not_overwrite_busy_flow(self):
         import tempfile
@@ -423,6 +440,31 @@ class ProtocolTest(unittest.TestCase):
             bridge.prepare_contract_preview("token", "chat", "892")
         update.assert_called_once_with("chat", pending="contract_date", contract_deal_id="892")
 
+    def test_contract_preview_exposes_signatory_and_correction_actions(self):
+        preview = {
+            "number": "892-Д", "date": "27.10.2026", "seller_name": "ООО «КЛИВЭЛ»",
+            "client": "Иванов", "payer_name": "Иванов Пётр Сергеевич",
+            "address": "Москва", "subject": "Поставка", "signatory": {
+                "name": "Иванов Пётр Сергеевич", "position": "Физическое лицо",
+                "authority": "От своего имени",
+            },
+        }
+        text = bridge.format_contract_preview(preview)
+        self.assertIn("Подписант", text)
+        self.assertIn("ФИО: Иванов Пётр Сергеевич", text)
+        self.assertIn("Статус: Физическое лицо", text)
+        self.assertIn("Действует: От своего имени", text)
+
+        with mock.patch.object(bridge, "current_deal_ui_state", return_value={}), \
+             mock.patch.object(bridge, "run_contract_builder", return_value={"ok": True, "preview": preview}), \
+             mock.patch.object(bridge, "update_deal_ui_state"), \
+             mock.patch.object(bridge, "send_message") as send:
+            bridge.prepare_contract_preview("token", "chat", "892")
+        labels = {button["text"] for row in send.call_args.args[3]["keyboard"] for button in row}
+        self.assertIn("✏️ Исправить подписанта", labels)
+        self.assertIn("✏️ Исправить дату", labels)
+        self.assertIn("✏️ Исправить адрес", labels)
+
     def test_deals_navigation_is_a_local_fast_path(self):
         with mock.patch.object(bridge, "update_deal_ui_state") as update_state, \
              mock.patch.object(bridge, "send_message", return_value=True) as send:
@@ -431,11 +473,10 @@ class ProtocolTest(unittest.TestCase):
         update_state.assert_called_once()
         self.assertEqual(send.call_count,1)
         self.assertEqual(send.call_args_list[0],mock.call(
-            "token", "chat", "Работа со сделками — выберите действие.", bridge.DEALS_KEYBOARD))
+            "token", "chat", bridge.DEALS_MENU_TEXT, bridge.deals_keyboard("chat")))
 
     def test_compact_deal_submenus_are_local_and_contain_only_real_actions(self):
         cases = {
-            "🔎 Найти сделку": bridge.DEAL_SEARCH_KEYBOARD,
             "🕘 Последние сделки": bridge.DEAL_RECENT_KEYBOARD,
             "📋 Основное": bridge.DEAL_BASIC_KEYBOARD,
             "📄 Документы сделки": bridge.DEAL_DOCUMENTS_KEYBOARD,
@@ -447,6 +488,14 @@ class ProtocolTest(unittest.TestCase):
             for label, menu in cases.items():
                 self.assertTrue(bridge.handle_deal_ui("token", "chat", label))
                 self.assertEqual(send.call_args.args[3], menu)
+
+    def test_find_deal_button_starts_smart_search_without_calling_crm(self):
+        with mock.patch.object(bridge, "update_deal_ui_state") as update_state, \
+             mock.patch.object(bridge, "send_message", return_value=True) as send, \
+             mock.patch.object(bridge, "run_deal_browser", side_effect=AssertionError("prompt called CRM")):
+            self.assertTrue(bridge.handle_deal_ui("token", "chat", "🔎 Найти сделку"))
+        update_state.assert_called_once_with("chat", pending="search_any")
+        self.assertIn("по сути, адресу и клиенту", send.call_args.args[2])
 
     def test_add_payer_button_is_available_only_in_contract_menu(self):
         main_labels = {button["text"] for row in bridge.MAIN_KEYBOARD["keyboard"] for button in row}

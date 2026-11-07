@@ -41,7 +41,8 @@ class ExplorerTests(unittest.TestCase):
         mission = {'id': 'reply-to-notice', 'goal': 'Ответь на уведомление: адресат КП — Татьяна',
                    'open_deal': '990001', 'success': ['КП по 990002'],
                    'notice': '📄 Для сделки №990002 на стадии «Коммерческое предложение» нужно указать адресата КП.'}
-        brain = ScriptedBrain([{'action': 'reply', 'value': 'Адресат КП - Татьяна', 'to': '№990002'}],
+        brain = ScriptedBrain([{'action': 'reply', 'value': 'Адресат КП - Татьяна', 'to': '№990002'},
+                               {'action': 'press', 'value': '✅ Создать PDF КП'}],
                               {'achieved': True, 'defects': [], 'summary': 'ok'})
         stand = Stand()
         self.addCleanup(stand.close)

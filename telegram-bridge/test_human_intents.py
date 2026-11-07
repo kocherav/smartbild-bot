@@ -40,9 +40,19 @@ class HumanIntentTests(unittest.TestCase):
     def test_payment_variants(self):
         variants = ("Давай проверим, сколько у нас оплачено по сделке №900",
                     "Покажи поступившую оплату по 900 сделке",
-                    "Какой остаток долга по сделке номер 900?")
+                    "Какой остаток долга по сделке номер 900?",
+                    "Сколько оплачено и какой остаток по выставленным счетам сделки 900?")
         for text in variants:
             with self.subTest(text=text): self.assert_intent(text, h.CHECK_PAYMENT, "900")
+
+    def test_economics_request_is_not_mistaken_for_payment(self):
+        variants = (
+            "Покажи прибыль и маржу по сделке 990001 и пришли расчёт",
+            "Пришли экономику сделки №900",
+            "Рассчитай рентабельность по сделке 861",
+        )
+        for text, deal in zip(variants, ("990001", "900", "861")):
+            with self.subTest(text=text): self.assert_intent(text, h.GET_ECONOMICS, deal)
 
     def test_no_business_guess(self):
         for text in ("Доброе утро", "Покажи последние сделки", "Оплати счет"):

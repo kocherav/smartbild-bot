@@ -16,6 +16,7 @@ CHECK_PAYMENT = "check_payment"
 MOVE_STATUS = "move_status"
 ISSUE_INVOICE = "issue_invoice"
 GET_INVOICE = "get_invoice"
+GET_ECONOMICS = "get_economics"
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ def _strip_deal_ref(value):
 def _invoice_intent(folded, deal_id):
     # «счёт на оплату» names the document; any other «оплат…» asks about money received.
     folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
-    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат", folded):
+    if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат|оплач", folded):
         return None
     missing = () if deal_id else ("deal",)
     if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):
@@ -96,6 +97,10 @@ def _status_intent(original, folded, deal_id):
         or (re.search(r"\b(?:перевед|переведи|перевест)\w*\b", folded) and re.search(r"\bсделк", folded))
     if not asks:
         return None
+    descriptive = re.search(
+        r"(?i)\bсделк\w*\s+(?P<query>.+?)\s+(?:в|на)(?:\s+статус\w*)?\s+[«\"]?(?P<target>.+?)[»\"]?(?=[.;!?\n]|$)",
+        original,
+    )
     target = _tail(original, (
         r"статус\w*\s+(?:у\s+)?сделк\w*\s*(?:№|номер)?\s*\d+\S*\s+(?:на|в)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
         r"статус\w*\s+(?:на|в)?\s*[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
@@ -103,11 +108,16 @@ def _status_intent(original, folded, deal_id):
         r"\d+\S*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
         r"\bсделк\w*\s+(?:в|на)\s+[«\"]?(.+?)[»\"]?(?=[.;!?\n]|$)",
     ))
+    if descriptive:
+        target = descriptive.group("target").strip(" .,:;!?«»\"")
     if target and re.match(r"(?i)^(?:сделк|статус)", target):
         target = None
     target = _strip_deal_ref(target)
-    missing = tuple(x for x, value in (("deal", deal_id), ("status", target)) if not value)
-    return Intent(MOVE_STATUS, deal_id, target, missing=missing)
+    query = descriptive.group("query").strip(" .,:;!?«»\"") if descriptive and not deal_id else None
+    if query and re.fullmatch(r"(?:№|номер)?\s*\d+", query, re.I):
+        query = None
+    missing = tuple(x for x, value in (("deal", deal_id or query), ("status", target)) if not value)
+    return Intent(MOVE_STATUS, deal_id, target, fields={"deal_query": query} if query else {}, missing=missing)
 
 
 _NAME_ENDINGS = ("ого", "его", "ому", "ему", "ыми", "ими", "ой", "ей", "ым", "им", "ом", "ем",
@@ -208,7 +218,14 @@ def classify(text):
     if invoice:
         return invoice
 
-    if (re.search(r"\b(?:оплачен|оплат|поступил|пришл|долг|остаток)\w*", folded)
+    # Route an explicit economics question before the payment rule below:
+    # «пришли расчёт» otherwise looks like «пришли деньги» by its word stem.
+    if (re.search(r"\b(?:экономик|рентабельн|прибыл|марж)\w*", folded)
+            and (re.search(r"\bсделк", folded) or deal_id)):
+        return Intent(GET_ECONOMICS, deal_id=deal_id,
+                      missing=(() if deal_id else ("deal",)))
+
+    if (re.search(r"\b(?:оплач|оплат|поступил|пришл|долг|остаток)\w*", folded)
             and (re.search(r"\bсделк", folded) or (deal_id and len(deal_id) >= 3 and not re.search(r"сч[её]т", folded)))):
         return Intent(CHECK_PAYMENT, deal_id=deal_id,
                       missing=(() if deal_id else ("deal",)))

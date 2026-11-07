@@ -277,10 +277,21 @@ HELP_TEXT = """Что я умею:
 
 WELCOME_TEXT = """Главное меню.
 
+🔢 Просто отправьте номер сделки, например 990001.
+
 💬 Можно написать задачу своими словами, например:
 «найди сделку по складу в Химках».
 
 Или выберите действие кнопкой."""
+
+DEALS_MENU_TEXT = """Работа со сделками — выберите действие.
+
+Просто отправьте номер сделки — например, 990001.
+
+💬 Можно сразу написать:
+«назначь исполнителем сделки 990002 Алексея Смирнова».
+
+Перед записью бот покажет выбранного сотрудника и попросит подтверждение."""
 
 DASHBOARD_URL = "https://claude.smartbild.su/deal-dashboard/"
 DASHBOARD_INLINE = {"inline_keyboard": [[{"text": "📊 Открыть пульт сделок", "web_app": {"url": DASHBOARD_URL}}]]}
@@ -302,6 +313,7 @@ PAYER_TARGET_CONFIRM_KEYBOARD = {
 }
 BANK_MENU_KEYBOARD = {
     "keyboard": [
+        [{"text": "🔎 Найти счёт"}],
         [{"text": "📤 Загрузить выписку"}],
         [{"text": "📩 Банковские уведомления"}],
         [{"text": "🔗 Найти соответствия"}],
@@ -502,13 +514,43 @@ DEALS_KEYBOARD = {
     ],
     "resize_keyboard": True,
 }
+
+
+def proposal_resume_label(state):
+    """Return a bound, human-readable action for a complete proposal draft."""
+    draft = (state or {}).get('proposal_draft') or {}
+    deal_id = str(draft.get('deal_id') or '').strip()
+    recipient = ' '.join(str(draft.get('recipient') or '').split())
+    if not deal_id.isdigit() or not recipient:
+        return None
+    # Keep Telegram reply-keyboard labels compact while retaining the full value
+    # in durable UI state. The common short-name case remains unabridged.
+    shown_recipient = recipient if len(recipient) <= 24 else recipient[:23].rstrip() + '…'
+    return f'Продолжить КП: {shown_recipient}, сделка {deal_id}'
+
+
+def deals_keyboard(chat_id):
+    """Deal menu plus safe continuations for interrupted payer and proposal drafts."""
+    state = current_deal_ui_state(chat_id)
+    extra = []
+    deal_id = str(state.get("suspended_payer_deal_id") or "")
+    if deal_id:
+        extra.append([{"text": f"▶️ Продолжить смену плательщика в сделке №{deal_id}"}])
+    label = proposal_resume_label(state)
+    if label:
+        extra.append([{"text": label}])
+    if not extra:
+        return DEALS_KEYBOARD
+    keyboard = {**DEALS_KEYBOARD, "keyboard": extra + [list(row) for row in DEALS_KEYBOARD["keyboard"]]}
+    return keyboard
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
+        [{"text": "💳 Счета и оплаты"}],
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
-        [{"text": "👤 Назначить исполнителя"}, {"text": "💰 Экономика"}],
+        [{"text": "👤 Назначить исполнителя"}, {"text": "📊 Сводка"}, {"text": "💰 Экономика"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
         [{"text": "⬅️ К списку сделок"}],
@@ -676,6 +718,10 @@ DEAL_CREATE_CONFIRM_KEYBOARD = {
     'keyboard': [[{'text': '✅ Создать подтверждённую сделку'}],
                  [{'text': '✏️ Заменить спецификацию'}, {'text': '❌ Отмена'}]],
     'resize_keyboard': True,
+}
+DEAL_PROPOSAL_CONFIRM_KEYBOARD = {
+    'keyboard': [[{'text': '✅ Создать PDF КП'}], [{'text': '❌ Отмена'}]],
+    'resize_keyboard': True, 'one_time_keyboard': True,
 }
 HUMAN_PAYER_CONFIRM_KEYBOARD = {
     'keyboard': [[{'text': '✅ Сменить плательщика'}], [{'text': '❌ Отмена'}]],
@@ -2861,7 +2907,7 @@ def cleanup_generated_contract(state):
 
 
 def run_deal_browser(spec, timeout=45):
-    cached_actions = {"list", "search_any", "search_client", "search_address",
+    cached_actions = {"list", "search_any", "search_client", "search_address", "search_combined",
                       "get_cached", "get_many_cached"}
     if str(spec.get("action") or "") not in cached_actions:
         try:
@@ -3225,6 +3271,10 @@ def check_external_procurement_transitions(token, chat_id):
         durable_json.save(PROCUREMENT_WATCH_FILE,watched)
 
 
+def invoice_command_hint(deal_id):
+    return f"Можно написать: пришли счёт по сделке {deal_id}"
+
+
 def format_deal_card(deal):
     executors = ", ".join(deal.get("executors") or []) or "не назначен — кнопка «👤 Назначить исполнителя»"
     address = deal.get("address") or "не указан"
@@ -3241,7 +3291,8 @@ def format_deal_card(deal):
         f"Исполнитель: {executors}\n"
         f"Сумма: {price_text}\n"
         f"Позиций: {deal.get('positions_count') or 0}\n"
-        f"{url}"
+        f"{url}\n\n"
+        f"{invoice_command_hint(deal['id'])}"
     )
 
 
@@ -3258,12 +3309,31 @@ def deal_essence(deal, limit=90):
 
 
 def deal_selection_keyboard(deals):
-    rows = [[{"text": f"№{d['id']} · {deal_essence(d, 38)}"}] for d in deals]
+    rows = [
+        [
+            {"text": f"№{d['id']} · {deal_essence(d, 38)}"},
+            {"text": f"🧾 Запросить общий счёт №{d['id']}"},
+        ]
+        for d in deals
+    ]
     rows.append([{"text": "⬅️ К списку сделок"}, {"text": "⬅️ Главное меню"}])
     return {"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": True}
 
 
-def send_deal_list(token, chat_id, spec, result=None):
+def deal_list_price(value):
+    """Format the CRM deal total compactly without inventing a missing amount."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return "не указана"
+    if not amount.is_finite():
+        return "не указана"
+    rendered = f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+    compact = rendered[:-3] if rendered.endswith(",00") else rendered
+    return compact + " ₽"
+
+
+def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     result = result if result is not None else run_deal_browser(spec)
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось получить сделки: {result.get('error')}", DEALS_KEYBOARD)
@@ -3272,11 +3342,16 @@ def send_deal_list(token, chat_id, spec, result=None):
     if not deals:
         send_message(token, chat_id, "Подходящих сделок не найдено.", DEALS_KEYBOARD)
         return
+    if open_unique and len(deals) == 1 and int(result.get("total_count") or 1) == 1:
+        select_deal(token, chat_id, deals[0]["id"])
+        return
     lines = [
         f"№{d['id']} — {d.get('client') or 'без клиента'}\n"
         f"Суть: {deal_essence(d)}\n"
-        f"Статус: {d.get('status') or 'не указан'}"
+        f"Статус: {d.get('status') or 'не указан'}\n"
+        f"Сумма: {deal_list_price(d.get('price'))}"
         + (f"\nАдрес: {d['address']}" if d.get("address") else "")
+        + f"\n{invoice_command_hint(d['id'])}"
         for d in deals
     ]
     total_count = int(result.get("total_count") or len(deals))
@@ -3301,7 +3376,7 @@ def select_deal(token, chat_id, deal_id):
     previous = old_state.get("current_deal_id")
     values = {"current_deal_id": str(deal_id), "pending": None, "transitions": None, "pending_transition": None,
               "invoice_origin": None, "invoice_downloads": None, "deal_creation_active": False,
-              "contract_deal_id": None}
+              "contract_deal_id": None, "find_then_act": None}
     if previous != str(deal_id):
         cleanup_generated_contract(old_state)
         values["contract_signatory"] = None
@@ -3371,6 +3446,60 @@ def write_contract_subject(token, chat_id, saved):
 
 
 DEAL_ECONOMICS_WORD_RE = re.compile(r"(?i)экономик|рентабельн|маржинальн|маржу|маржа|прибыл")
+ECONOMICS_SAVE_BUTTON = "💾 Сохранить расчёт в CRM"
+ECONOMICS_PREVIEW_KEYBOARD = {
+    "keyboard": [[{"text": ECONOMICS_SAVE_BUTTON}], [{"text": "❌ Отмена"}]],
+    "resize_keyboard": True,
+}
+
+CONTRACT_PREPARE_PHRASE_RE = re.compile(r"(?i)\b(?:подготов|сформир|сдела)\w*\s+договор\b")
+CONTRACT_SIGNER_RE = re.compile(
+    r"(?i)\bподписант(?:ом|а)?(?:\s+со\s+стороны\s+заказчика)?\s*(?:[-—:]|это|сам)?\s*"
+    r"(?P<name>[А-ЯЁ][а-яё-]+\s+[А-ЯЁ][а-яё-]+\s+[А-ЯЁ][а-яё-]+)"
+)
+CONTRACT_PERSON_RE = re.compile(
+    r"(?i)\b(?:как\s+)?физ(?:ическое\s+лицо|лицо|\.\s*лицо)\b|\bот\s+своего\s+имени\b"
+)
+
+
+def handle_contract_prepare_phrase(token, chat_id, text):
+    """Open the existing safe contract preview from one explicit, complete phrase."""
+    value = " ".join(str(text or "").split())
+    if not CONTRACT_PREPARE_PHRASE_RE.search(value):
+        return False
+    deal_id = human_intents._deal_id(value)
+    signer_match = CONTRACT_SIGNER_RE.search(value)
+    if not deal_id or not signer_match or not CONTRACT_PERSON_RE.search(value):
+        return False
+    signer = {
+        "name": signer_match.group("name"),
+        "position": "Физическое лицо",
+        "authority": "собственного волеизъявления",
+    }
+    update_deal_ui_state(
+        chat_id, current_deal_id=str(deal_id), contract_deal_id=str(deal_id),
+        contract_signatory=None, contract_signatory_payer_id=None,
+        deal_creation_active=False, pending=None,
+    )
+    run_background_job(
+        lambda: prepare_contract_phrase_preview(token, chat_id, str(deal_id), signer), token, chat_id,
+        operation=f"предпросмотр договора:{deal_id}",
+    )
+    return True
+
+
+def prepare_contract_phrase_preview(token, chat_id, deal_id, signer):
+    """Bind an explicit signer to the deal's freshly read payer, then use the common preview."""
+    payer_result = run_contract_builder({"action": "preview", "deal_id": str(deal_id)})
+    payer_id = str((payer_result.get("preview") or {}).get("payer_id") or "")
+    if not payer_result.get("ok") or not payer_id:
+        send_message(token, chat_id,
+                     f"Не удалось проверить договор: {payer_result.get('error') or 'не выбран плательщик'}",
+                     CONTRACT_KEYBOARD)
+        return
+    update_deal_ui_state(chat_id, contract_signatory=signer,
+                         contract_signatory_payer_id=payer_id)
+    prepare_contract_preview(token, chat_id, str(deal_id))
 
 
 def handle_explicit_deal_read(token, chat_id, text):
@@ -3465,6 +3594,11 @@ DEAL_FREE_SEARCH_RE = re.compile(
     r"(?i)^\s*(?:найди|найти|покажи|поищи|где)\s+(?:все\s+|мои\s+)?(?:(?P<count>\d{1,2})\s+)?(?:последн\w*\s+)?"
     r"сдел(?:к\w*|ок)\s+(?P<query>[^?!.№]{3,80})[?!.]*\s*$"
 )
+DEAL_COMBINED_SEARCH_RE = re.compile(
+    r"(?i)^\s*(?:найди|найти|покажи|поищи|открой)\s+сдел(?:ку|ки)\s+"
+    r"(?:клиента|по\s+клиенту|у\s+клиента|с\s+клиентом|для)\s+"
+    r"(?P<client>.{2,60}?)\s+по\s+(?P<object>.{3,80}?)[?!.]*\s*$"
+)
 # Lists by period/status/payment and deal numbers belong to other handlers.
 DEAL_FREE_SEARCH_EXCLUDE_RE = re.compile(
     r"(?i)^\s*\d{3,}\b|статус|недел|месяц|сегодн|вчера|последн|открыт|оплат|долг|сч[её]т|работе"
@@ -3520,14 +3654,16 @@ def handle_find_then_act(token, chat_id, text):
     result = run_deal_browser({"action": "search_any", "query": query, "limit": 10})
     if not result.get("ok") or not result.get("deals"):
         return False
-    update_deal_ui_state(chat_id, pending=None)
-    send_deal_list(token, chat_id, None, result)
     rest = match.group("rest").casefold()
-    notes = ["Выберите сделку кнопкой — откроется её карточка с меню действий."]
+    continuation = ({"action": "issue_full_invoice"}
+                    if re.search(r"выстав|оформ", rest) and re.search(r"сч[её]т", rest)
+                    else None)
+    update_deal_ui_state(chat_id, pending=None, find_then_act=continuation)
+    send_deal_list(token, chat_id, None, result)
+    notes = [("Выберите сделку кнопкой — сразу откроется предпросмотр общего счёта с сегодняшней датой."
+              if continuation else "Выберите сделку кнопкой — откроется её карточка с меню действий.")]
     if re.search(r"аннулир|отмен", rest):
         notes.append("Аннулировать счёт бот пока не умеет: это делается в Мегаплане.")
-    if re.search(r"выстав|оформ", rest):
-        notes.append("Новый счёт — кнопкой «🧾 Выставить счёт» в карточке; дата счёта — сегодняшняя.")
     send_message(token, chat_id, " ".join(notes))
     return True
 
@@ -3565,6 +3701,19 @@ def listed_deals_keyboard(text):
 
 def handle_deal_search_phrase(token, chat_id, text):
     """«Найди сделки клиента Иванов», «покажи сделки по адресу Химки» — a read, never the model."""
+    combined = DEAL_COMBINED_SEARCH_RE.match(text or "")
+    if combined:
+        result = run_deal_browser({
+            "action": "search_combined",
+            "client_query": combined.group("client").strip(" «»\""),
+            "object_query": combined.group("object").strip(" «»\""),
+            "limit": 15,
+        })
+        if not result.get("ok") or not result.get("deals"):
+            return False
+        update_deal_ui_state(chat_id, pending=None)
+        send_deal_list(token, chat_id, None, result, open_unique=True)
+        return True
     match = DEAL_SEARCH_PHRASE_RE.match(text or "")
     if not match:
         free = DEAL_FREE_SEARCH_RE.match(text or "")
@@ -3575,7 +3724,7 @@ def handle_deal_search_phrase(token, chat_id, text):
         if not result.get("ok") or not result.get("deals"):
             return False  # not a confident search: the usual route answers
         update_deal_ui_state(chat_id, pending=None)
-        send_deal_list(token, chat_id, None, result)
+        send_deal_list(token, chat_id, None, result, open_unique=True)
         return True
     query = match.group("query").strip(" «»\"")
     action = "search_address" if match.group("address") else "search_client"
@@ -3691,20 +3840,94 @@ def format_profitability(deal_id, result):
     return text
 
 
+def format_deal_summary(deal_id, ledger):
+    """Format the complete read-only headline economics from one verified ledger."""
+    if ledger is None:
+        return (f"Сводка сделки №{deal_id}: НЕ ПРОВЕРЕНО — не удалось свежо прочитать "
+                "позиции сделки из CRM. Повторите позже.")
+    revenue = Decimal("0")
+    cost = Decimal("0")
+    missing = []
+    for index, item in enumerate(ledger, 1):
+        try:
+            quantity = Decimal(str(item.get("qty")))
+            sell_price = Decimal(str(item.get("sell_price")))
+            if not quantity.is_finite() or not sell_price.is_finite() or quantity < 0 or sell_price < 0:
+                raise InvalidOperation
+            raw_material = item.get("cost_material")
+            raw_work = item.get("cost_work")
+            if raw_material is None and raw_work is None:
+                missing.append(f"строка {index}: нет себестоимости")
+                continue
+            unit_cost = Decimal(str(raw_material or 0)) + Decimal(str(raw_work or 0))
+            if not unit_cost.is_finite() or unit_cost < 0:
+                raise InvalidOperation
+        except (InvalidOperation, TypeError, ValueError):
+            missing.append(f"строка {index}: неполные или неверные суммы")
+            continue
+        revenue += quantity * sell_price
+        cost += quantity * unit_cost
+    if missing:
+        return (f"Сводка сделки №{deal_id}: НЕ ПРОВЕРЕНО — " + "; ".join(missing) +
+                ". Исправьте данные позиций и повторите.")
+    profit = revenue - cost
+    margin = (profit * Decimal("100") / revenue) if revenue else Decimal("0")
+    margin_text = f"{margin:.1f}".replace(".", ",")
+    return (
+        f"Сводка сделки №{deal_id}\n"
+        f"Выручка: {bank_money(revenue)} ₽\n"
+        f"Себестоимость: {bank_money(cost)} ₽\n"
+        f"Прибыль: {bank_money(profit)} ₽\n"
+        f"Рентабельность: {margin_text}%\n"
+        f"Позиций: {len(ledger)}\n\n"
+        "Источник: свежее чтение позиций CRM. Внешние расходы вне позиций не включены. Ничего не изменено."
+    )
+
+
+def send_deal_summary(token, chat_id, deal_id):
+    ledger = fetch_deal_ledger(deal_id, force=True)
+    send_message(token, chat_id, format_deal_summary(deal_id, ledger), DEAL_ACTIONS_KEYBOARD)
+
+
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-    result = build_and_store_profitability(deal_id)
-    if not result.get("ok") and not (result.get("built") and result.get("path") and os.path.isfile(result["path"])):
+    result = run_build_profitability_report(deal_id)
+    if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error')}", DEAL_ACTIONS_KEYBOARD)
         return
-    note = ("\n\nДанные не менялись — файл в сделке актуален, повторно не записывался." if result.get("unchanged") else
-            f"\n\n⚠️ Расчёт готов, но {result.get('error')}. Файл ниже — актуальный." if not result.get("ok") else "")
-    send_message(token, chat_id, format_profitability(deal_id, result) + note, DEAL_ACTIONS_KEYBOARD)
+    update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending="economics_save",
+                         economics_preview_deal_id=str(deal_id))
+    send_message(token, chat_id, format_profitability(deal_id, result) +
+                 "\n\nПредпросмотр: в CRM ничего не записано. Чтобы сохранить актуальный расчёт в сделку, нажмите отдельную кнопку.",
+                 ECONOMICS_PREVIEW_KEYBOARD)
     send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
     try:
         os.remove(result["path"])
     except OSError:
         pass
+
+
+def save_current_profitability(token, chat_id, deal_id):
+    """Rebuild at confirmation time, then publish that fresh version and report the write result."""
+    send_message(token, chat_id, "💾 Пересчитываю и сохраняю актуальный расчёт в CRM...")
+    result = build_and_store_profitability(deal_id)
+    update_deal_ui_state(chat_id, pending=None, economics_preview_deal_id=None)
+    if not result.get("ok"):
+        send_message(token, chat_id, f"Расчёт НЕ сохранён в CRM: {result.get('error') or 'неизвестная ошибка'}.",
+                     DEAL_ACTIONS_KEYBOARD)
+    elif result.get("unchanged"):
+        send_message(token, chat_id, f"✅ Расчёт сделки №{deal_id} уже актуален в CRM; повторной записи не было.",
+                     DEAL_ACTIONS_KEYBOARD)
+    else:
+        send_message(token, chat_id, f"✅ Актуальный расчёт сделки №{deal_id} сохранён в CRM.",
+                     DEAL_ACTIONS_KEYBOARD)
+    path = result.get("path")
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return bool(result.get("ok"))
 
 
 def run_contract_builder(spec):
@@ -3743,6 +3966,7 @@ def run_contract_invoice(spec):
 
 def format_contract_preview(preview):
     money = lambda value: f"{bank_money(value)} ₽"
+    signatory = preview.get("signatory") or {}
     return (
         f"Договор №{preview.get('number')} от {preview.get('date')}\n"
         f"Поставщик: {preview.get('seller_name') or 'не указан'}\n"
@@ -3750,6 +3974,10 @@ def format_contract_preview(preview):
         f"Заказчик / плательщик: {preview.get('payer_name') or 'не указан'}\n"
         f"Объект: {preview.get('address')}\n"
         f"Предмет: {preview.get('subject')}\n\n"
+        f"Подписант\n"
+        f"ФИО: {signatory.get('name') or 'не указано'}\n"
+        f"Статус: {signatory.get('position') or 'не указан'}\n"
+        f"Действует: {signatory.get('authority') or 'не указано'}\n\n"
         f"Оборудование: {money(preview.get('equipment', 0))}\n"
         f"Материалы: {money(preview.get('materials', 0))}\n"
         f"Авансовый платёж: {money(preview.get('advance', 0))}\n"
@@ -3963,16 +4191,53 @@ def prepare_contract_preview(token, chat_id, deal_id):
         return
     if "основание полномочий подписанта" in missing:
         update_deal_ui_state(chat_id, pending="contract_signatory_authority", contract_deal_id=str(deal_id))
-        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}], [{"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}],
+                                 [{"text": "От своего имени"}], [{"text": "❌ Отмена"}]],
+                    "resize_keyboard": True, "one_time_keyboard": True}
         send_message(token, chat_id, "На основании чего действует подписант?", keyboard)
         return
     if missing:
         send_message(token, chat_id, "Договор пока нельзя сформировать:\n- " + "\n- ".join(missing), CONTRACT_KEYBOARD)
         return
-    keyboard = {"keyboard": [[{"text": "✅ Сформировать договор"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+    keyboard = {"keyboard": [[{"text": "✅ Сформировать и загрузить Word и PDF"}],
+                             [{"text": "✏️ Исправить подписанта"}],
+                             [{"text": "✏️ Исправить дату"}, {"text": "✏️ Исправить адрес"}],
+                             [{"text": "❌ Отмена"}]],
+                "resize_keyboard": True, "one_time_keyboard": True}
     update_deal_ui_state(chat_id,pending='contract_generate_confirm',contract_deal_id=str(deal_id),
                          contract_data_fingerprint=preview.get('fingerprint'),contract_preview=preview)
     send_message(token, chat_id, format_contract_preview(preview) + "\n\nПроверьте данные перед формированием.", keyboard)
+
+
+def upload_generated_contract(token, chat_id, deal_id):
+    generated = current_deal_ui_state(chat_id).get("generated_contract") or {}
+    if generated.get("deal_id") != str(deal_id):
+        send_message(token, chat_id, "Нет подготовленного комплекта договоров для этой сделки.", CONTRACT_KEYBOARD)
+        return False
+    send_message(token, chat_id, f"📤 Загружаю Word и подписанный PDF в сделку №{deal_id}...")
+    result = run_deal_browser({
+        "action": "upload_contracts", "deal_id": str(deal_id),
+        "paths": [generated.get("docx_path"), generated.get("pdf_path")],
+    })
+    if not result.get("ok"):
+        send_message(token, chat_id, f"Не удалось загрузить договоры: {result.get('error')}", CONTRACT_UPLOAD_KEYBOARD)
+        return False
+    filenames = "\n".join(f"- {item.get('name')}" for item in result.get("files") or [])
+    archive_errors = []
+    for contract_path in (generated.get("docx_path"), generated.get("pdf_path")):
+        if not contract_path:
+            continue
+        archived = run_financial_archive({"deal_id": str(deal_id), "path": contract_path,
+                                           "category": "contract_client"})
+        if not archived.get("ok"):
+            archive_errors.append(archived.get("error") or "ошибка OneDrive")
+    cleanup_generated_contract(current_deal_ui_state(chat_id))
+    update_deal_ui_state(chat_id, pending=None, generated_contract=None)
+    archive_notice = ("\n📁 Копии договоров сохранены в финансовом архиве OneDrive."
+                      if not archive_errors else
+                      "\n📁 Договоры загружены в Мегаплан. Передача в OneDrive ещё не подтверждена; исходники сохранены в очереди архива.")
+    send_message(token, chat_id, f"Договоры загружены и подтверждены в сделке №{deal_id}.\n{filenames}{archive_notice}", DEAL_ACTIONS_KEYBOARD)
+    return True
 
 
 OPERATION_TITLES = {'run_create_megaplan_deal':'Создание сделки','run_payer_card_apply':'Привязка плательщика',
@@ -4180,6 +4445,7 @@ def handle_global_navigation(token, chat_id, text):
     """
     value = (text or "").strip()
     if (re.match(r"^№\d+\b", value)
+            or re.fullmatch(r"🧾 Запросить общий счёт №\d+", value)
             or re.search(r"(?i)\b(?:перейти|открыть|показать)\w*\b.*\bкарточк\w*\b.*\bсделк\w*\b", value)):
         return handle_deal_ui(token, chat_id, value)
     if value == "🧪 Ошибки тестировщика":
@@ -4251,7 +4517,7 @@ def handle_global_navigation(token, chat_id, text):
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
         )
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, deals_keyboard(chat_id))
         return True
     if value in ("🏦 Деньги", "🏦 Банк и платежи"):
         update_deal_ui_state(chat_id, pending=None, bank_transaction_id=None, bank_pending_deal=None)
@@ -4267,6 +4533,11 @@ def handle_global_navigation(token, chat_id, text):
         update_deal_ui_state(
             chat_id, pending=None, transitions=None, pending_transition=None,
             bank_transaction_id=None, bank_pending_deal=None, deal_creation_active=False,
+            suspended_payer_deal_id=None if value == '❌ Отмена' else
+            current_deal_ui_state(chat_id).get('suspended_payer_deal_id'),
+            suspended_payer_target=None if value == '❌ Отмена' else
+            current_deal_ui_state(chat_id).get('suspended_payer_target'),
+            **({'proposal_draft': None} if value == '❌ Отмена' else {}),
         )
         text = (
             "Действие отменено. Сохранённые документы и уже подтверждённые записи не удалены."
@@ -4332,14 +4603,41 @@ def show_qa_findings(token, chat_id, only_unnotified=False):
 def handle_deal_ui(token, chat_id, text, _background=False):
     """Handle deterministic deal navigation without sending menu commands to the LLM."""
     value = text.strip()
+    invoice_from_search = re.fullmatch(r"🧾 Запросить общий счёт №(\d+)", value)
+    if invoice_from_search:
+        selected_id = invoice_from_search.group(1)
+        if not _background:
+            run_background_job(lambda: handle_deal_ui(token, chat_id, text, _background=True), token, chat_id,
+                               operation=f"сделка:предпросмотр-счёта:{selected_id}")
+            return True
+        preview = run_contract_invoice({'action': 'preview_full', 'deal_id': selected_id})
+        if not preview.get('ok'):
+            send_message(token, chat_id, 'Счёт не подготовлен: ' + invoice_error_text(preview.get('error')),
+                         deal_selection_keyboard([{'id': selected_id, 'description': 'Открыть карточку сделки'}]))
+            return True
+        update_deal_ui_state(chat_id, current_deal_id=selected_id, pending="invoice_full_confirm",
+                             invoice_full_preview=preview, invoice_origin="search")
+        send_message(token, chat_id,
+                     f"Выставить общий счёт по сделке №{selected_id}?\n"
+                     f"Плательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\n"
+                     f"Сумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}",
+                     INVOICE_FULL_CONFIRM_KEYBOARD)
+        return True
     # A bound deal button is navigation, never free-form input for whichever
     # wizard happened to be left pending. This boundary must precede every
     # pending handler, including the developer-task prompt.
-    selected_button = re.match(r"^№(\d+)\b", value)
-    if selected_button:
+    # Only an actual deal button (or a bare deal number) opens a card.  A search
+    # phrase such as «№311, Альфа Климат…» must remain input for its pending flow.
+    selected_button = re.fullmatch(r"№(\d+)(?:\s*·.*)?", value)
+    invoice_search_input = current_deal_ui_state(chat_id).get("pending") == "invoice_search"
+    if selected_button and not invoice_search_input:
         selected_id = selected_button.group(1)
         if _background:
-            select_deal(token, chat_id, selected_id)
+            continuation = current_deal_ui_state(chat_id).get("find_then_act") or {}
+            selected = select_deal(token, chat_id, selected_id)
+            if selected and continuation.get("action") == "issue_full_invoice":
+                update_deal_ui_state(chat_id, pending="invoice_menu", invoice_downloads=None)
+                handle_deal_ui(token, chat_id, "📋 Общий счёт по спецификации", _background=True)
         else:
             run_background_job(lambda: handle_deal_ui(token, chat_id, text, _background=True), token, chat_id,
                                operation=f"сделка:открыть:{selected_id}")
@@ -4356,7 +4654,6 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                operation=f"сделка:открыть:{current_id}")
         return True
     local_menus = {
-        "🔎 Найти сделку": ("Как найти сделку?", DEAL_SEARCH_KEYBOARD),
         "🕘 Последние сделки": ("Сколько последних сделок показать?", DEAL_RECENT_KEYBOARD),
         "📋 Основное": ("Основные действия со сделкой.", DEAL_BASIC_KEYBOARD),
         "📄 Документы сделки": ("Документы сделки.", DEAL_DOCUMENTS_KEYBOARD),
@@ -4364,9 +4661,31 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         "🧰 Монтаж сделки": ("Монтаж по сделке.", DEAL_INSTALLATION_KEYBOARD),
         "⬅️ Назад к сделке": ("Действия с текущей сделкой.", DEAL_ACTIONS_KEYBOARD),
     }
+    if value == "🔎 Найти сделку":
+        # One typed line searches essence, address and client at once; the narrow
+        # search buttons stay for people who prefer them.
+        update_deal_ui_state(chat_id, pending="search_any")
+        send_message(
+            token, chat_id,
+            "Опишите сделку одной строкой — ищу одновременно по сути, адресу и клиенту.\n\n"
+            "Можно одной фразой, например:\n"
+            "«найди сделку клиента Альфа Климат по офису на Тверской»",
+            DEAL_SEARCH_KEYBOARD,
+        )
+        return True
     if value in local_menus:
         title, menu = local_menus[value]
         send_message(token, chat_id, title, menu)
+        return True
+    if value == "💳 Счета и оплаты":
+        deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
+        if not deal_id:
+            send_message(token, chat_id, "Сначала выберите сделку.", DEALS_KEYBOARD)
+        elif _background:
+            send_deal_payment_summary(token, chat_id, deal_id)
+        else:
+            run_background_job(lambda: send_deal_payment_summary(token, chat_id, deal_id), token, chat_id,
+                               operation=f"счета и оплаты:{deal_id}")
         return True
     if value == "⭐ Текущая сделка":
         deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
@@ -4481,6 +4800,17 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, f'Кому адресовать КП по сделке №{target}?\nУкажите имя/ФИО или готовое обращение, например: «Уважаемая Татьяна,». Клиента самой сделки это не меняет.', PAYER_UPLOAD_KEYBOARD)
         return True
     proposal_state = current_deal_ui_state(chat_id)
+    resume_label = proposal_resume_label(proposal_state)
+    if resume_label and value == resume_label:
+        draft = proposal_state['proposal_draft']
+        target, recipient = str(draft['deal_id']), draft['recipient']
+        send_message(token, chat_id, f'📄 Возобновляю КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
+        if _background:
+            send_deal_proposal(token, chat_id, target, recipient=recipient)
+        else:
+            run_background_job(lambda: send_deal_proposal(token, chat_id, target, recipient=recipient), token, chat_id,
+                               operation=f'КП по сделке:{target}')
+        return True
     if proposal_state.get('pending') == 'proposal_recipient':
         navigation = {b['text'] for row in DEAL_ACTIONS_KEYBOARD['keyboard'] for b in row}
         navigation |= {'❌ Отмена', '⬅️ Главное меню', '🤝 Работа со сделками', '➕ Создать сделку'}
@@ -4490,15 +4820,34 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             if not target or not recipient or len(recipient) > 200:
                 send_message(token, chat_id, 'Введите имя/ФИО или обращение длиной до 200 символов.', PAYER_UPLOAD_KEYBOARD)
                 return True
-            update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
-            send_message(token, chat_id, f'📄 Формирую КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
-            if _background:
-                send_deal_proposal(token, chat_id, target, recipient=recipient)
-            else:
-                run_background_job(lambda: send_deal_proposal(token, chat_id, target, recipient=recipient), token, chat_id,
-                                   operation=f'КП по сделке:{target}')
+            preview = run_deal_proposal({'action': 'preview', 'deal_id': str(target), 'recipient': recipient})
+            if not preview.get('ok'):
+                send_message(token, chat_id, 'Не удалось прочитать состав сделки: ' + preview.get('error', 'ошибка проверки'), PAYER_UPLOAD_KEYBOARD)
+                return True
+            rows = '\n'.join(f'• {row["name"]}: {row["qty"]} {row["unit"]} — {bank_money(row["total"])} ₽' for row in preview['rows'])
+            update_deal_ui_state(chat_id, pending='proposal_confirm', proposal_deal_id=str(target),
+                                 proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'])
+            send_message(token, chat_id,
+                         f'📄 Предпросмотр КП по сделке №{target}\nАдресат: {recipient}\n'
+                         f'{preview["count"]} позиции:\n\n{rows}\n\n'
+                         f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.', DEAL_PROPOSAL_CONFIRM_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
+    proposal_state = current_deal_ui_state(chat_id)
+    if proposal_state.get('pending') == 'proposal_confirm' and value == '✅ Создать PDF КП':
+        target = proposal_state.get('proposal_deal_id')
+        recipient = proposal_state.get('proposal_recipient')
+        fingerprint = proposal_state.get('proposal_fingerprint')
+        update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None, proposal_recipient=None, proposal_fingerprint=None,
+                             proposal_draft={'deal_id': str(target), 'recipient': recipient})
+        send_message(token, chat_id, f'📄 Формирую КП №{target}.', DEAL_ACTIONS_KEYBOARD)
+        kwargs = {'recipient': recipient, 'expected_fingerprint': fingerprint}
+        if _background:
+            send_deal_proposal(token, chat_id, target, **kwargs)
+        else:
+            run_background_job(lambda: send_deal_proposal(token, chat_id, target, **kwargs), token, chat_id,
+                               operation=f'КП по сделке:{target}')
+        return True
     if value == '➕ Создать сделку':
         update_deal_ui_state(chat_id, pending='deal_create_title', deal_creation_active=True,
                              deal_create_spec={}, deal_creation_items=None,
@@ -5090,7 +5439,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     contract_actions = {
         "📑 Работа с договором", "📝 Подготовить договор", "👁 Проверить данные договора",
-        "✅ Сформировать договор", "📑 Получить договор", "📎 Получить договор из Мегаплана",
+        "✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF",
+        "📑 Получить договор", "📎 Получить договор из Мегаплана",
         "✅ Загрузить договоры в сделку", "🧾 Выставить счёт по договору", "🏢 Добавить плательщика",
     }
     if value in contract_actions and not deal_id:
@@ -5101,9 +5451,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     # upload a file runs outside the polling process. Previously a slow API response
     # froze even unrelated menu clicks for up to the subprocess/network timeout.
     slow_values = {
-        "🔄 Изменить статус", "✅ Подтвердить", "💰 Экономика",
+        "🔄 Изменить статус", "✅ Подтвердить", "📊 Сводка", "💰 Экономика", ECONOMICS_SAVE_BUTTON,
         "📝 Подготовить договор", "👁 Проверить данные договора",
-        "✅ Сформировать договор", "📑 Получить договор",
+        "✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF", "📑 Получить договор",
         "🧾 Выставить счёт по договору", "✅ Выставить счёт",
         "🧾 Работа со счетами", "📋 Общий счёт по спецификации", "✅ Выставить общий счёт", "📚 Скачать счёт",
         "🧾 Выставить счёт", "🏢 Сменить плательщика", "📤 Отправить по ЭДО",
@@ -5118,6 +5468,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         or value in (state.get("transitions") or {})
         or pending_now in ("search_client", "search_address", "get_number", "contract_date", "contract_address",
                            "contract_signatory_authority", "contract_invoice_clause", "invoice_menu", "invoice_download",
+                           "invoice_search",
                            "supplier_invoice_confirm", "supplier_distribution_edit",
                            "supplier_distribution_exclusion_reason")
         or value in slow_values
@@ -5129,7 +5480,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
 
     if value in ("🤝 Сделки", "🤝 Работа со сделками", "/deals"):
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Работа со сделками — выберите действие.", DEALS_KEYBOARD)
+        send_message(token, chat_id, DEALS_MENU_TEXT, deals_keyboard(chat_id))
         return True
     if value == "⬅️ Главное меню":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
@@ -5137,8 +5488,18 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if value == "⬅️ К списку сделок":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Выберите способ поиска сделки.", DEALS_KEYBOARD)
+        send_message(token, chat_id, "Выберите способ поиска сделки.", deals_keyboard(chat_id))
         return True
+
+    if value == "🔎 Найти счёт":
+        update_deal_ui_state(chat_id, pending="invoice_search")
+        send_message(token, chat_id,
+                     "Введите номер счёта, клиента или объект. Можно вместе, например: «№311, Альфа Климат, офис на Тверской».",
+                     {"keyboard": [[{"text": "⬅️ Главное меню"}]], "resize_keyboard": True})
+        return True
+    if pending_now == "invoice_search":
+        update_deal_ui_state(chat_id, pending=None)
+        return find_and_send_megaplan_invoice(token, chat_id, value)
 
     recent = re.fullmatch(r"🕘 (?:Последние )?(5|10|15)", value)
     if recent:
@@ -5564,7 +5925,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token, chat_id, f"Не удалось подготовить счёт: {invoice_error_text(result.get('error'))}", INVOICE_MENU_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin="menu")
-        send_message(token, chat_id, f"В счёте будет одна строка:\n\n{result['line']}\n\nВыставить счёт?", CONTRACT_INVOICE_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, contract_invoice_preview_text(result, deal_id),
+                     CONTRACT_INVOICE_CONFIRM_KEYBOARD)
         return True
     if pending == "invoice_full_confirm" and value == "✅ Выставить общий счёт":
         update_deal_ui_state(chat_id, pending="invoice_menu")
@@ -5590,7 +5952,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token, chat_id, 'Статус изменён, но счёт не подготовлен: ' + invoice_error_text(preview.get('error')), INVOICE_MENU_KEYBOARD)
             return True
         update_deal_ui_state(chat_id, pending="invoice_full_confirm", invoice_full_preview=preview, invoice_status_transition=None)
-        send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, full_invoice_preview_text(deal_id, preview), INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
     if pending == "invoice_download":
         invoice = (state.get("invoice_downloads") or {}).get(value)
@@ -5613,7 +5975,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending="contract_invoice_confirm", contract_invoice_preview=result, invoice_origin=None)
         send_message(
             token, chat_id,
-            f"Будет выставлен счёт по сделке №{deal_id}. В счёте будет ровно одна строка:\n\n{result['line']}\n\nСумма: {_ru_money(result['amount'])} руб.\nПлательщик: {result.get('payer_name') or result['payer_id']}\nИсточник: {result['contract_filename']}",
+            contract_invoice_preview_text(result, deal_id),
             CONTRACT_INVOICE_CONFIRM_KEYBOARD,
         )
         return True
@@ -5659,7 +6021,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         signer = state.get("contract_signatory") or {}
         signer["position"] = value
         update_deal_ui_state(chat_id, pending="contract_signatory_authority", contract_signatory=signer)
-        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}], [{"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
+        keyboard = {"keyboard": [[{"text": "Устав"}, {"text": "Доверенность"}],
+                                 [{"text": "От своего имени"}], [{"text": "❌ Отмена"}]],
+                    "resize_keyboard": True, "one_time_keyboard": True}
         send_message(token, chat_id, "На основании чего действует подписант?", keyboard)
         return True
     if pending == "contract_signatory_authority":
@@ -5702,7 +6066,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending=None)
         prepare_contract_preview(token, chat_id, deal_id)
         return True
-    if pending in ("search_client", "search_address", "get_number"):
+    if pending in ("search_any", "search_client", "search_address", "get_number"):
         update_deal_ui_state(chat_id, pending=None)
         if pending == "get_number":
             match = re.search(r"\d+", value)
@@ -5712,6 +6076,20 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                              {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True})
             elif not select_deal(token, chat_id, match.group(0)):
                 update_deal_ui_state(chat_id, pending="get_number")
+        elif pending == "search_any" and re.fullmatch(r"\d+", value):
+            if not select_deal(token, chat_id, value):
+                update_deal_ui_state(chat_id, pending="search_any")
+        elif pending == "search_any":
+            result = run_deal_browser({"action": "search_any", "query": value, "limit": 15})
+            if result.get("ok") and not result.get("deals"):
+                update_deal_ui_state(chat_id, pending="search_any")
+                send_message(
+                    token, chat_id,
+                    "Подходящих сделок не найдено. Уточните суть, адрес или клиента одной строкой.",
+                    {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True},
+                )
+            else:
+                send_deal_list(token, chat_id, None, result)
         else:
             send_deal_list(token, chat_id, {"action": pending, "query": value, "limit": 15})
         return True
@@ -5812,7 +6190,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             return True
         update_deal_ui_state(chat_id, pending_transition=pending_transition)
         keyboard = {"keyboard": [[{"text": "✅ Подтвердить"}, {"text": "❌ Отмена"}]], "resize_keyboard": True, "one_time_keyboard": True}
-        send_message(token, chat_id, f"Подтвердите перевод сделки №{deal_id} в статус «{transition['name']}».", keyboard)
+        preview = state.get("human_status_preview") or {}
+        if str(preview.get("id") or "") == str(deal_id):
+            text = (f"Сделка №{deal_id} — {preview.get('client') or 'клиент не указан'}\n"
+                    f"Суть: {deal_essence(preview)}\n"
+                    f"Текущий статус: {preview.get('status') or 'не указан'}\n"
+                    f"Новый статус: {transition['name']}\n\n"
+                    "Подтвердите перевод. До нажатия кнопки ничего не изменено.")
+        else:
+            text = f"Подтвердите перевод сделки №{deal_id} в статус «{transition['name']}»."
+        send_message(token, chat_id, text, keyboard)
         return True
 
     if pending == "transition_invoice_type" and value in (
@@ -5916,8 +6303,19 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, "Действие отменено.", DEAL_ACTIONS_KEYBOARD if deal_id else DEALS_KEYBOARD)
         return True
 
+    if value == "📊 Сводка" and deal_id:
+        send_deal_summary(token, chat_id, deal_id)
+        return True
     if value == "💰 Экономика" and deal_id:
         send_current_profitability(token, chat_id, deal_id)
+        return True
+    if value == ECONOMICS_SAVE_BUTTON:
+        preview_deal_id = state.get("economics_preview_deal_id")
+        if pending_now != "economics_save" or not preview_deal_id:
+            send_message(token, chat_id, "Предпросмотр устарел. Сначала снова откройте «💰 Экономика».",
+                         DEAL_ACTIONS_KEYBOARD)
+            return True
+        save_current_profitability(token, chat_id, preview_deal_id)
         return True
     if value == "👷 Монтаж по сделке" and deal_id:
         result=run_installation_workflow({"action":"get","deal_id":str(deal_id)})
@@ -5977,7 +6375,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         if not preview.get('ok'):
             send_message(token,chat_id,'Счёт не подготовлен: '+invoice_error_text(preview.get('error')),INVOICE_MENU_KEYBOARD); return True
         update_deal_ui_state(chat_id, pending="invoice_full_confirm",invoice_full_preview=preview)
-        send_message(token, chat_id, f"Выставить общий счёт по сделке №{deal_id}?\nПлательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\nСумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}", INVOICE_FULL_CONFIRM_KEYBOARD)
+        send_message(token, chat_id, full_invoice_preview_text(deal_id, preview), INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
     if value == "📚 Скачать счёт" and deal_id and pending == "invoice_menu":
         result = run_contract_invoice({"action": "list", "deal_id": str(deal_id)})
@@ -6687,6 +7085,19 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, contract_deal_id=str(deal_id), deal_creation_active=False)
         prepare_contract_preview(token, chat_id, deal_id)
         return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить подписанта":
+        update_deal_ui_state(chat_id, pending="contract_signatory_name", contract_signatory={},
+                             contract_signatory_payer_id=state.get("contract_signatory_payer_id"))
+        send_message(token, chat_id, "Укажите ФИО подписанта со стороны заказчика полностью.")
+        return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить дату":
+        update_deal_ui_state(chat_id, pending="contract_date")
+        send_message(token, chat_id, "Укажите дату договора в формате ДД.ММ.ГГГГ.")
+        return True
+    if pending == "contract_generate_confirm" and value == "✏️ Исправить адрес":
+        update_deal_ui_state(chat_id, pending="contract_address")
+        send_message(token, chat_id, "Укажите адрес объекта для договора.")
+        return True
     if value == "🧾 Выставить счёт по договору" and deal_id:
         update_deal_ui_state(chat_id, pending="contract_invoice_clause", contract_invoice_preview=None)
         send_message(token, chat_id, "По какому пункту последнего загруженного договора выставить счёт?", CONTRACT_INVOICE_CLAUSE_KEYBOARD)
@@ -6694,7 +7105,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value == "🔄 Обновить предпросмотр" and deal_id:
         prepare_contract_preview(token, chat_id, deal_id)
         return True
-    if value == "✅ Сформировать договор" and deal_id:
+    if value in ("✅ Сформировать договор", "✅ Сформировать и загрузить Word и PDF") and deal_id:
         cleanup_generated_contract(current_deal_ui_state(chat_id))
         update_deal_ui_state(chat_id, generated_contract=None)
         signer = current_deal_ui_state(chat_id).get("contract_signatory") or {}
@@ -6728,6 +7139,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             "docx_path": result["docx_path"],
             "pdf_path": result["pdf_path"],
         })
+        if value == "✅ Сформировать и загрузить Word и PDF":
+            upload_generated_contract(token, chat_id, deal_id)
+            return True
         send_message(
             token, chat_id,
             f"Оба файла сформированы. Загрузить Word и подписанный PDF в сделку №{deal_id}?",
@@ -6735,33 +7149,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         )
         return True
     if value == "✅ Загрузить договоры в сделку" and deal_id:
-        generated = current_deal_ui_state(chat_id).get("generated_contract") or {}
-        if generated.get("deal_id") != str(deal_id):
-            send_message(token, chat_id, "Нет подготовленного комплекта договоров для этой сделки.", CONTRACT_KEYBOARD)
-            return True
-        send_message(token, chat_id, f"📤 Загружаю Word и подписанный PDF в сделку №{deal_id}...")
-        result = run_deal_browser({
-            "action": "upload_contracts", "deal_id": str(deal_id),
-            "paths": [generated.get("docx_path"), generated.get("pdf_path")],
-        })
-        if not result.get("ok"):
-            send_message(token, chat_id, f"Не удалось загрузить договоры: {result.get('error')}", CONTRACT_UPLOAD_KEYBOARD)
-            return True
-        filenames = "\n".join(f"- {item.get('name')}" for item in result.get("files") or [])
-        archive_errors = []
-        for contract_path in (generated.get("docx_path"), generated.get("pdf_path")):
-            if not contract_path:
-                continue
-            archived = run_financial_archive({"deal_id": str(deal_id), "path": contract_path,
-                                               "category": "contract_client"})
-            if not archived.get("ok"):
-                archive_errors.append(archived.get("error") or "ошибка OneDrive")
-        cleanup_generated_contract(current_deal_ui_state(chat_id))
-        update_deal_ui_state(chat_id, pending=None, generated_contract=None)
-        archive_notice = ("\n📁 Копии договоров сохранены в финансовом архиве OneDrive."
-                          if not archive_errors else
-                          "\n📁 Договоры загружены в Мегаплан. Передача в OneDrive ещё не подтверждена; исходники сохранены в очереди архива.")
-        send_message(token, chat_id, f"Договоры загружены и подтверждены в сделке №{deal_id}.\n{filenames}{archive_notice}", DEAL_ACTIONS_KEYBOARD)
+        upload_generated_contract(token, chat_id, deal_id)
         return True
     if value == "❌ Не загружать" and deal_id:
         cleanup_generated_contract(current_deal_ui_state(chat_id))
@@ -7276,13 +7664,18 @@ def run_deal_proposal(spec):
         return {'ok': False, 'error': 'Не удалось завершить формирование КП. Повторная попытка не создаст новую сделку.'}
 
 
-def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None):
-    result = run_deal_proposal({'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient})
+def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None, expected_fingerprint=None):
+    result = run_deal_proposal({'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient,
+                                'expected_fingerprint': expected_fingerprint})
     if not result.get('ok'):
         send_message(token, chat_id, 'КП не сформировано: ' + result.get('error', 'ошибка проверки'), DEAL_ACTIONS_KEYBOARD)
         return False
     caption = f"КП КЛИВЭЛ по сделке №{deal_id}: {result['count']} позиций, {bank_money(result['total'])} ₽. Копия сохранена в сделке."
     sent = send_document(token, chat_id, result['path'], caption)
+    draft = current_deal_ui_state(chat_id).get('proposal_draft') or {}
+    if (sent and str(draft.get('deal_id')) == str(deal_id)
+            and draft.get('recipient') == recipient):
+        update_deal_ui_state(chat_id, proposal_draft=None)
     if sent and automatic:
         run_deal_proposal({'action': 'ack', 'deal_id': str(deal_id)})
     if not sent:
@@ -8717,6 +9110,70 @@ def send_latest_megaplan_invoice(token, chat_id, deal_id, wait_for_creation=Fals
     return False
 
 
+def find_and_send_megaplan_invoice(token, chat_id, query):
+    """Find an existing customer invoice by its number and deal context.
+
+    Deal search uses the read-only cached index.  Invoice lists and the selected
+    PDF are then read fresh from Megaplan; this route never creates or changes an
+    invoice.  A supplied invoice number is an exact constraint, while client and
+    object words disambiguate the deal.
+    """
+    raw = str(query or "").strip()
+    invoice_number = None
+    number_match = re.search(r"(?i)(?:№|сч[её]т(?:а|у|ом)?\s*(?:№)?)\s*([\w./-]+)", raw)
+    if number_match:
+        invoice_number = number_match.group(1).strip(".,;: ")
+    deal_query = re.sub(r"(?i)(?:№|сч[её]т(?:а|у|ом)?\s*(?:№)?)\s*[\w./-]+", " ", raw)
+    deal_query = re.sub(r"(?i)\b(?:найди|найти|получи|получить|пришли|сч[её]т|pdf)\b", " ", deal_query)
+    deal_query = re.sub(r"\s*[,;]+\s*|\s+", " ", deal_query).strip(" .")
+    if not deal_query and invoice_number:
+        found = run_contract_invoice({"action": "find_number", "number": invoice_number})
+        matches = [(None, invoice) for invoice in found.get("invoices") or []] if found.get("ok") else []
+        if len(matches) > 1:
+            send_message(token, chat_id, "Найдено несколько счетов с таким номером. Добавьте клиента или объект.", BANK_MENU_KEYBOARD)
+            return True
+        deals = []
+    elif not deal_query:
+        send_message(token, chat_id, "Введите номер счёта, клиента или объект.", BANK_MENU_KEYBOARD)
+        return True
+    else:
+        matches = []
+        deals_result = run_deal_browser({"action": "search_any", "query": deal_query, "limit": 10})
+        deals = deals_result.get("deals") or [] if deals_result.get("ok") else []
+    for deal in deals:
+        listed = run_contract_invoice({"action": "list", "deal_id": str(deal.get("id"))})
+        if not listed.get("ok"):
+            continue
+        for invoice in listed.get("invoices") or []:
+            if invoice_number and str(invoice.get("number") or "").casefold() != invoice_number.casefold():
+                continue
+            matches.append((deal, invoice))
+    if not matches:
+        send_message(token, chat_id, "Подходящий выставленный счёт не найден. Уточните номер, клиента или объект и попробуйте ещё раз.", BANK_MENU_KEYBOARD)
+        return True
+    if len(matches) > 1:
+        exact_numbers = {str(invoice.get("number") or "") for _, invoice in matches}
+        if not invoice_number or len(exact_numbers) > 1:
+            send_message(token, chat_id, "Найдено несколько счетов. Добавьте точный номер счёта к клиенту или объекту.", BANK_MENU_KEYBOARD)
+            return True
+    deal, invoice = matches[0]
+    result = fetch_megaplan_invoice_pdf({"invoiceId": str(invoice["id"])})
+    if not result.get("ok"):
+        send_message(token, chat_id, "Счёт найден, но PDF сейчас получить не удалось: " + str(result.get("error") or "ошибка Мегаплана"), BANK_MENU_KEYBOARD)
+        return True
+    try:
+        sent = send_document(token, chat_id, result["path"], result.get("caption") or f"Счёт №{invoice.get('number')}", result.get("filename"))
+    finally:
+        try:
+            os.remove(result["path"])
+        except OSError:
+            pass
+    send_message(token, chat_id,
+                 "Счёт получен из Мегаплана." if sent is not False else "Счёт найден, но Telegram не принял файл. Попробуйте поиск ещё раз.",
+                 BANK_MENU_KEYBOARD)
+    return True
+
+
 def send_megaplan_invoice_by_id(token, chat_id, invoice_id, keyboard=INVOICE_MENU_KEYBOARD, deal_id=None):
     result = fetch_megaplan_invoice_pdf({"invoiceId": str(invoice_id)})
     if not result.get("ok"):
@@ -8753,6 +9210,27 @@ def invoice_error_text(error):
     if "позици" in folded:
         return error + "\n\nДобавьте позиции в сделку в Мегаплане и повторите."
     return error
+
+
+def contract_invoice_preview_text(preview, deal_id):
+    """Render every stage-invoice entry point from the same confirmed preview."""
+    return (
+        f"Будет выставлен счёт по сделке №{deal_id}. В счёте будет ровно одна строка:\n\n"
+        f"{preview['line']}\n\n"
+        f"Сумма: {bank_money(preview['amount'])} ₽\n"
+        f"Плательщик: {preview.get('payer_name') or preview['payer_id']}\n"
+        f"Источник: {preview['contract_filename']}"
+    )
+
+
+def full_invoice_preview_text(deal_id, preview):
+    """One confirmation screen for every route to a full client invoice."""
+    return (f"Выставить общий счёт по сделке №{deal_id}?\n"
+            f"Дата: {datetime.now().strftime('%d.%m.%Y')}\n"
+            f"Плательщик: {preview['payer_name']}\n"
+            f"Позиций: {len(preview['rows'])}\n"
+            f"Сумма: {bank_money(preview['total'])} ₽\n"
+            f"Основание: {preview['basis']}")
 
 
 EDO_OFFER_KEYBOARD = {"keyboard": [[{"text": "📤 Отправить по ЭДО"}], [{"text": "⬅️ Назад к сделке"}]],
@@ -9857,23 +10335,27 @@ def _start_human_payer(token,chat_id,deal_id,target=None):
         matches=([item for item in payers if digits and str(item.get('inn') or '')==digits] if len(digits)>=10 else
                  [item for item in payers if needle in ' '.join(str(item.get('name') or '').casefold().replace('ё','е').split())])
         if len(matches)==1 and matches[0].get('selected'):
-            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                                 suspended_payer_deal_id=None,suspended_payer_target=None)
             send_message(token,chat_id,f"В сделке №{deal_id} плательщик уже «{matches[0]['name']}». Менять нечего, ничего не записано.",DEAL_ACTIONS_KEYBOARD)
             return True
         if len(matches)==1:
             item=matches[0]
-            update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item})
+            update_deal_ui_state(chat_id,pending='human_payer_confirm',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id),'payer':item},
+                                 suspended_payer_deal_id=None,suspended_payer_target=None)
             current=next((x for x in payers if x.get('selected')),None)
             send_message(token,chat_id,
                 f"Сделка №{deal_id}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nНовый плательщик: {item['name']}" + (f", ИНН {item['inn']}" if item.get('inn') else '') + f" (ID {item['id']}).\n\nДанные ещё не записаны.",HUMAN_PAYER_CONFIRM_KEYBOARD)
             return True
-    update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices)
+    update_deal_ui_state(chat_id,pending='human_payer_select',human_intent={'name':human_intents.CHANGE_PAYER,'deal_id':str(deal_id)},human_choices=choices,
+                         suspended_payer_deal_id=None,suspended_payer_target=None)
     if choices:
         current=next((x for x in payers if x.get('selected')),None)
         not_found=f"Плательщик «{target}» у клиента сделки не найден однозначно.\n" if target else ''
         send_message(token,chat_id,f"{not_found}Сделка №{deal_id}, клиент {result.get('client_name') or 'не указан'}.\nТекущий плательщик: {(current or {}).get('name') or 'не выбран'}.\nВыберите нового плательщика или пришлите новую карточку.",_human_choice_keyboard(choices,'📎 Новая карточка плательщика'))
     else:
-        update_deal_ui_state(chat_id,pending='payer_card_file',payer_target_deal_id=str(deal_id),human_intent=None,human_choices=None)
+        update_deal_ui_state(chat_id,pending='payer_card_file',payer_target_deal_id=str(deal_id),human_intent=None,human_choices=None,
+                             suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,f"У клиента сделки №{deal_id} нет доступных карточек. Пришлите карточку нового плательщика.")
     return True
 
@@ -9930,7 +10412,7 @@ def _start_human_status(token, chat_id, deal_id, target=None):
     deal = result["deal"]
     transitions = {f"➡️ {t['name']}": t for t in deal.get("transitions", []) if t.get("enabled")}
     update_deal_ui_state(chat_id, current_deal_id=str(deal_id), pending=None, transitions=transitions,
-                         pending_transition=None)
+                         pending_transition=None, human_status_preview=deal)
     if not transitions:
         send_message(token, chat_id, f"Для сделки №{deal_id} сейчас нет доступных переходов. Текущий статус: {deal.get('status')}.",
                      DEAL_ACTIONS_KEYBOARD)
@@ -9950,6 +10432,30 @@ def _start_human_status(token, chat_id, deal_id, target=None):
     return True
 
 
+def _start_human_status_search(token, chat_id, query, target):
+    """Resolve a descriptive deal reference without authorizing a write."""
+    result = run_deal_browser({'action': 'search_any', 'query': query, 'limit': 10})
+    if not result.get('ok'):
+        send_message(token, chat_id, 'Поиск сделки не выполнен: ' + str(result.get('error')), DEALS_KEYBOARD)
+        return True
+    deals = result.get('deals') or []
+    if not deals:
+        send_message(token, chat_id, f'По описанию «{query}» сделки не найдены. Уточните клиента или суть сделки.', DEALS_KEYBOARD)
+        return True
+    if len(deals) == 1:
+        return _start_human_status(token, chat_id, deals[0]['id'], target)
+    choices = {f"№{deal['id']} · {deal_essence(deal, 38)}": str(deal['id']) for deal in deals}
+    update_deal_ui_state(chat_id, pending='human_status_select',
+                         human_intent={'name': human_intents.MOVE_STATUS, 'target': target, 'query': query},
+                         human_choices=choices)
+    lines = [f"№{deal['id']} — {deal.get('client') or 'без клиента'}; {deal_essence(deal)}; статус: {deal.get('status') or 'не указан'}"
+             for deal in deals]
+    keyboard = [[{'text': label}] for label in choices] + [[{'text': '❌ Отмена'}]]
+    send_message(token, chat_id, 'Найдено несколько сделок. Выберите нужную; запись ещё не выполнялась:\n\n' +
+                 '\n'.join(lines), {'keyboard': keyboard, 'resize_keyboard': True, 'one_time_keyboard': True})
+    return True
+
+
 def _human_payment_summary(deal_id):
     deal_result=run_deal_browser({'action':'get','deal_id':str(deal_id)})
     if not deal_result.get('ok'):return {'ok':False,'error':'не удалось прочитать сделку: '+str(deal_result.get('error'))}
@@ -9961,8 +10467,40 @@ def _human_payment_summary(deal_id):
     invoice_total=sum((Decimal(str(item.get('sum') or 0)) for item in invoice_rows),Decimal('0'))
     operations=[item for item in (bank.get('transactions') or []) if str(item.get('deal_id') or '')==str(deal_id) and item.get('status')=='assigned' and item.get('direction')=='income']
     paid=sum((Decimal(str(item.get('amount') or 0)) for item in operations),Decimal('0'))
+    remainder=max(invoice_total-paid,Decimal('0'))
+    if not invoice_rows:
+        payment_status='счета не выставлены'
+    elif paid <= 0:
+        payment_status='не оплачено'
+    elif paid < invoice_total:
+        payment_status='частично оплачено'
+    elif paid == invoice_total:
+        payment_status='оплачено полностью'
+    else:
+        payment_status='оплачено с переплатой'
     return {'ok':True,'deal':deal_result['deal'],'invoice_total':invoice_total,'paid':paid,
-            'remainder':invoice_total-paid,'invoices':invoice_rows,'operations':operations}
+            'remainder':remainder,'payment_status':payment_status,
+            'overpayment':max(paid-invoice_total,Decimal('0')),
+            'invoices':invoice_rows,'operations':operations}
+
+
+def send_deal_payment_summary(token, chat_id, deal_id):
+    """One read-only answer: issued invoices, confirmed bank receipts, remainder and status."""
+    result = _human_payment_summary(deal_id)
+    if not result.get('ok'):
+        send_message(token, chat_id, 'Оплата НЕ ПРОВЕРЕНА: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
+        return
+    deal = result['deal']
+    overpayment = (f"\nПереплата: {bank_money(result['overpayment'])} ₽." if result['overpayment'] else '')
+    send_message(token, chat_id, (
+        f"Сделка №{deal_id} — {deal.get('client')}.\n"
+        f"Выставлено: {bank_money(result['invoice_total'])} ₽ ({len(result['invoices'])} сч.).\n"
+        f"Оплачено: {bank_money(result['paid'])} ₽ ({len(result['operations'])} подтвержд. поступл.).\n"
+        f"Остаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n"
+        f"Статус оплаты: {result['payment_status']}.{overpayment}\n\n"
+        "Источники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. "
+        "Почтовые уведомления без банковской операции не считались."
+    ), DEAL_ACTIONS_KEYBOARD)
 
 
 def has_explicit_deal_economics(text):
@@ -9981,11 +10519,28 @@ TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделк�
 def handle_human_workflow(token,chat_id,text):
     value=str(text or '').strip();state=current_deal_ui_state(chat_id);pending=state.get('pending') or ''
     if value in TOP_LEVEL_NAVIGATION:
-        if pending.startswith('human_'):
-            update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        if pending.startswith('human_') or state.get('find_then_act'):
+            intent=state.get('human_intent') or {}
+            if value != '❌ Отмена' and pending.startswith('human_payer_') and intent.get('deal_id'):
+                payer=intent.get('payer') or {}
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,find_then_act=None,
+                                     suspended_payer_deal_id=str(intent['deal_id']),
+                                     suspended_payer_target=(payer.get('inn') or payer.get('name')))
+            else:
+                update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,find_then_act=None,
+                                     suspended_payer_deal_id=None if value == '❌ Отмена' else state.get('suspended_payer_deal_id'),
+                                     suspended_payer_target=None if value == '❌ Отмена' else state.get('suspended_payer_target'))
         return False
+    resume=re.fullmatch(r'▶️ Продолжить смену плательщика в сделке №(\d+)',value)
+    if resume:
+        deal_id=str(state.get('suspended_payer_deal_id') or '')
+        if deal_id != resume.group(1):
+            send_message(token,chat_id,'Это продолжение устарело. Данные не изменены.',deals_keyboard(chat_id));return True
+        target=state.get('suspended_payer_target')
+        return _start_human_payer(token,chat_id,deal_id,target)
     if pending.startswith('human_') and value=='❌ Отмена':
-        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+                             suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
     if pending=='human_payer_deal':
         match=re.search(r'\d{2,}',value)
@@ -10042,11 +10597,21 @@ def handle_human_workflow(token,chat_id,text):
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
         return _start_human_status(token,chat_id,match.group(),saved.get('target'))
+    elif pending=='human_status_select':
+        deal_id=(state.get('human_choices') or {}).get(value)
+        if not deal_id:send_message(token,chat_id,'Выберите сделку кнопкой или отмените.');return True
+        saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None)
+        return _start_human_status(token,chat_id,deal_id,saved.get('target'))
     elif pending=='human_invoice_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
         saved=state.get('human_intent') or {};update_deal_ui_state(chat_id,pending=None,human_intent=None)
         return _start_human_invoice(token,chat_id,match.group(),saved.get('name') or human_intents.ISSUE_INVOICE)
+    elif pending=='human_economics_deal':
+        match=re.search(r'\d{2,}',value)
+        if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
+        update_deal_ui_state(chat_id,pending=None,human_intent=None)
+        send_current_profitability(token,chat_id,match.group());return True
     else:
         if handle_find_then_act(token,chat_id,value):return True
         intent=human_intents.classify(value)
@@ -10058,6 +10623,9 @@ def handle_human_workflow(token,chat_id,text):
                                     tuple(x for x in intent.missing if x!='deal'),intent.confidence)
     if intent.name==human_intents.MOVE_STATUS:
         if not intent.deal_id:
+            query=(intent.fields or {}).get('deal_query')
+            if query:
+                return _start_human_status_search(token,chat_id,query,intent.target)
             update_deal_ui_state(chat_id,pending='human_status_deal',human_intent={'name':intent.name,'target':intent.target})
             send_message(token,chat_id,'Какую сделку перевести? Укажите номер.');return True
         return _start_human_status(token,chat_id,intent.deal_id,intent.target)
@@ -10066,6 +10634,11 @@ def handle_human_workflow(token,chat_id,text):
             update_deal_ui_state(chat_id,pending='human_invoice_deal',human_intent={'name':intent.name})
             send_message(token,chat_id,'По какой сделке? Укажите номер.');return True
         return _start_human_invoice(token,chat_id,intent.deal_id,intent.name)
+    if intent.name==human_intents.GET_ECONOMICS:
+        if not intent.deal_id:
+            update_deal_ui_state(chat_id,pending='human_economics_deal',human_intent={'name':intent.name})
+            send_message(token,chat_id,'По какой сделке рассчитать прибыль и маржу? Укажите номер.');return True
+        send_current_profitability(token,chat_id,intent.deal_id);return True
     if intent.name==human_intents.CREATE_DEAL:
         active = current_deal_ui_state(chat_id)
         if active.get('deal_creation_active') and active.get('deal_create_spec'):
@@ -10081,9 +10654,7 @@ def handle_human_workflow(token,chat_id,text):
         return _start_human_executor(token,chat_id,intent.deal_id,intent.target,intent.name)
     if intent.name==human_intents.CHECK_PAYMENT:
         if not intent.deal_id:update_deal_ui_state(chat_id,pending='human_payment_deal',human_intent={'name':intent.name});send_message(token,chat_id,'По какой сделке проверить оплату? Укажите номер.');return True
-        result=_human_payment_summary(intent.deal_id)
-        if not result.get('ok'):send_message(token,chat_id,'Оплата НЕ ПРОВЕРЕНА: '+str(result.get('error')));return True
-        deal=result['deal'];send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nСчетов в Мегаплане: {len(result['invoices'])}, на {bank_money(result['invoice_total'])} ₽.\nПодтверждённых входящих операций, привязанных к сделке: {len(result['operations'])}, на {bank_money(result['paid'])} ₽.\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
+        send_deal_payment_summary(token, chat_id, intent.deal_id);return True
     return False
 
 
@@ -10538,6 +11109,8 @@ def main():
                 return
             if is_owner and handle_contract_subject(token, chat_id, text):
                 return
+            if is_owner and handle_contract_prepare_phrase(token, chat_id, text):
+                return
             if is_owner and handle_explicit_deal_read(token, chat_id, text):
                 return
             if is_owner and handle_deal_search_phrase(token, chat_id, text):
@@ -10606,18 +11179,7 @@ def main():
                 return
             economics_match = ECONOMICS_CMD_RE.match(text.strip())
             if economics_match:
-                deal_id = economics_match.group(1)
-                send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
-                result = build_and_store_profitability(deal_id)
-                if result.get("ok"):
-                    send_message(token, chat_id, format_profitability(deal_id, result), MAIN_KEYBOARD)
-                    send_document(token, chat_id, result["path"], "Расчёт рентабельности сделки")
-                    try:
-                        os.remove(result["path"])
-                    except OSError:
-                        pass
-                else:
-                    send_message(token, chat_id, f"Не удалось построить экономику: {result.get('error', 'неизвестная ошибка')}", MAIN_KEYBOARD)
+                send_current_profitability(token, chat_id, economics_match.group(1))
                 return
             print(f"{LOG_PREFIX} received: {text[:200]!r}")
 

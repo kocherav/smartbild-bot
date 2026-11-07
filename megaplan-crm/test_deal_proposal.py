@@ -106,6 +106,30 @@ class ProposalTests(unittest.TestCase):
         self.assertTrue(second['reused'])
         self.assertEqual(api.upload_file.call_count, 1)
 
+    def test_preview_reads_positions_and_does_not_write(self):
+        api = self.api()
+        result = kp.preview('42', api)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['rows'][0]['name'], 'Лента')
+        self.assertEqual(result['rows'][0]['qty'], '200')
+        self.assertEqual(result['total'], '252108.80')
+        api.upload_file.assert_not_called()
+        self.assertFalse(any(call.args[0] == 'POST' for call in api._call.call_args_list))
+
+    def test_change_after_preview_requires_a_new_confirmation(self):
+        api = self.api()
+        fingerprint = kp.preview('42', api)['fingerprint']
+        original = api._call.side_effect
+        def changed(method, path, **kwargs):
+            result = original(method, path, **kwargs)
+            if path == '/deal/42':
+                result['data']['description'] = 'Изменилось'
+            return result
+        api._call.side_effect = changed
+        with self.assertRaisesRegex(ValueError, 'после предпросмотра'):
+            kp.publish('42', api, recipient='Татьяна', expected_fingerprint=fingerprint)
+        api.upload_file.assert_not_called()
+
     def test_concurrent_change_prevents_upload(self):
         api = self.api()
         count = 0

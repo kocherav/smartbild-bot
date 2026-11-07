@@ -36,13 +36,19 @@ def office(crm):
     crm.add_employee('1000011', 'Алексей Смирнов')
 
 
+def office_with_partial_payment(crm):
+    office(crm)
+    crm.bank_transactions.append({
+        'id': 'bank-income-1', 'deal_id': DEAL, 'status': 'assigned',
+        'direction': 'income', 'amount': 50000,
+    })
+
+
 def open_deal_by_number(person, deal_id=DEAL):
     yield press('🤝 Сделки')
     person.sees_button('🔎 Найти сделку')
     yield press('🔎 Найти сделку')
-    person.sees_button('🔢 Найти по номеру')
-    yield press('🔢 Найти по номеру')
-    person.answered('Бот спросил номер сделки')
+    person.answered('Бот спросил свободное описание или номер сделки')
     yield say(deal_id)
     person.sees(f'Сделка №{deal_id}', expected=f'Открылась карточка сделки №{deal_id}')
 
@@ -74,13 +80,29 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
         def journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
-            yield press('🔎 Найти по клиенту')
             yield say('Альфа')
             person.sees('№990001', '№990002', expected='Найдены обе сделки клиента Альфа')
             person.sees_button('№990002 · Вентиляция склада')
             yield press('№990002 · Вентиляция склада')
             person.sees('Сделка №990002', 'Химки', expected='Выбранная из списка сделка открылась')
         self.play(journey, setup=office)
+
+    def test_search_result_and_card_suggest_direct_invoice_command(self):
+        """IDEA-026746AD: 4 menu actions become one explicit, read-only command."""
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔎 Найти по клиенту')
+            yield say('Альфа')
+            person.sees('Можно написать: пришли счёт по сделке 990001',
+                        expected='Прямая команда видна в результатах поиска')
+            yield press('№990001 · Кондиционирование офиса на Тверской')
+            person.sees('Можно написать: пришли счёт по сделке 990001',
+                        expected='Прямая команда видна в карточке сделки')
+            yield say('пришли счёт по сделке 990001')
+            person.got_document('311', expected='Одна команда прислала последний счёт без записи в CRM')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
 
     def test_recent_deals(self):
         def journey(person):
@@ -92,9 +114,34 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
 
     def test_check_payment_of_deal(self):
         def journey(person):
-            yield say('Оплачена ли сделка 990001?')
-            person.sees('Сделка №990001', 'Остаток по выставленным счетам', expected='Бот ответил по оплате сделки')
-        self.play(journey, setup=office)
+            yield say('Сколько оплачено и какой остаток по выставленным счетам сделки 990001?')
+            person.sees('Сделка №990001', 'Выставлено: 114 000', 'Оплачено: 50 000',
+                        'Остаток по выставленным счетам: 64 000', 'Статус оплаты: частично оплачено',
+                        expected='Один ответ свёл счета и подтверждённые платежи по сделке')
+        stand = self.play(journey, setup=office_with_partial_payment)
+        actions = [event for event in stand.receipt()['transcript'] if event['actor'] == 'tester']
+        self.assertEqual(1, len(actions), 'После изменения менеджеру достаточно одного запроса вместо трёх')
+
+    def test_payment_summary_is_one_action_from_open_card(self):
+        """Before: no button-only route. After: one tap from the open deal card."""
+        def setup(crm):
+            office(crm)
+            crm.bank_transactions.append({
+                'id': 'bank-1', 'deal_id': DEAL, 'status': 'assigned',
+                'direction': 'income', 'amount': '40000',
+            })
+
+        def journey(person):
+            yield from open_deal_by_number(person)
+            person.sees_button('💳 Счета и оплаты', expected='Сводка доступна из карточки')
+            yield press('💳 Счета и оплаты')
+            person.sees('Выставлено: 114 000,00 ₽', 'Оплачено: 40 000,00 ₽',
+                        'Остаток по выставленным счетам: 74 000,00 ₽', 'Статус оплаты: частично оплачено',
+                        expected='Одним нажатием показаны все счета и оплаты')
+
+        stand = self.play(journey, setup=setup)
+        self.assertEqual([], stand.crm.writes, 'Сводка не делает хозяйственных записей')
+        self.assertEqual(4, stand.receipt()['actions'], 'От /start до сводки: 3 шага открытия + 1 нажатие')
 
 
 class PayerJourneys(HumanJourneyCase, unittest.TestCase):
@@ -164,7 +211,8 @@ class InvoiceJourneys(HumanJourneyCase, unittest.TestCase):
             yield press('📄 Документы сделки')
             yield press('🧾 Работа со счетами')
             yield press('6.4.1')
-            person.sees('п.6.4.1', expected='Показана строка будущего счёта по пункту договора')
+            person.sees('п.6.4.1', 'Сумма: 57 000,00 ₽',
+                        expected='Показаны строка и сумма будущего счёта')
             yield press('✅ Выставить счёт')
             person.sees('выставлен', expected='Счёт по этапу выставлен')
             person.got_document('Счёт')
@@ -220,6 +268,30 @@ class DealStatusJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class DealCreationJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_create_deal_from_one_message(self):
+        block = ('Черновик готов.\nCREATE_MEGAPLAN_DEAL_BEGIN\n'
+                 '{"client_name": "ООО «Альфа Климат»", "description": "Переговорная", '
+                 '"selling_company_id": "cliwell", "tax_mode": "5", '
+                 '"items": [{"name": "Сплит-система Haier AS35", "qty": 2, "unit_price": 52000}, '
+                 '{"name": "Монтаж сплит-системы", "qty": 2, "unit_price": 14000}]}\n'
+                 'CREATE_MEGAPLAN_DEAL_END')
+
+        def journey(person):
+            yield say('Создай сделку для клиента Альфа Климат: Сплит-система Haier AS35 — 2 шт по 52000; монтаж — 2 шт по 14000')
+            person.sees('Проверьте новую сделку', 'ID 501', 'Haier AS35', '132 000,00',
+                        expected='Одна команда нашла клиента и показала единый предпросмотр')
+            person.sees_button('✅ Создать подтверждённую сделку')
+            person.check('До подтверждения CRM не изменена', person.stand.crm.writes,
+                         not person.stand.crm.writes)
+            yield press('✅ Создать подтверждённую сделку')
+            person.sees('Сделка создана', expected='Сделка создана только после кнопки')
+
+        stand = self.play(journey, setup=office, model_rules=[('Сплит-система Haier AS35', block)])
+        created = [w for w in stand.crm.writes if w['script'] == 'megaplan_api']
+        self.assertEqual(1, len(created))
+        self.assertEqual('501', str(created[0]['spec'].get('client_id')))
+        self.assertEqual(2, stand.receipt()['actions'], '2 действия вместо 8 в пошаговом мастере')
+
     def test_create_deal_with_wizard_and_text_specification(self):
         spec_block = ('Черновик готов.\nCREATE_MEGAPLAN_DEAL_BEGIN\n'
                       '{"client_name": "ООО «Альфа Климат»", "description": "Кондиционеры для переговорной", '

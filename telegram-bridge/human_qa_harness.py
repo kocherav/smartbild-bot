@@ -309,9 +309,13 @@ class FakeMegaplan:
         if action == 'list':
             found = ordered[:max(1, min(int(spec.get('limit', 5)), 15))]
             return {'ok': True, 'deals': [self.summary(d) for d in found], 'total_count': len(found)}
-        if action in ('search_any', 'search_client', 'search_address'):
+        if action in ('search_any', 'search_client', 'search_address', 'search_combined'):
             query = str(spec.get('query') or '').strip().casefold().replace('ё', 'е')
-            if not query:
+            client_query = str(spec.get('client_query') or '').strip().casefold().replace('ё', 'е')
+            object_query = str(spec.get('object_query') or '').strip().casefold().replace('ё', 'е')
+            if action == 'search_combined' and (not client_query or not object_query):
+                raise ValueError('пустые условия поиска')
+            if action != 'search_combined' and not query:
                 raise ValueError('пустая строка поиска')
             def haystack(deal):
                 summary = self.summary(deal)
@@ -321,7 +325,16 @@ class FakeMegaplan:
                     return summary['address']
                 return ' '.join([summary['name'] or '', summary['client'], summary['address']])
             words = [w for w in re.split(r'\W+', query) if len(w) > 2] or [query]
-            found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
+            if action == 'search_combined':
+                client_words = [w for w in re.split(r'\W+', client_query) if len(w) > 2]
+                object_words = [w for w in re.split(r'\W+', object_query) if len(w) > 2]
+                found = [d for d in ordered
+                         if all(w in self.summary(d)['client'].casefold().replace('ё', 'е') for w in client_words)
+                         and any(w[:max(4, len(w) - 2)] in ' '.join([
+                             self.summary(d)['name'] or '', self.summary(d)['address']
+                         ]).casefold().replace('ё', 'е') for w in object_words)]
+            else:
+                found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
             if action == 'search_any' and not found:
                 # Mirrors deal_browser.stem_match_score: case endings ignored.
                 stems = {w[:max(4, len(w) - 2)] for w in words if len(w) >= 4}
@@ -441,6 +454,11 @@ class FakeMegaplan:
         return [{'name': p['name'], 'quantity': p['qty'], 'price': p['price']} for p in deal['positions']]
 
     def cli_contract_invoice(self, action, spec):
+        if action == 'find_number':
+            wanted = str(spec.get('number') or '').casefold()
+            found = [{'id': invoice['id'], 'number': invoice['number'], 'deal_id': invoice['deal_id']}
+                     for invoice in self.invoices.values() if str(invoice['number']).casefold() == wanted]
+            return {'ok': True, 'invoices': found}
         deal = self._deal(spec)
         payer = self.payer(deal)
         if action == 'list':
@@ -559,6 +577,10 @@ class FakeMegaplan:
             return {'ok': False, 'error': 'в сделке не выбран плательщик'}
         signer = {k: str((spec.get('customer_signatory') or {}).get(k) or payer.get('signatory', {}).get(k) or '').strip()
                   for k in ('name', 'position', 'authority')}
+        customer = self.contractors.get(deal['client_id']) or {}
+        if customer.get('kind') == 'human':
+            signer = {'name': customer.get('name') or '', 'position': 'Физическое лицо',
+                      'authority': 'действует от своего имени'}
         missing = [label for key, label in (('name', 'ФИО подписанта'), ('position', 'должность подписанта'),
                                             ('authority', 'основание полномочий подписанта')) if not signer[key]]
         if not deal['address']:
@@ -584,9 +606,17 @@ class FakeMegaplan:
 
     def cli_deal_proposal(self, action, spec):
         deal = self._deal(spec)
+        rows = [{'name': p['name'], 'qty': str(p['qty']), 'unit': p.get('unit') or 'шт.',
+                 'total': str(p['qty'] * p['price'])} for p in deal['positions']]
+        fingerprint = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+        if action == 'preview':
+            return {'ok': True, 'deal_id': deal['id'], 'rows': rows, 'count': len(rows),
+                    'total': self.price(deal), 'fingerprint': fingerprint}
         if action == 'publish':
             if not deal['positions']:
                 return {'ok': False, 'error': 'в сделке нет позиций'}
+            if spec.get('expected_fingerprint') and spec['expected_fingerprint'] != fingerprint:
+                return {'ok': False, 'error': 'Сделка изменилась после предпросмотра. Повторите формирование'}
             self._write('deal_proposal', action, spec)
             path = self.root / f"КП по сделке {deal['id']}.pdf"
             path.write_bytes(b'%PDF-1.4 proposal')
@@ -620,7 +650,7 @@ class FakeMegaplan:
 
     def cli_bank_statement(self, action, spec):
         if action == 'list':
-            return {'ok': True, 'transactions': []}
+            return {'ok': True, 'transactions': copy.deepcopy(self.bank_transactions)}
         return None
 
     def cli_morning_brief(self, action, spec):
