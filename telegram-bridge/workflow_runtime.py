@@ -64,6 +64,9 @@ class Store:
                 payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
                 PRIMARY KEY(actor,kind,object_id));
             ''')
+            # Every screen remembers the deal it was drawn for (incident 865/888).
+            if 'deal_id' not in {row[1] for row in db.execute('PRAGMA table_info(views)')}:
+                db.execute('ALTER TABLE views ADD COLUMN deal_id TEXT')
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -276,8 +279,8 @@ class Store:
         with self.connect() as db:
             return [dict(row) for row in db.execute('SELECT * FROM answers WHERE question_id=? ORDER BY id', (qid,))]
 
-    def keyboard(self, actor, rows):
-        """Bind every control to one actor and one visible screen, not its label."""
+    def keyboard(self, actor, rows, deal_id=None):
+        """Bind every control to one actor, one visible screen and its deal, not its label."""
         result = []
         with self.connect(True) as db:
             db.execute('UPDATE views SET active=0 WHERE actor=?', (str(actor),))
@@ -290,7 +293,8 @@ class Store:
                 db.execute(f'DELETE FROM controls WHERE view_id IN ({marks})', obsolete)
                 db.execute(f'DELETE FROM views WHERE id IN ({marks})', obsolete)
             view_id = uuid.uuid4().hex
-            db.execute('INSERT INTO views(id,actor,created_at) VALUES(?,?,?)', (view_id, str(actor), stamp()))
+            db.execute('INSERT INTO views(id,actor,created_at,deal_id) VALUES(?,?,?,?)',
+                       (view_id, str(actor), stamp(), str(deal_id) if deal_id else None))
             for row in rows:
                 buttons = []
                 for button in row:
@@ -306,7 +310,7 @@ class Store:
 
     def take_control(self, actor, token):
         with self.connect(True) as db:
-            row = db.execute('SELECT c.*, v.actor, v.active FROM controls c JOIN views v ON v.id=c.view_id WHERE c.token=?', (token,)).fetchone()
+            row = db.execute('SELECT c.*, v.actor, v.active, v.deal_id FROM controls c JOIN views v ON v.id=c.view_id WHERE c.token=?', (token,)).fetchone()
             if not row or row['actor'] != str(actor):
                 return {'ok': False, 'reason': 'unknown'}
             if row['used']:
@@ -317,7 +321,7 @@ class Store:
             # The entire screen is consumed. Two different confirmation choices
             # racing from the same preview must not both execute.
             db.execute('UPDATE views SET active=0 WHERE id=?', (row['view_id'],))
-            return {'ok': True, 'text': row['label'], 'view_id': row['view_id']}
+            return {'ok': True, 'text': row['label'], 'view_id': row['view_id'], 'deal_id': row['deal_id']}
 
     def active_labels(self, actor):
         """Unused controls of the actor's current screen: [(token, label), ...]."""

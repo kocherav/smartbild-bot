@@ -8,6 +8,8 @@ import os
 import uuid
 from pathlib import Path
 
+import deal_context
+
 
 @dataclass
 class Context:
@@ -77,6 +79,7 @@ class StateStore:
             all_state=self.read_all();state=all_state.setdefault(actor,{})
             if int(state.get('_revision') or 0)!=int(expected_revision or 0):return None
             if state.get('pending') or state.get('deal_creation_active'):return None
+            values=deal_context.switch_values(state,values)
             for key,value in values.items():
                 if key.startswith('_'):raise ValueError('Reserved dialog metadata')
                 if value is None:state.pop(key,None)
@@ -94,6 +97,9 @@ class StateStore:
             bound = context is not None and context.actor == actor
             if bound and int(state.get('_revision') or 0) != context.revision:
                 return False, copy.deepcopy(state)
+            # One open deal: switching it drops everything bound to the previous one
+            # in this same transaction (deal_context.py, incident 865/888).
+            values = deal_context.switch_values(state, values)
             for key, value in values.items():
                 if key.startswith('_revision') or key == '_last_update_id':
                     raise ValueError('Reserved dialog metadata')
