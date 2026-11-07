@@ -21,14 +21,14 @@ def office(crm):
         ('7102', 'ООО «Альфа Сервис»', '7701000002'),
     ])
     crm.add_client('502', 'Иванов Пётр Сергеевич', kind='human', payers=[('7201', 'Иванов Пётр Сергеевич', '')])
-    crm.add_deal(DEAL, ALPHA, 'Кондиционирование офиса на Тверской', status_id='1',
+    crm.add_deal(DEAL, ALPHA, 'Кондиционирование офиса на Тверской', status_id='2',
                  address='Москва, Тверская ул., 7', executors=['Сергей Деревянко'], payer_id='7101',
                  positions=[('Сплит-система Haier AS25', 2, 45000, 30000, None),
                             ('Монтаж сплит-системы', 2, 12000, None, 6000)],
                  contract='Договор 990001-Д.pdf')
     crm.add_deal('990002', ALPHA, 'Вентиляция склада', status_id='3', address='Химки, Заводская 3',
                  payer_id='7102', positions=[('Приточная установка', 1, 150000, 110000, None)])
-    crm.add_deal('990003', '502', 'Кондиционер в квартиру', status_id='1', address='Москва, Ленина 1',
+    crm.add_deal('990003', '502', 'Кондиционер в квартиру', status_id='2', address='Москва, Ленина 1',
                  payer_id='7201', positions=[('Сплит-система Daichi', 1, 38000, 25000, None)])
     crm.add_invoice(DEAL, [{'name': 'Сплит-система Haier AS25', 'qty': 2, 'price': 45000},
                            {'name': 'Монтаж сплит-системы', 'qty': 2, 'price': 12000}], number='311')

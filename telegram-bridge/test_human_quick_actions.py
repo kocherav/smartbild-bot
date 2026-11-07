@@ -46,6 +46,25 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
         self.assertEqual(0, len(stand.model.prompts))
 
+    def test_invoice_route_offers_required_status_inline(self):
+        def needs_invoice_status(crm):
+            office(crm)
+            crm.deals[DEAL]['status_id'] = '1'
+        def journey(person):
+            yield say('990001')
+            yield press('🧾 Выставить счёт')
+            yield press('📋 Общий счёт по спецификации')
+            person.sees('Для счёта сделку нужно перевести в «Выставление счета»')
+            person.sees_button('🔄 Перевести и выставить счёт')
+            yield press('🔄 Перевести и выставить счёт')
+            person.sees('Выставить общий счёт', expected='После перевода показан обычный preview')
+            yield press('✅ Выставить общий счёт')
+            person.got_document('Счёт')
+        stand = self.play(journey, setup=needs_invoice_status)
+        self.assertEqual(5, stand.receipt()['actions'], 'новый маршрут — 5 действий вместо 8 через отдельное меню')
+        self.assertEqual('2', stand.crm.deals[DEAL]['status_id'])
+        self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
+
     def test_number_is_an_answer_when_the_bot_asked_for_it(self):
         def journey(person):
             yield say('Нужно сменить плательщика')
