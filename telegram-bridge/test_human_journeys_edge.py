@@ -6,7 +6,7 @@ Each journey asserts both the visible answer and the absence of unintended write
 """
 import unittest
 
-from human_qa_harness import HumanJourneyCase, press, press_old, say, send_voice
+from human_qa_harness import HumanJourneyCase, press, press_old, say, send_file, send_voice
 from test_human_journeys import DEAL, office, open_deal_by_number
 
 
@@ -260,6 +260,35 @@ class InvoiceEdgeCases(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, len(writes(stand, 'create_full')), 'Повторное нажатие не создало второй счёт')
 
 class DealCreationVariants(HumanJourneyCase, unittest.TestCase):
+    def test_second_deal_replaces_unfinished_preview_and_old_confirmation_is_stale(self):
+        block_a = ('CREATE_MEGAPLAN_DEAL_BEGIN\n{"client_name":"ООО «Альфа Климат»",'
+                   '"description":"Сделка A","items":[{"name":"A","qty":1,"unit_price":1000}]}\n'
+                   'CREATE_MEGAPLAN_DEAL_END')
+        block_b = ('CREATE_MEGAPLAN_DEAL_BEGIN\n{"client_name":"ООО «Альфа Климат»",'
+                   '"description":"Сделка B","items":[{"name":"B","qty":2,"unit_price":2000}]}\n'
+                   'CREATE_MEGAPLAN_DEAL_END')
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('➕ Создать сделку')
+            yield say('Сделка A')
+            yield say('Альфа')
+            yield press('Клиент ID 501 — ООО «Альфа Климат»')
+            yield say('A 1 шт 1000')
+            if 'НДС 22%' in person.visible_buttons():
+                yield press('НДС 22%')
+            person.sees('Сделка A', expected='Предпросмотр A не записан')
+            yield send_file(__file__, name='spec-B.txt',
+                            caption='Создай новую сделку B для Альфа Климат: B 2 шт по 2000')
+            if 'НДС 22%' in person.visible_buttons():
+                yield press('НДС 22%')
+            person.sees('Сделка B', expected='Показан только новый черновик B')
+            yield press('✅ Создать подтверждённую сделку')
+            yield press_old('✅ Создать подтверждённую сделку')
+        stand = self.play(journey, setup=office, model_rules=[('A 1 шт 1000', block_a), ('новую сделку B', block_b)])
+        created = [w for w in stand.crm.writes if w['script'] == 'megaplan_api']
+        self.assertEqual(1, len(created))
+        self.assertEqual('Сделка B', created[0]['spec']['description'])
+
     def test_create_deal_for_unknown_client(self):
         def journey(person):
             yield press('🤝 Сделки')
