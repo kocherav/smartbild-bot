@@ -3372,6 +3372,55 @@ def write_contract_subject(token, chat_id, saved):
 
 DEAL_ECONOMICS_WORD_RE = re.compile(r"(?i)экономик|рентабельн|маржинальн|маржу|маржа|прибыл")
 
+CONTRACT_PREPARE_PHRASE_RE = re.compile(r"(?i)\b(?:подготов|сформир|сдела)\w*\s+договор\b")
+CONTRACT_SIGNER_RE = re.compile(
+    r"(?i)\bподписант(?:ом|а)?(?:\s+со\s+стороны\s+заказчика)?\s*(?:[-—:]|это|сам)?\s*"
+    r"(?P<name>[А-ЯЁ][а-яё-]+\s+[А-ЯЁ][а-яё-]+\s+[А-ЯЁ][а-яё-]+)"
+)
+CONTRACT_PERSON_RE = re.compile(
+    r"(?i)\b(?:как\s+)?физ(?:ическое\s+лицо|лицо|\.\s*лицо)\b|\bот\s+своего\s+имени\b"
+)
+
+
+def handle_contract_prepare_phrase(token, chat_id, text):
+    """Open the existing safe contract preview from one explicit, complete phrase."""
+    value = " ".join(str(text or "").split())
+    if not CONTRACT_PREPARE_PHRASE_RE.search(value):
+        return False
+    deal_id = human_intents._deal_id(value)
+    signer_match = CONTRACT_SIGNER_RE.search(value)
+    if not deal_id or not signer_match or not CONTRACT_PERSON_RE.search(value):
+        return False
+    signer = {
+        "name": signer_match.group("name"),
+        "position": "Физическое лицо",
+        "authority": "собственного волеизъявления",
+    }
+    update_deal_ui_state(
+        chat_id, current_deal_id=str(deal_id), contract_deal_id=str(deal_id),
+        contract_signatory=None, contract_signatory_payer_id=None,
+        deal_creation_active=False, pending=None,
+    )
+    run_background_job(
+        lambda: prepare_contract_phrase_preview(token, chat_id, str(deal_id), signer), token, chat_id,
+        operation=f"предпросмотр договора:{deal_id}",
+    )
+    return True
+
+
+def prepare_contract_phrase_preview(token, chat_id, deal_id, signer):
+    """Bind an explicit signer to the deal's freshly read payer, then use the common preview."""
+    payer_result = run_contract_builder({"action": "preview", "deal_id": str(deal_id)})
+    payer_id = str((payer_result.get("preview") or {}).get("payer_id") or "")
+    if not payer_result.get("ok") or not payer_id:
+        send_message(token, chat_id,
+                     f"Не удалось проверить договор: {payer_result.get('error') or 'не выбран плательщик'}",
+                     CONTRACT_KEYBOARD)
+        return
+    update_deal_ui_state(chat_id, contract_signatory=signer,
+                         contract_signatory_payer_id=payer_id)
+    prepare_contract_preview(token, chat_id, str(deal_id))
+
 
 def handle_explicit_deal_read(token, chat_id, text):
     match = DEAL_READ_RE.search(text or "")
@@ -3743,11 +3792,17 @@ def run_contract_invoice(spec):
 
 def format_contract_preview(preview):
     money = lambda value: f"{bank_money(value)} ₽"
+    signer = preview.get("signatory") or {}
+    signer_line = ""
+    if signer.get("name"):
+        signer_line = (f"\nПодписант: {signer['name']} "
+                       f"({signer.get('position') or 'роль не указана'}; "
+                       f"{signer.get('authority') or 'основание не указано'})")
     return (
         f"Договор №{preview.get('number')} от {preview.get('date')}\n"
         f"Поставщик: {preview.get('seller_name') or 'не указан'}\n"
         f"Клиент: {preview.get('client')}\n"
-        f"Заказчик / плательщик: {preview.get('payer_name') or 'не указан'}\n"
+        f"Заказчик / плательщик: {preview.get('payer_name') or 'не указан'}{signer_line}\n"
         f"Объект: {preview.get('address')}\n"
         f"Предмет: {preview.get('subject')}\n\n"
         f"Оборудование: {money(preview.get('equipment', 0))}\n"
@@ -10537,6 +10592,8 @@ def main():
             if is_owner and handle_explicit_deal_comparison(token, chat_id, text):
                 return
             if is_owner and handle_contract_subject(token, chat_id, text):
+                return
+            if is_owner and handle_contract_prepare_phrase(token, chat_id, text):
                 return
             if is_owner and handle_explicit_deal_read(token, chat_id, text):
                 return

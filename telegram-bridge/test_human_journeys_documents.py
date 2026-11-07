@@ -20,6 +20,19 @@ def to_contract_menu(person):
 
 
 class ContractJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_prepare_person_contract_in_one_phrase_opens_preview(self):
+        """IDEA-DF04D6C4: eight menu/form actions become one safe preview request."""
+        def journey(person):
+            yield say('Подготовь договор по сделке 990003, подписант Иванов Пётр Сергеевич как физлицо')
+            person.sees('Договор №990003-Д', 'Иванов Пётр Сергеевич', '38 000,00 ₽',
+                        expected='Одна фраза сразу показала предпросмотр договора')
+            person.sees_button('✅ Сформировать договор')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, self.qa_receipt['actions'], 'После: одно действие вместо прежних восьми')
+        self.assertEqual([], stand.crm.writes, 'Предпросмотр не создаёт и не загружает договор')
+        self.assertEqual(0, len(stand.model.prompts), 'Явная команда обрабатывается детерминированно')
+
     def test_changed_contract_field_names_difference_and_refreshes_once(self):
         state={'current_deal_id':DEAL,'contract_deal_id':DEAL,'pending':'contract_generate_confirm',
                'contract_data_fingerprint':'old','contract_preview':{'total':114000,'date':'2026-11-06'},
