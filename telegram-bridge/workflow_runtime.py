@@ -319,6 +319,16 @@ class Store:
             db.execute('UPDATE views SET active=0 WHERE id=?', (row['view_id'],))
             return {'ok': True, 'text': row['label'], 'view_id': row['view_id']}
 
+    def active_labels(self, actor):
+        """Unused controls of the actor's current screen: [(token, label), ...]."""
+        with self.connect() as db:
+            rows = db.execute(
+                'SELECT c.token, c.label FROM controls c JOIN views v ON v.id=c.view_id '
+                'WHERE v.actor=? AND v.active=1 AND c.used=0 ORDER BY c.rowid',
+                (str(actor),),
+            ).fetchall()
+        return [(row['token'], row['label']) for row in rows]
+
     def invalidate_views(self, actor):
         with self.connect(True) as db:
             db.execute('UPDATE views SET active=0 WHERE actor=?', (str(actor),))

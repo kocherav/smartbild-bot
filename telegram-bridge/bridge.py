@@ -4149,6 +4149,15 @@ def prepare_contract_preview(token, chat_id, deal_id):
     result = run_contract_builder({"action": "preview", "deal_id": deal_id,
                                    "customer_signatory": signer,
                                    "customer_signatory_payer_id": signer_payer_id})
+    if not result.get("ok") and "не выбран плательщик" in str(result.get("error") or ""):
+        # 07.11 stand route «сделка → договор → счёт»: a fresh deal of a client with two
+        # payers stopped here with no way on. The missing step is offered in place, and
+        # after the confirmed payer write the same contract preview continues.
+        send_message(token, chat_id, f"В сделке №{deal_id} не выбран плательщик — без него договор не сформировать. "
+                     "Выберите плательщика, после записи сразу покажу предпросмотр договора.")
+        _start_human_payer(token, chat_id, deal_id)
+        update_deal_ui_state(chat_id, payer_then={"deal_id": str(deal_id), "then": "contract_preview"})
+        return
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось проверить договор: {result.get('error')}", CONTRACT_KEYBOARD)
         return
@@ -5339,7 +5348,12 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                                  deal_creation_active=False, deal_creation_items=None,
                                  deal_creation_economics_path=None,
                                  current_deal_id=str(result.get("id") or ""))
-            send_message(token, chat_id, format_create_megaplan_deal_summary(spec, result), MAIN_KEYBOARD)
+            # 06.11 (deal 905): the new deal ended on the main menu and had to be found again
+            # before its contract and invoice. It is now the open deal with its actions.
+            created_id = str(result.get("id") or "")
+            send_message(token, chat_id, format_create_megaplan_deal_summary(spec, result) +
+                         (f"\n\nСделка №{created_id} открыта — договор, счёт и КП кнопками ниже." if created_id else ""),
+                         DEAL_ACTIONS_KEYBOARD if created_id else MAIN_KEYBOARD)
             if result.get("ledger"):
                 review = build_spec_review_xlsx(spec.get("client_name", "?"), result["ledger"])
                 if review:
@@ -10511,6 +10525,48 @@ def has_explicit_deal_economics(text):
 
 
 # Top-level menu entries: a person pressing one has left whatever they were doing.
+TYPED_YES_RE = re.compile(
+    r"(?i)^\s*(?:да|ага|ок|окей|ok|yes|подтверждаю|подтвердить|верно|согласен|согласна|давай|"
+    r"да,?\s*(?:всё|все)\s+верно|да,?\s*подтверждаю|да,?\s*давай)\s*[.!👍]*\s*$"
+)
+
+
+def typed_confirmation(token, msg):
+    """06.11 (deal 905): a typed «Да» under a preview went to the assistant (48 s, no effect).
+
+    One general rule for every preview: a bare «да» while a scenario waits for confirmation
+    is the screen's single «✅ …» button, consumed through the same one-shot control as a tap
+    (a second «да» or a tap after it is «уже использована»). With several ✅ choices the
+    bot asks to press one; nothing is guessed. Returns a callback-shaped message, False when
+    the message was answered here, or None to continue as ordinary text."""
+    text = str((msg or {}).get("text") or "")
+    chat_id = str(((msg or {}).get("chat") or {}).get("id") or "")
+    if not chat_id or not TYPED_YES_RE.match(text):
+        return None
+    if not current_deal_ui_state(chat_id).get("pending"):
+        return None
+    store = WorkflowStore(WORKFLOW_DB_FILE)
+    screen = store.active_labels(chat_id)
+    choices = [(tok, label) for tok, label in screen if label.startswith("✅")]
+    if len(choices) != 1:
+        options = choices or [(tok, label) for tok, label in screen
+                              if not label.startswith(("❌", "⬅️"))]
+        if not options:
+            return None
+        send_message(token, chat_id, "«Да» здесь неоднозначно — нажмите нужную кнопку: "
+                     + "; ".join(f"«{label}»" for _, label in options) + ".",
+                     # Sent before the update's UI context exists: mark it as the
+                     # person's own screen so the live-screen guard keeps the buttons.
+                     {"keyboard": [[{"text": label}] for _, label in screen], "resize_keyboard": True,
+                      "_status_action": True})
+        return False
+    control = store.take_control(chat_id, choices[0][0])
+    if not control.get("ok"):
+        return None
+    return {**msg, "text": control["text"], "_workflow_callback": True, "_view_id": control["view_id"],
+            "_typed_confirmation": text}
+
+
 TOP_LEVEL_NAVIGATION = {"🤝 Сделки", "🤝 Работа со сделками", "/deals", "🏦 Деньги", "🏦 Банк и платежи",
                         "🧰 Монтаж", "☰ Ещё", "⬅️ Главное меню", "/menu", "/start", "📊 Пульт сделок",
                         "/dashboard", "🧪 Ошибки тестировщика"}
@@ -10539,7 +10595,7 @@ def handle_human_workflow(token,chat_id,text):
         target=state.get('suspended_payer_target')
         return _start_human_payer(token,chat_id,deal_id,target)
     if pending.startswith('human_') and value=='❌ Отмена':
-        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,human_choices=None,payer_then=None,
                              suspended_payer_deal_id=None,suspended_payer_target=None)
         send_message(token,chat_id,'Действие отменено.',DEALS_KEYBOARD);return True
     if pending=='human_payer_deal':
@@ -10565,7 +10621,15 @@ def handle_human_workflow(token,chat_id,text):
         if not result.get('ok'):send_message(token,chat_id,'Плательщик не изменён: '+str(result.get('error')),HUMAN_PAYER_CONFIRM_KEYBOARD);return True
         check=run_payer_card_apply({'action':'list_deal_payers','deal_id':intent.get('deal_id')});selected=next((x for x in check.get('payers') or [] if x.get('selected')),None)
         if str((selected or {}).get('id'))!=str(payer.get('id')):send_message(token,chat_id,'Запись не подтверждена обратным чтением. Не повторяйте без сверки.');return True
-        update_deal_ui_state(chat_id,pending=None,human_intent=None);send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.\n\nДальше: «🧾 Выставить счёт» — счёт будет выставлен уже на нового плательщика.",DEAL_ACTIONS_KEYBOARD);return True
+        then=state.get('payer_then') or {}
+        update_deal_ui_state(chat_id,pending=None,human_intent=None,payer_then=None)
+        if then.get('then')=='contract_preview' and str(then.get('deal_id'))==str(intent.get('deal_id')):
+            send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик — «{selected.get('name')}» (обратное чтение Мегаплана). Готовлю предпросмотр договора…")
+            update_deal_ui_state(chat_id,current_deal_id=str(intent.get('deal_id')),contract_deal_id=str(intent.get('deal_id')))
+            run_background_job(lambda: prepare_contract_preview(token,chat_id,str(intent.get('deal_id'))),token,chat_id,
+                               operation=f"предпросмотр договора:{intent.get('deal_id')}")
+            return True
+        send_message(token,chat_id,f"✅ В сделке №{intent.get('deal_id')} плательщик изменён на «{selected.get('name')}». Источник: обратное чтение Мегаплана.\n\nДальше: «🧾 Выставить счёт» — счёт будет выставлен уже на нового плательщика.",DEAL_ACTIONS_KEYBOARD);return True
     if pending=='human_executor_deal':
         match=re.search(r'\d{2,}',value)
         if not match:send_message(token,chat_id,'Укажите номер сделки.');return True
@@ -12303,6 +12367,10 @@ def main():
                        '_workflow_callback': True, '_view_id': control['view_id'], 'date': time.time()}
             else:
                 msg = update.get("message")
+                typed = typed_confirmation(token, msg)
+                if typed is False:
+                    continue
+                msg = typed or msg
             sender_chat = str(((msg or {}).get("chat") or {}).get("id") or "")
             if (msg and "voice" in msg and voice_intake.configured(env)
                     and (sender_chat == authorized_chat_id or sender_chat in linked_accounts)):
