@@ -50,8 +50,8 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
             person.not_sees('Сделка №990001\nСуть', expected='Карточка не открыта без выбора')
 
         self.play(journey, setup=two_offices)
+
     def test_welcome_offers_one_input_deal_number_search(self):
-    def test_deals_section_prompts_for_one_message_number_search(self):
         def menu_journey(person):
             yield press('🤝 Сделки')
             yield press('🔎 Найти сделку')
@@ -74,6 +74,12 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, after.receipt()['actions'] - 1,
                          'после приветствия до результата — один ввод')
         self.assertEqual(0, len(after.model.prompts), 'Прямой поиск не должен уходить в ИИ')
+
+    def test_deals_section_prompts_for_one_message_number_search(self):
+        def menu_journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔢 Найти по номеру')
             yield say(DEAL)
             person.sees(f'Сделка №{DEAL}', expected='Старый кнопочный маршрут по-прежнему работает')
 
@@ -91,6 +97,7 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(1, after.receipt()['actions'] - 1,
                          'после входа в раздел до сделки — одно сообщение')
         self.assertEqual(0, len(after.model.prompts), 'Быстрый поиск по номеру не должен уходить в ИИ')
+
 
     def test_welcome_offers_one_input_free_deal_search(self):
         def menu_journey(person):
