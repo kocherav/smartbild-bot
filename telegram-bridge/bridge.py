@@ -519,6 +519,7 @@ def deals_keyboard(chat_id):
 DEAL_ACTIONS_KEYBOARD = {
     "keyboard": [
         # Quick actions (QA idea И-1): the most frequent operations in one tap.
+        [{"text": "💳 Счета и оплаты"}],
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
@@ -4605,6 +4606,16 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     if value in local_menus:
         title, menu = local_menus[value]
         send_message(token, chat_id, title, menu)
+        return True
+    if value == "💳 Счета и оплаты":
+        deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
+        if not deal_id:
+            send_message(token, chat_id, "Сначала выберите сделку.", DEALS_KEYBOARD)
+        elif _background:
+            send_deal_payment_summary(token, chat_id, deal_id)
+        else:
+            run_background_job(lambda: send_deal_payment_summary(token, chat_id, deal_id), token, chat_id,
+                               operation=f"счета и оплаты:{deal_id}")
         return True
     if value == "⭐ Текущая сделка":
         deal_id = current_deal_ui_state(chat_id).get("current_deal_id")
@@ -10355,6 +10366,25 @@ def _human_payment_summary(deal_id):
             'invoices':invoice_rows,'operations':operations}
 
 
+def send_deal_payment_summary(token, chat_id, deal_id):
+    """One read-only answer: issued invoices, confirmed bank receipts, remainder and status."""
+    result = _human_payment_summary(deal_id)
+    if not result.get('ok'):
+        send_message(token, chat_id, 'Оплата НЕ ПРОВЕРЕНА: ' + str(result.get('error')), DEAL_ACTIONS_KEYBOARD)
+        return
+    deal = result['deal']
+    overpayment = (f"\nПереплата: {bank_money(result['overpayment'])} ₽." if result['overpayment'] else '')
+    send_message(token, chat_id, (
+        f"Сделка №{deal_id} — {deal.get('client')}.\n"
+        f"Выставлено: {bank_money(result['invoice_total'])} ₽ ({len(result['invoices'])} сч.).\n"
+        f"Оплачено: {bank_money(result['paid'])} ₽ ({len(result['operations'])} подтвержд. поступл.).\n"
+        f"Остаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\n"
+        f"Статус оплаты: {result['payment_status']}.{overpayment}\n\n"
+        "Источники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. "
+        "Почтовые уведомления без банковской операции не считались."
+    ), DEAL_ACTIONS_KEYBOARD)
+
+
 def has_explicit_deal_economics(text):
     """Return true when a typed spec carries user-owned sale and cost data."""
     value = str(text or '')
@@ -10506,10 +10536,7 @@ def handle_human_workflow(token,chat_id,text):
         return _start_human_executor(token,chat_id,intent.deal_id,intent.target,intent.name)
     if intent.name==human_intents.CHECK_PAYMENT:
         if not intent.deal_id:update_deal_ui_state(chat_id,pending='human_payment_deal',human_intent={'name':intent.name});send_message(token,chat_id,'По какой сделке проверить оплату? Укажите номер.');return True
-        result=_human_payment_summary(intent.deal_id)
-        if not result.get('ok'):send_message(token,chat_id,'Оплата НЕ ПРОВЕРЕНА: '+str(result.get('error')));return True
-        deal=result['deal'];overpayment=(f"\nПереплата: {bank_money(result['overpayment'])} ₽." if result['overpayment'] else '')
-        send_message(token,chat_id,(f"Сделка №{intent.deal_id} — {deal.get('client')}.\nВыставлено: {bank_money(result['invoice_total'])} ₽ ({len(result['invoices'])} сч.).\nОплачено: {bank_money(result['paid'])} ₽ ({len(result['operations'])} подтвержд. поступл.).\nОстаток по выставленным счетам: {bank_money(result['remainder'])} ₽.\nСтатус оплаты: {result['payment_status']}.{overpayment}\n\nИсточники: свежие счета Мегаплана и подтверждённые привязки банковского реестра. Почтовые уведомления без банковской операции не считались."),DEAL_ACTIONS_KEYBOARD);return True
+        send_deal_payment_summary(token, chat_id, intent.deal_id);return True
     return False
 
 

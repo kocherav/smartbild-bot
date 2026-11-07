@@ -125,6 +125,27 @@ class DealInformationJourneys(HumanJourneyCase, unittest.TestCase):
         actions = [event for event in stand.receipt()['transcript'] if event['actor'] == 'tester']
         self.assertEqual(1, len(actions), 'После изменения менеджеру достаточно одного запроса вместо трёх')
 
+    def test_payment_summary_is_one_action_from_open_card(self):
+        """Before: no button-only route. After: one tap from the open deal card."""
+        def setup(crm):
+            office(crm)
+            crm.bank_transactions.append({
+                'id': 'bank-1', 'deal_id': DEAL, 'status': 'assigned',
+                'direction': 'income', 'amount': '40000',
+            })
+
+        def journey(person):
+            yield from open_deal_by_number(person)
+            person.sees_button('💳 Счета и оплаты', expected='Сводка доступна из карточки')
+            yield press('💳 Счета и оплаты')
+            person.sees('Выставлено: 114 000,00 ₽', 'Оплачено: 40 000,00 ₽',
+                        'Остаток по выставленным счетам: 74 000,00 ₽', 'Статус оплаты: частично оплачено',
+                        expected='Одним нажатием показаны все счета и оплаты')
+
+        stand = self.play(journey, setup=setup)
+        self.assertEqual([], stand.crm.writes, 'Сводка не делает хозяйственных записей')
+        self.assertEqual(5, stand.receipt()['actions'], 'От /start до сводки: 4 шага открытия + 1 нажатие')
+
 
 class PayerJourneys(HumanJourneyCase, unittest.TestCase):
     def test_change_payer_in_one_phrase(self):
