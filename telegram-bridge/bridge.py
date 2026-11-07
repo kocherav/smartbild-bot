@@ -520,7 +520,7 @@ DEAL_ACTIONS_KEYBOARD = {
         [{"text": "🧾 Выставить счёт"}, {"text": "📥 Получить счёт"}],
         [{"text": "🏢 Сменить плательщика"}, {"text": "🔄 Изменить статус"}],
         # QA explorer 24.10: assigning an executor was reachable only by a phrase.
-        [{"text": "👤 Назначить исполнителя"}, {"text": "💰 Экономика"}],
+        [{"text": "👤 Назначить исполнителя"}, {"text": "📊 Сводка"}, {"text": "💰 Экономика"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
         [{"text": "⬅️ К списку сделок"}],
@@ -3789,6 +3789,55 @@ def format_profitability(deal_id, result):
     return text
 
 
+def format_deal_summary(deal_id, ledger):
+    """Format the complete read-only headline economics from one verified ledger."""
+    if ledger is None:
+        return (f"Сводка сделки №{deal_id}: НЕ ПРОВЕРЕНО — не удалось свежо прочитать "
+                "позиции сделки из CRM. Повторите позже.")
+    revenue = Decimal("0")
+    cost = Decimal("0")
+    missing = []
+    for index, item in enumerate(ledger, 1):
+        try:
+            quantity = Decimal(str(item.get("qty")))
+            sell_price = Decimal(str(item.get("sell_price")))
+            if not quantity.is_finite() or not sell_price.is_finite() or quantity < 0 or sell_price < 0:
+                raise InvalidOperation
+            raw_material = item.get("cost_material")
+            raw_work = item.get("cost_work")
+            if raw_material is None and raw_work is None:
+                missing.append(f"строка {index}: нет себестоимости")
+                continue
+            unit_cost = Decimal(str(raw_material or 0)) + Decimal(str(raw_work or 0))
+            if not unit_cost.is_finite() or unit_cost < 0:
+                raise InvalidOperation
+        except (InvalidOperation, TypeError, ValueError):
+            missing.append(f"строка {index}: неполные или неверные суммы")
+            continue
+        revenue += quantity * sell_price
+        cost += quantity * unit_cost
+    if missing:
+        return (f"Сводка сделки №{deal_id}: НЕ ПРОВЕРЕНО — " + "; ".join(missing) +
+                ". Исправьте данные позиций и повторите.")
+    profit = revenue - cost
+    margin = (profit * Decimal("100") / revenue) if revenue else Decimal("0")
+    margin_text = f"{margin:.1f}".replace(".", ",")
+    return (
+        f"Сводка сделки №{deal_id}\n"
+        f"Выручка: {bank_money(revenue)} ₽\n"
+        f"Себестоимость: {bank_money(cost)} ₽\n"
+        f"Прибыль: {bank_money(profit)} ₽\n"
+        f"Рентабельность: {margin_text}%\n"
+        f"Позиций: {len(ledger)}\n\n"
+        "Источник: свежее чтение позиций CRM. Внешние расходы вне позиций не включены. Ничего не изменено."
+    )
+
+
+def send_deal_summary(token, chat_id, deal_id):
+    ledger = fetch_deal_ledger(deal_id, force=True)
+    send_message(token, chat_id, format_deal_summary(deal_id, ledger), DEAL_ACTIONS_KEYBOARD)
+
+
 def send_current_profitability(token, chat_id, deal_id):
     send_message(token, chat_id, "📊 Читаю актуальные данные сделки из Мегаплана и считаю экономику...")
     result = build_and_store_profitability(deal_id)
@@ -5255,7 +5304,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
     # upload a file runs outside the polling process. Previously a slow API response
     # froze even unrelated menu clicks for up to the subprocess/network timeout.
     slow_values = {
-        "🔄 Изменить статус", "✅ Подтвердить", "💰 Экономика",
+        "🔄 Изменить статус", "✅ Подтвердить", "📊 Сводка", "💰 Экономика",
         "📝 Подготовить договор", "👁 Проверить данные договора",
         "✅ Сформировать договор", "📑 Получить договор",
         "🧾 Выставить счёт по договору", "✅ Выставить счёт",
@@ -6091,6 +6140,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, "Действие отменено.", DEAL_ACTIONS_KEYBOARD if deal_id else DEALS_KEYBOARD)
         return True
 
+    if value == "📊 Сводка" and deal_id:
+        send_deal_summary(token, chat_id, deal_id)
+        return True
     if value == "💰 Экономика" and deal_id:
         send_current_profitability(token, chat_id, deal_id)
         return True

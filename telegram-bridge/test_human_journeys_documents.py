@@ -119,6 +119,39 @@ class ContractJourneys(HumanJourneyCase, unittest.TestCase):
 
 
 class EconomicsJourneys(HumanJourneyCase, unittest.TestCase):
+    def test_deal_summary_replaces_two_separate_drill_downs(self):
+        """Before: economics + positions required at least two actions after the card; after: one."""
+        actions_after_card = []
+
+        def journey(person):
+            yield from open_deal_by_number(person)
+            yield press('📊 Сводка')
+            actions_after_card.append('📊 Сводка')
+            person.sees(
+                'Выручка: 114 000,00 ₽', 'Себестоимость: 72 000,00 ₽',
+                'Прибыль: 42 000,00 ₽', 'Рентабельность: 36,8%', 'Позиций: 2',
+                expected='Все показатели сделки пришли одним сообщением',
+            )
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual(1, len(actions_after_card), 'После карточки нужна одна кнопка вместо двух переходов')
+        self.assertEqual([], stand.crm.writes, 'Сводка только читает CRM')
+
+    def test_deal_summary_does_not_invent_missing_cost(self):
+        def incomplete(crm):
+            office(crm)
+            crm.deals[DEAL]['positions'][0]['cost_material'] = None
+
+        def journey(person):
+            yield from open_deal_by_number(person)
+            yield press('📊 Сводка')
+            person.sees('НЕ ПРОВЕРЕНО', 'нет себестоимости', 'Исправьте данные позиций и повторите',
+                        expected='Неполная себестоимость явно названа, итог не выдуман')
+            person.not_sees('Прибыль:', expected='Частичный итог не показан как полный')
+
+        stand = self.play(journey, setup=incomplete)
+        self.assertEqual([], stand.crm.writes, 'Даже неполная сводка только читает CRM')
+
     def test_deal_economics_button(self):
         def journey(person):
             yield from open_deal_by_number(person)
