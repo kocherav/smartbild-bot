@@ -9293,7 +9293,7 @@ def contract_invoice_preview_text(preview, deal_id):
 def full_invoice_preview_text(deal_id, preview):
     """One confirmation screen for every route to a full client invoice."""
     return (f"Выставить общий счёт по сделке №{deal_id}?\n"
-            f"Дата: {datetime.strptime(preview['invoice_date'], '%Y-%m-%d').strftime('%d.%m.%Y')}\n"
+            f"Дата: {datetime.strptime(preview.get('invoice_date') or datetime.now().strftime('%Y-%m-%d'), '%Y-%m-%d').strftime('%d.%m.%Y')}\n"
             f"Плательщик: {preview['payer_name']}\n"
             f"Позиций: {len(preview['rows'])}\n"
             f"Сумма: {bank_money(preview['total'])} ₽\n"
