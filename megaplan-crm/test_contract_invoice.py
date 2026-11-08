@@ -85,6 +85,20 @@ class ContractInvoiceTests(unittest.TestCase):
         for field,value in [('payer_id','4'),('recipient_id','5'),('rows',[{'price':'20','quantity':'1'}])]:
             self.assertNotEqual(key,ci.preview_fingerprint({**base,field:value}))
 
+    def test_created_invoice_date_must_match_confirmed_preview(self):
+        api = Mock()
+        api._call.return_value = {'data': {'id': '9', 'deal': {'id': '1'}, 'payer': {'id': '2'},
+            'recipient': {'id': '3'}, 'invoiceTemplate': {'id': '4'}, 'status': 'drawn',
+            'invoiceDate': {'day': 6, 'month': 10, 'year': 2026},
+            'rows': [{'name': 'A', 'quantity': '1', 'price': {'value': '10'}, 'tax': {'id': '1'}}],
+            'sum': {'value': '10', 'currency': 'RUB'}}}
+        data = {'deal_id': '1', 'payer_id': '2', 'basis': 'B', 'invoice_date': '2026-11-08'}
+        with patch('seller_documents.invoice_settings', return_value=('3', '4')), \
+             patch.object(ci, 'v1_call', return_value={'data': {'invoice': {'PaymentOrderNumber': 'B'}}}):
+            with self.assertRaisesRegex(ValueError, 'не сохранил'):
+                ci.verify_created_invoice(api, '9', data,
+                    [{'name': 'A', 'quantity': '1', 'price': '10', 'tax_id': '1'}])
+
     def test_full_invoice_uses_net_discounted_price_once(self):
         rows = full_invoice_rows({'price': {'value': 1500, 'currency': 'RUB'}, 'positions': [
             {'offer': {'id': '7', 'name': 'Example'}, 'quantity': 2,

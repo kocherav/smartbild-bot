@@ -6411,7 +6411,10 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         target = next((item for item in deal.get('transitions') or []
                        if item.get('enabled') and 'выставление счет' in
                        str(item.get('name') or '').casefold().replace('ё', 'е')), None)
-        if deal_result.get('ok') and target and state.get('invoice_skip_transition') != str(deal_id):
+        current_status = str(deal.get('status') or '').casefold().replace('ё', 'е').strip()
+        target_status = str((target or {}).get('name') or '').casefold().replace('ё', 'е').strip()
+        if (deal_result.get('ok') and target and current_status != target_status
+                and state.get('invoice_skip_transition') != str(deal_id)):
             transition = {'deal_id': str(deal_id), 'state_id': target.get('state_id'), 'name': target.get('name')}
             update_deal_ui_state(chat_id, pending='invoice_status_transition', invoice_status_transition=transition)
             # Review 07.11: never force a status change (a deal in «Монтаж» must not be sent back).
@@ -9226,11 +9229,23 @@ def find_and_send_megaplan_invoice(token, chat_id, query):
     return True
 
 
-def send_megaplan_invoice_by_id(token, chat_id, invoice_id, keyboard=INVOICE_MENU_KEYBOARD, deal_id=None):
+def send_megaplan_invoice_by_id(token, chat_id, invoice_id, keyboard=INVOICE_MENU_KEYBOARD, deal_id=None,
+                                expected_date=None):
     result = fetch_megaplan_invoice_pdf({"invoiceId": str(invoice_id)})
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось получить счёт: {result.get('error')}", keyboard)
         return False
+    if expected_date:
+        expected_display = datetime.strptime(expected_date, '%Y-%m-%d').strftime('%d.%m.%Y')
+        if result.get('invoice_date') != expected_display:
+            try:
+                os.remove(result["path"])
+            except OSError:
+                pass
+            send_message(token, chat_id,
+                         f"Счёт создан, но дата PDF не совпала с подтверждённой ({expected_display}). "
+                         "Файл не отправлен; повторно счёт не создавайте — нужна сверка в Мегаплане.", keyboard)
+            return False
     try:
         sent = send_document(token, chat_id, result["path"], result.get("caption") or "Счёт из Мегаплана", result.get("filename"))
         if deal_id:
@@ -9278,7 +9293,7 @@ def contract_invoice_preview_text(preview, deal_id):
 def full_invoice_preview_text(deal_id, preview):
     """One confirmation screen for every route to a full client invoice."""
     return (f"Выставить общий счёт по сделке №{deal_id}?\n"
-            f"Дата: {datetime.now().strftime('%d.%m.%Y')}\n"
+            f"Дата: {datetime.strptime(preview['invoice_date'], '%Y-%m-%d').strftime('%d.%m.%Y')}\n"
             f"Плательщик: {preview['payer_name']}\n"
             f"Позиций: {len(preview['rows'])}\n"
             f"Сумма: {bank_money(preview['total'])} ₽\n"
@@ -9330,7 +9345,10 @@ def create_and_send_contract_invoice(token, chat_id, deal_id, clause, keyboard=I
         send_message(token, chat_id, f"Не удалось выставить счёт: {result.get('error')}", keyboard)
         return False
     send_message(token, chat_id, f"Счёт №{result.get('invoice_number') or result['invoice_id']} выставлен и привязан к сделке №{deal_id}.", keyboard)
-    send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id)
+    sent = send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id,
+                                       expected_date=result.get('invoice_date') or preview.get('invoice_date'))
+    if not sent:
+        return False
     return str(result["invoice_id"])
 
 
@@ -9348,7 +9366,10 @@ def create_and_send_full_invoice(token, chat_id, deal_id, keyboard=INVOICE_MENU_
         return False
     send_message(token, chat_id, f"Общий счёт №{result.get('invoice_number') or result['invoice_id']} выставлен: позиций — {result.get('rows_count')}.", keyboard)
     update_deal_ui_state(chat_id,invoice_full_preview=None)
-    send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id)
+    sent = send_megaplan_invoice_by_id(token, chat_id, result["invoice_id"], keyboard, deal_id,
+                                       expected_date=result.get('invoice_date') or preview.get('invoice_date'))
+    if not sent:
+        return False
     return str(result["invoice_id"])
     return True
 
