@@ -1954,9 +1954,13 @@ def run_bank_matcher():
 def run_email_payment_monitor(spec):
     try:
         result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "email_payment_monitor.py")],
-            cwd=MEGAPLAN_DIR, input=json.dumps(spec, ensure_ascii=False), capture_output=True, text=True, timeout=45)
+            cwd=MEGAPLAN_DIR, input=json.dumps(spec, ensure_ascii=False), capture_output=True, text=True,
+            timeout=90 if spec.get("action") == "poll" else 45)
         lines = (result.stdout or "").strip().splitlines()
         return json.loads(lines[-1]) if lines else {"ok": False, "error": "пустой ответ почтового обработчика"}
+    except subprocess.TimeoutExpired:
+        print(f"{LOG_PREFIX} email payment monitor timed out", file=sys.stderr)
+        return {"ok": False, "error": "проверка почты не уложилась во время"}
     except Exception as exc:
         print(f"{LOG_PREFIX} email payment monitor failed: {exc}", file=sys.stderr)
         return {"ok": False, "error": "техническая ошибка проверки почты"}
@@ -1972,16 +1976,55 @@ def run_megaplan_finance(spec):
         return {"ok": False, "error": str(exc)}
 
 
+EMAIL_POLL_HEALTH_FILE = os.path.join(BASE_DIR, "email_poll_health.json")
+
+
+def report_email_poll_health(token, chat_id, ok, error=None):
+    """09.11: the hourly mailbox check could fail for days with only a server log line.
+    Two failures in a row tell the owner (at most once a day); the first success after
+    an alert says that checks work again."""
+    health = durable_json.read(EMAIL_POLL_HEALTH_FILE, dict)
+    if ok:
+        if health.get("alerted_at"):
+            send_message(token, chat_id, "✅ Проверка банковских уведомлений снова работает.")
+        durable_json.save(EMAIL_POLL_HEALTH_FILE, {"failures": 0})
+        return
+    failures = int(health.get("failures") or 0) + 1
+    health.update(failures=failures, last_error=str(error or ""), last_failure_at=time.time())
+    if failures >= 2 and time.time() - float(health.get("alerted_at") or 0) > 86400:
+        send_message(token, chat_id,
+            f"⚠️ Проверка банковских уведомлений не работает ({failures} раза подряд): {error}. "
+            "Новые платежи из почты сейчас не поступают; загрузите выписку вручную "
+            "(«🏦 Деньги» → «📤 Загрузить выписку») и передайте это разработчику.")
+        health["alerted_at"] = time.time()
+    durable_json.save(EMAIL_POLL_HEALTH_FILE, health)
+
+
 def poll_email_payments(token, chat_id):
     # An in-memory timer alone polls again after every service reload.
     # First initialization waits an hour too, so deployment cannot add an
     # extra mailbox check shortly after the previous version's last poll.
     if not periodic_schedule.claim(os.path.join(BASE_DIR,'watcher_schedule.json'),'email-payments',3600,delay_first=True):
         return
-    result = run_email_payment_monitor({"action": "poll"})
-    if not result.get("ok"):
-        print(f"{LOG_PREFIX} email payment poll failed: {result.get('error')}", file=sys.stderr); return
-    for candidate in result.get("created") or []:
+    created, failed = [], []
+    for _ in range(5):  # a long backlog is read in several short, saved steps
+        result = run_email_payment_monitor({"action": "poll"})
+        if not result.get("ok"):
+            print(f"{LOG_PREFIX} email payment poll failed: {result.get('error')}", file=sys.stderr)
+            report_email_poll_health(token, chat_id, ok=False, error=result.get("error"))
+            break
+        created += result.get("created") or []
+        failed += result.get("failed") or []
+        if not result.get("more"):
+            report_email_poll_health(token, chat_id, ok=True)
+            break
+    if failed:
+        send_message(token, chat_id,
+            f"⚠️ Не удалось прочитать банковские уведомления: {len(failed)}. "
+            "Возможно, банк изменил формат письма — платежи из них НЕ учтены. "
+            "Проверьте их по выписке («🏦 Деньги» → «📤 Загрузить выписку»).\n"
+            + "\n".join(f"• {x.get('subject') or 'письмо'}: {x.get('error')}" for x in failed[:5]))
+    for candidate in created:
         send_message(token,chat_id,
             f"🏦 Получено банковское уведомление: платёж №{candidate.get('payment_number')} от {candidate.get('date')}, {bank_money(candidate.get('amount'))} ₽.\n"
             "Уведомление сохранено. Откройте «Банк и платежи» → «Банковские уведомления», когда будете готовы его проверить. Текущий диалог не изменён; расходные операции не создавались.")

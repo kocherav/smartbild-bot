@@ -68,3 +68,89 @@ class EmailPaymentTests(unittest.TestCase):
         self.assertIsNone(existing_operation([item],candidate,{'number':'123','total':100},'20'))
 
 if __name__=='__main__':unittest.main()
+
+
+class FakeBox:
+    """IMAP mailbox double: letters by UID, counts what is downloaded."""
+    def __init__(self, letters, validity=b'1'):
+        self.letters = letters; self.validity = validity
+        self.full_fetches = 0; self.header_fetches = 0; self.logged_out = False
+    def select(self, *a, **k): return 'OK', [b'1']
+    def response(self, name): return name, [self.validity]
+    def uid(self, command, *args):
+        if command == 'SEARCH':
+            return 'OK', [b' '.join(str(u).encode() for u in sorted(self.letters))]
+        uid, what = args[0], args[1]
+        subject, body, mid = self.letters[int(uid)]
+        from email.header import Header
+        subject = Header(subject, 'utf-8').encode()   # real headers are RFC 2047 encoded
+        if 'HEADER.FIELDS' in what:
+            self.header_fetches += 1
+            raw = f'Subject: {subject}\r\nMessage-ID: {mid}\r\n\r\n'.encode()
+        else:
+            self.full_fetches += 1
+            raw = (f'Subject: {subject}\r\nMessage-ID: {mid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n'
+                   + body).encode('utf-8')
+        return 'OK', [(b'1 (BODY[] {1}', raw)]
+    def logout(self): self.logged_out = True
+
+
+def letter(n, body=SAMPLE):
+    return ('Уведомление о платеже', body.replace('№140', f'№{n}'), f'<m{n}@alfa>')
+
+
+class IncrementalPollTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile, os, email_payment_monitor as m
+        self.m = m
+        self.dir = tempfile.mkdtemp()
+        self.registry = os.path.join(self.dir, 'registry.json')
+        self.patches = [patch.object(m, 'REGISTRY', self.registry),
+                        patch.object(m, 'match_invoices', return_value={'exact': False, 'missing': [], 'matched_total': 0,
+                                                                        'deal_ids': [], 'invoices': []})]
+        for p in self.patches: p.start()
+        self.addCleanup(lambda: [p.stop() for p in self.patches])
+
+    def test_known_letters_are_not_downloaded_again(self):
+        box = FakeBox({n: letter(n) for n in range(1, 151)})
+        first = self.m.poll(connect=lambda: box)
+        self.assertEqual(150, len(first['created']))
+        box.letters[151] = letter(151); box.full_fetches = 0; box.header_fetches = 0
+        second = self.m.poll(connect=lambda: box)
+        self.assertEqual(['151'], [c['payment_number'] for c in second['created']])
+        self.assertEqual(1, box.full_fetches, 'только новое письмо скачано целиком')
+        self.assertEqual(1, box.header_fetches)
+
+    def test_slow_mailbox_saves_progress_and_continues(self):
+        box = FakeBox({n: letter(n) for n in range(1, 11)})
+        ticks = iter(range(0, 10_000, 10))   # every check «takes» 10 seconds
+        first = self.m.poll(connect=lambda: box, clock=lambda: next(ticks))
+        self.assertTrue(first['more']); self.assertGreater(len(first['created']), 0)
+        rest = self.m.poll(connect=lambda: box)
+        self.assertEqual(10, len(first['created']) + len(rest['created']), 'ни одно письмо не потеряно и не задвоено')
+
+    def test_unrecognised_letter_is_reported_not_silently_skipped(self):
+        box = FakeBox({1: ('Уведомление о платеже', 'Новый формат письма банка без привычных полей', '<x@alfa>')})
+        result = self.m.poll(connect=lambda: box)
+        self.assertEqual([], result['created'])
+        self.assertEqual(1, len(result['failed']))
+        self.assertIn('Альфа-Банка', result['failed'][0]['error'])
+
+    def test_other_letters_of_the_sender_are_not_downloaded(self):
+        box = FakeBox({1: ('Выписка по счёту', 'реклама', '<a@alfa>'), 2: letter(2)})
+        result = self.m.poll(connect=lambda: box)
+        self.assertEqual(1, len(result['created'])); self.assertEqual(1, box.full_fetches)
+
+    def test_crash_in_the_middle_keeps_what_was_done(self):
+        box = FakeBox({n: letter(n) for n in range(1, 6)})
+        real = box.uid
+        def broken(command, *args):
+            if command == 'FETCH' and args[0] == '4' and 'HEADER' not in args[1]:
+                raise OSError('connection reset')
+            return real(command, *args)
+        box.uid = broken
+        with self.assertRaises(OSError):
+            self.m.poll(connect=lambda: box)
+        box.uid = real
+        result = self.m.poll(connect=lambda: box)
+        self.assertEqual(['4', '5'], [c['payment_number'] for c in result['created']], 'продолжение с места сбоя')

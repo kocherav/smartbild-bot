@@ -101,40 +101,96 @@ def match_invoices(payment):
                           "buyer": x.get("buyer"), "buyer_inn": x.get("buyer_inn")} for x in matches]}
 
 
+POLL_BUDGET_SECONDS = 35
+SENDER = "payment@alfa-bank.info"
+
+
+def _header_value(raw):
+    message = email.message_from_bytes(raw or b"")
+    subject = str(make_header(decode_header(message.get("Subject", ""))))
+    return subject, (message.get("Message-ID") or "").strip()
+
+
+def _first_bytes(fetched):
+    return next((x[1] for x in fetched or [] if isinstance(x, tuple)), b"")
+
+
 @transaction(lambda:REGISTRY)
-def poll():
-    env = load_env(); host = env.get("IMAP_HOST") or "imap.yandex.ru"
-    port = int(env.get("IMAP_PORT") or 993); user = env.get("IMAP_USERNAME") or env["SMTP_USERNAME"]
-    password = env.get("IMAP_PASSWORD") or env["SMTP_PASSWORD"]
+def poll(connect=None, clock=None):
+    """Incremental, resumable mailbox check (09.11: notifications stopped for days).
+
+    Before: every hour all of the last 100 bank letters were downloaded in full, inside a
+    45-second limit, and the registry was saved only at the very end. Once the mailbox held
+    enough letters the run always timed out, nothing was saved, and the next run started
+    over — silently. Now: only unseen letters are opened (UIDs are remembered), headers are
+    read before bodies, progress is saved after every letter, the run stops inside a time
+    budget and continues next time, and letters that could not be read are returned as
+    ``failed`` so the owner is told."""
+    import time as _time
+    clock = clock or _time.monotonic
+    started = clock()
     state = load_json(REGISTRY, {"messages": [], "candidates": []})
+    state.setdefault("messages", []); state.setdefault("candidates", [])
     known = {x.get("message_id") for x in state["messages"]}
-    box = imaplib.IMAP4_SSL(host, port); box.login(user, password); box.select("INBOX", readonly=True)
-    # IMAP SEARCH is ASCII unless UTF8=ACCEPT is negotiated; Yandex rejects a
-    # Cyrillic SUBJECT literal here. Filter the trusted sender on the server and
-    # validate the Russian subject/body locally.
-    _, data = box.search(None, 'FROM "payment@alfa-bank.info"')
-    created = []
-    for uid in (data[0].split() if data and data[0] else [])[-100:]:
-        _, raw_data = box.fetch(uid, "(BODY.PEEK[])")
-        raw = next((x[1] for x in raw_data if isinstance(x, tuple)), b"")
-        message = email.message_from_bytes(raw)
-        subject = str(make_header(decode_header(message.get("Subject", ""))))
-        if "уведомление о платеже" not in subject.casefold():
-            continue
-        message_id = message.get("Message-ID") or hashlib.sha256(raw).hexdigest()
-        if message_id in known: continue
-        record = {"message_id": message_id, "uid": uid.decode(), "received_at": datetime.now(timezone.utc).isoformat()}
+    seen = set(state.get("seen_uids") or [])
+    if connect is None:
+        env = load_env(); host = env.get("IMAP_HOST") or "imap.yandex.ru"
+        port = int(env.get("IMAP_PORT") or 993); user = env.get("IMAP_USERNAME") or env["SMTP_USERNAME"]
+        password = env.get("IMAP_PASSWORD") or env["SMTP_PASSWORD"]
+        def connect():
+            box = imaplib.IMAP4_SSL(host, port, timeout=20); box.login(user, password); return box
+    box = connect()
+    created, failed, more = [], [], False
+    try:
+        box.select("INBOX", readonly=True)
+        validity = None
         try:
-            payment = parse_notification(message_text(message)); match = match_invoices(payment)
-            candidate_id = hashlib.sha256(message_id.encode()).hexdigest()[:20]
-            candidate = {"id": candidate_id, **payment, **match, "status": "pending",
-                         "message_id": message_id, "created_at": record["received_at"]}
-            state["candidates"].append(candidate); created.append(candidate); record["candidate_id"] = candidate_id
-        except Exception as exc:
-            record["error"] = str(exc)
-        state["messages"].append(record); known.add(message_id)
-    box.logout(); save_json(REGISTRY, state)
-    return {"ok": True, "created": created}
+            validity = (box.response("UIDVALIDITY")[1] or [None])[0]
+            validity = validity.decode() if isinstance(validity, bytes) else validity
+        except Exception:
+            validity = None
+        if validity and state.get("uid_validity") not in (None, validity):
+            seen = set()  # the mailbox was rebuilt: UIDs mean other letters now
+        state["uid_validity"] = validity or state.get("uid_validity")
+        # IMAP SEARCH is ASCII unless UTF8=ACCEPT is negotiated; Yandex rejects a
+        # Cyrillic SUBJECT literal here. Filter the trusted sender on the server and
+        # validate the Russian subject/body locally.
+        _, data = box.uid("SEARCH", None, f'FROM "{SENDER}"')
+        uids = [x.decode() if isinstance(x, bytes) else str(x) for x in (data[0].split() if data and data[0] else [])]
+        pending = [u for u in uids if u not in seen][-200:]
+        for uid in pending:
+            if clock() - started > POLL_BUDGET_SECONDS:
+                more = True; break
+            _, head = box.uid("FETCH", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT MESSAGE-ID)])")
+            subject, message_id = _header_value(_first_bytes(head))
+            if "уведомление о платеже" not in subject.casefold() or (message_id and message_id in known):
+                seen.add(uid); state["seen_uids"] = sorted(seen, key=int); save_json(REGISTRY, state)
+                continue
+            _, raw_data = box.uid("FETCH", uid, "(BODY.PEEK[])")
+            raw = _first_bytes(raw_data)
+            message = email.message_from_bytes(raw)
+            message_id = message_id or message.get("Message-ID") or hashlib.sha256(raw).hexdigest()
+            record = {"message_id": message_id, "uid": uid, "received_at": datetime.now(timezone.utc).isoformat()}
+            try:
+                payment = parse_notification(message_text(message)); match = match_invoices(payment)
+                candidate_id = hashlib.sha256(message_id.encode()).hexdigest()[:20]
+                candidate = {"id": candidate_id, **payment, **match, "status": "pending",
+                             "message_id": message_id, "created_at": record["received_at"]}
+                state["candidates"].append(candidate); created.append(candidate); record["candidate_id"] = candidate_id
+            except Exception as exc:
+                record["error"] = str(exc)
+                failed.append({"uid": uid, "subject": subject, "error": str(exc)})
+            state["messages"].append(record); known.add(message_id); seen.add(uid)
+            state["seen_uids"] = sorted(seen, key=int)
+            save_json(REGISTRY, state)  # progress survives a timeout or a crash
+    finally:
+        try:
+            box.logout()
+        except Exception:
+            pass
+    state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
+    save_json(REGISTRY, state)
+    return {"ok": True, "created": created, "failed": failed, "more": more}
 
 
 @transaction(lambda:REGISTRY)
