@@ -32,6 +32,19 @@ class QaHandoffTests(unittest.TestCase):
         finished = qa_handoff.finish('QA-A1', 'исправлено', True, self.path)
         self.assertEqual('awaiting_verification', finished['status'])
 
+    def test_duplicate_closed_row_does_not_shadow_actionable_recurrence(self):
+        state = qa_handoff._read(self.path)
+        state['tasks'][0]['status'] = 'closed'
+        state['tasks'].append({**state['tasks'][0], 'status': 'ready', 'created_at': 'later'})
+        self.path.write_text(json.dumps(state))
+        self.assertEqual(1, len(qa_handoff.ready(self.path)))
+        self.assertTrue(qa_handoff.mark_notified('QA-A1', 42, self.path))
+        decided = qa_handoff.decide('QA-A1', True, self.path)
+        self.assertEqual('approved', decided['status'])
+        rows = qa_handoff._read(self.path)['tasks']
+        self.assertEqual('closed', rows[0]['status'])
+        self.assertEqual('approved', rows[1]['status'])
+
     def test_rejection_never_reaches_developer(self):
         self.assertEqual('dismissed', qa_handoff.decide('QA-A1', False, self.path)['status'])
         self.assertIsNone(qa_handoff.claim('QA-A1', self.path))

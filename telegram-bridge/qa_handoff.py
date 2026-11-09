@@ -80,7 +80,10 @@ def ready(path=None, include_notified=True):
     tasks = [item for item in _read(path)['tasks'] if item.get('status') == 'ready']
     if not include_notified:
         tasks = [item for item in tasks if not item.get('owner_notified_at')]
-    return sorted(tasks, key=lambda item: (item.get('severity') != 'P1', item.get('created_at') or ''))
+    unique = {}
+    for item in tasks:
+        unique[item.get('id')] = item
+    return sorted(unique.values(), key=lambda item: (item.get('severity') != 'P1', item.get('created_at') or ''))
 
 
 def summarize(task):
@@ -125,8 +128,9 @@ def handoff_task(task):
 def mark_notified(task_id, message_id, path=None):
     path = STATE if path is None else path
     def change(state):
-        task = next((item for item in state['tasks'] if item.get('id') == task_id), None)
-        if not task or task.get('status') != 'ready': return False
+        task = next((item for item in reversed(state['tasks'])
+                     if item.get('id') == task_id and item.get('status') == 'ready'), None)
+        if not task: return False
         task.update(owner_notified_at=now(), owner_message_id=message_id); return True
     return _mutate(path, change)
 
@@ -134,8 +138,9 @@ def mark_notified(task_id, message_id, path=None):
 def decide(task_id, approved, path=None):
     path = STATE if path is None else path
     def change(state):
-        task = next((item for item in state['tasks'] if item.get('id') == task_id), None)
-        if not task or task.get('status') != 'ready': return None
+        task = next((item for item in reversed(state['tasks'])
+                     if item.get('id') == task_id and item.get('status') == 'ready'), None)
+        if not task: return None
         task['owner_decided_at'] = now()
         task['status'] = 'approved' if approved else 'dismissed'
         return dict(task)
@@ -145,8 +150,9 @@ def decide(task_id, approved, path=None):
 def claim(task_id, path=None):
     path = STATE if path is None else path
     def change(state):
-        task = next((item for item in state['tasks'] if item.get('id') == task_id), None)
-        if not task or task.get('status') != 'approved': return None
+        task = next((item for item in reversed(state['tasks'])
+                     if item.get('id') == task_id and item.get('status') == 'approved'), None)
+        if not task: return None
         task.update(status='fixing', developer_started_at=now()); return dict(task)
     return _mutate(path, change)
 
@@ -154,8 +160,9 @@ def claim(task_id, path=None):
 def finish(task_id, report, ok, path=None, status=None):
     path = STATE if path is None else path
     def change(state):
-        task = next((item for item in state['tasks'] if item.get('id') == task_id), None)
-        if not task or task.get('status') != 'fixing': return None
+        task = next((item for item in reversed(state['tasks'])
+                     if item.get('id') == task_id and item.get('status') == 'fixing'), None)
+        if not task: return None
         task.update(status=status or ('awaiting_verification' if ok else 'approved'), developer_finished_at=now(),
                     developer_report=str(report or '')[-20000:]); return dict(task)
     return _mutate(path, change)

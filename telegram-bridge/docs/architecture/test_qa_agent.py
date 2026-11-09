@@ -38,6 +38,25 @@ class QaAgentTests(unittest.TestCase):
             self.assertIn('корневую причину', first['developer_prompt'])
             self.assertIn('не повторять', first['developer_prompt'])
 
+    def test_recurrence_after_closed_reopens_same_unique_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / 'receipt.json'
+            receipt.write_text(json.dumps({'successful': False, 'cases': [
+                {'id': 'explore:proposal-for-person', 'status': 'failed'}]}))
+            registry = qa_agent.Registry(Path(temporary) / 'state.json')
+            first = qa_agent.inspect_receipt('explore', receipt, registry)['task']
+            state = registry.read()
+            state['tasks'][0].update(status='closed', verified_at='earlier', owner_notified_at='earlier')
+            qa_agent.atomic_save(registry.path, state)
+            reopened = qa_agent.inspect_receipt('explore', receipt, registry)['task']
+            stored = registry.read()['tasks']
+            self.assertEqual(first['id'], reopened['id'])
+            self.assertEqual(1, len(stored))
+            self.assertEqual('ready', stored[0]['status'])
+            self.assertEqual(2, stored[0]['occurrences'])
+            self.assertNotIn('owner_notified_at', stored[0])
+            self.assertEqual('closed', stored[0]['prior_resolutions'][0]['status'])
+
     def test_skip_and_isolation_attempt_are_release_failures(self):
         report = {'successful': True, 'cases': [{'id': 'test_x.test_y', 'status': 'skipped'}],
                   'blocked_events': [{'event': 'socket.connect'}]}

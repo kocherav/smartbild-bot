@@ -258,9 +258,23 @@ class Registry:
                                          verification_run=run['id'], verification_evidence=str(evidence))
                 continue
             digest = fingerprint(profile, group)
-            task = next((item for item in state['tasks'] if item['fingerprint'] == digest and
-                         item['status'] in {'ready', 'approved', 'dispatched', 'fixing',
-                                            'awaiting_verification', 'awaiting_release', 'waiting_input'}), None)
+            same = [item for item in state['tasks'] if item.get('fingerprint') == digest]
+            task = next((item for item in reversed(same) if
+                         item.get('status') in {'ready', 'approved', 'dispatched', 'fixing',
+                                                'awaiting_verification', 'awaiting_release', 'waiting_input'}), None)
+            if not task and same:
+                task = same[-1]
+                previous = {key: task.get(key) for key in
+                            ('status', 'verified_at', 'verification_run', 'developer_report') if task.get(key) is not None}
+                task.setdefault('prior_resolutions', []).append(previous)
+                task.update(status='waiting_input' if kind == 'external' else 'ready',
+                            failures=group, severity=severity(group), profile=profile,
+                            reopened_at=run['at'])
+                for key in ('owner_notified_at', 'owner_message_id', 'owner_decided_at',
+                            'developer_started_at', 'developer_finished_at', 'verified_at',
+                            'verification_run', 'verification_evidence', 'closed_reason',
+                            'superseded_by'):
+                    task.pop(key, None)
             if task:
                 task['occurrences'] += 1
                 task['last_seen_at'] = run['at']
