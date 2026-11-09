@@ -74,3 +74,4 @@ telegram-bridge/watcher_schedule.json
 
 # quality_gate.py --run receipts (runtime output, not source)
 telegram-bridge/docs/architecture/audit-20261012/
+telegram-bridge/email_poll_health.json

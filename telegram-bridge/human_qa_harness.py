@@ -673,6 +673,11 @@ class FakeMegaplan:
     def cli_bank_statement(self, action, spec):
         if action == 'list':
             return {'ok': True, 'transactions': copy.deepcopy(self.bank_transactions)}
+        if action == 'import':
+            self.__dict__.setdefault('imported_statements', []).append(spec.get('path'))
+            return {'ok': True, 'account': '40702810000000000001', 'period': '01.11.2026–07.11.2026',
+                    'debit_total': '1000.00', 'credit_total': '114000.00', 'read_count': 2,
+                    'new_count': 2, 'duplicate_count': 0}
         return None
 
     def cli_morning_brief(self, action, spec):
