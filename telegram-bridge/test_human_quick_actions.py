@@ -113,6 +113,10 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
             person.got_document('Счёт')
 
         stand = self.play(journey, setup=office)
+        listing = next(event['text'] for event in stand.telegram.events
+                       if event.get('actor') == 'bot' and event.get('text', '').startswith('Найденные сделки'))
+        self.assertLess(listing.index('№990001'), listing.index('№990002'),
+                        'совпадение по сути объекта должно быть выше совпадения только по клиенту')
         self.assertEqual(3, stand.receipt()['actions'],
                          'после изменения — фраза, выбор сделки и обязательное подтверждение вместо пяти действий')
         self.assertEqual(1, len([w for w in stand.crm.writes if w['action'] == 'create_full']))
@@ -340,7 +344,7 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
                                expected='У найденной сделки есть прямое продолжение к предпросмотру счёта')
             yield press('🧾 Запросить общий счёт №990002')
             person.sees('Выставить общий счёт по сделке №990002?',
-                        'Плательщик:', 'Сумма:',
+                        'Дата:', dt.date.today().strftime('%d.%m.%Y'), 'Плательщик:', 'Сумма:',
                         expected='Одно нажатие открыло безопасный предпросмотр общего счёта')
             person.sees_button('✅ Выставить общий счёт',
                                expected='Хозяйственная запись остаётся за отдельным подтверждением')
@@ -349,6 +353,23 @@ class QuickActionJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(2, stand.receipt()['actions'],
                          'один поиск и одно действие от результата до предпросмотра')
         self.assertEqual([], stand.crm.writes, 'Предпросмотр не создаёт счёт')
+        self.assertEqual(0, len(stand.model.prompts))
+
+    def test_recent_deals_can_be_limited_to_a_client_and_reopened(self):
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🕘 Последние сделки')
+            yield press('👤 2 последние сделки клиента')
+            yield say('Альфа Климат')
+            person.sees('№990002', '№990001', expected='Показаны две свежие сделки выбранного клиента')
+            person.not_sees('№990003', expected='Сделка другого клиента не попала в выборку')
+            yield press('№990002 · Вентиляция склада')
+            yield press('⬅️ К списку сделок')
+            person.sees('№990002', '№990001', expected='Возврат восстановил тот же список, а не меню поиска')
+            person.not_sees('Выберите способ поиска сделки', expected='Контекст списка не потерян')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
         self.assertEqual(0, len(stand.model.prompts))
 
     def test_assistant_list_of_deals_gets_buttons(self):

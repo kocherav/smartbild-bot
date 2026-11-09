@@ -338,6 +338,13 @@ class FakeMegaplan:
                          ]).casefold().replace('ё', 'е') for w in object_words)]
             else:
                 found = [d for d in ordered if any(w in haystack(d).casefold().replace('ё', 'е') for w in words)]
+                if action == 'search_any':
+                    def exact_score(deal):
+                        summary = self.summary(deal)
+                        object_text = ' '.join([summary['name'] or '', summary['address']]).casefold().replace('ё', 'е')
+                        client_text = summary['client'].casefold().replace('ё', 'е')
+                        return 10 * sum(w in object_text for w in words) + sum(w in client_text for w in words)
+                    found.sort(key=lambda deal: (exact_score(deal), int(deal['id'])), reverse=True)
             if action == 'search_any' and not found:
                 # Mirrors deal_browser.stem_match_score: case endings ignored.
                 stems = {w[:max(4, len(w) - 2)] for w in words if len(w) >= 4}
