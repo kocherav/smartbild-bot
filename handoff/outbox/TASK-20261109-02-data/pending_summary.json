@@ -1,0 +1,208 @@
+{
+  "snapshot_at": "2026-11-09T20:17:14.220135+00:00",
+  "bank": {
+    "unassigned_count": 373,
+    "unassigned_sum": "161363599.41",
+    "oldest": [
+      {
+        "id": "da69cfe7ee4b3f68fac2",
+        "date": "01.05.2026",
+        "amount": "30074.40"
+      },
+      {
+        "id": "87088142cadfe2cd8bc6",
+        "date": "01.05.2026",
+        "amount": "249.00"
+      },
+      {
+        "id": "8e3d831f3497c152200a",
+        "date": "05.05.2026",
+        "amount": "181.78"
+      },
+      {
+        "id": "10563e8d1430fbe93154",
+        "date": "05.05.2026",
+        "amount": "486.78"
+      },
+      {
+        "id": "d9ffdaf47f1cc99392b3",
+        "date": "07.05.2026",
+        "amount": "9882.95"
+      },
+      {
+        "id": "01eca5affbe9ffa25dfc",
+        "date": "08.05.2026",
+        "amount": "3339.00"
+      },
+      {
+        "id": "cf269c6704f563c7b199",
+        "date": "08.05.2026",
+        "amount": "300000.00"
+      },
+      {
+        "id": "d03ed83095dfa51d69cb",
+        "date": "12.05.2026",
+        "amount": "172000.00"
+      },
+      {
+        "id": "4d30e0c1bd6ad8bed5a7",
+        "date": "12.05.2026",
+        "amount": "52431.12"
+      },
+      {
+        "id": "3c3f1b71b4f25d28caa5",
+        "date": "12.05.2026",
+        "amount": "118726.88"
+      }
+    ],
+    "unassigned_income_count": 61,
+    "unassigned_income_sum": "76774455.09"
+  },
+  "email": {
+    "pending_or_postponed_count": 8,
+    "pending_or_postponed_sum": "1770116.44",
+    "oldest": [
+      {
+        "id": "70499fe4acd729f6f867",
+        "date": "25.09.2026",
+        "amount": 251692.37,
+        "status": "pending"
+      },
+      {
+        "id": "3727a32d99a1b6003132",
+        "date": "25.09.2026",
+        "amount": 490264.93,
+        "status": "pending"
+      },
+      {
+        "id": "6adeac6b6509680d29eb",
+        "date": "25.09.2026",
+        "amount": 59971.0,
+        "status": "pending"
+      },
+      {
+        "id": "5911c1558bdba18833f9",
+        "date": "25.09.2026",
+        "amount": 83129.92,
+        "status": "pending"
+      },
+      {
+        "id": "faa55bcb318059ab7a78",
+        "date": "25.09.2026",
+        "amount": 490264.93,
+        "status": "pending"
+      },
+      {
+        "id": "ee49de8d6b246d6a6671",
+        "date": "25.09.2026",
+        "amount": 251692.37,
+        "status": "pending"
+      },
+      {
+        "id": "1183db600e0a9ade6819",
+        "date": "25.09.2026",
+        "amount": 59971.0,
+        "status": "pending"
+      },
+      {
+        "id": "e5948a30675356d08433",
+        "date": "25.09.2026",
+        "amount": 83129.92,
+        "status": "postponed"
+      }
+    ]
+  },
+  "supplier_review_count": 57,
+  "supplier_invoice_queue_count": 1,
+  "supplier_invoice_queue_oldest": [
+    {
+      "created_at": null,
+      "invoice_number": null,
+      "supplier": null
+    }
+  ],
+  "procurement_waiting_count": 69,
+  "procurement_waiting_oldest": [
+    {
+      "id": "464a0faf1c347ef2d48a",
+      "date": null,
+      "created_at": null,
+      "number": "УТ-12795",
+      "status": null,
+      "supplier": "ООО \"МИГ ЭЛЕКТРО\""
+    },
+    {
+      "id": "ebba8cf39feea8258a75",
+      "date": null,
+      "created_at": null,
+      "number": "61810",
+      "status": null,
+      "supplier": "ООО \"ЭЛРУС\""
+    },
+    {
+      "id": "42c227bcc54270965ce0",
+      "date": null,
+      "created_at": null,
+      "number": "22427744/SA",
+      "status": null,
+      "supplier": "ООО \"САНТЕХКОМПЛЕКТ\""
+    },
+    {
+      "id": "98ab57e570e9524fcb92",
+      "date": null,
+      "created_at": null,
+      "number": "61810",
+      "status": null,
+      "supplier": "ООО \"ЭЛРУС\""
+    },
+    {
+      "id": "0fdac2633b0bf9885ece",
+      "date": null,
+      "created_at": null,
+      "number": "22427744/SA",
+      "status": null,
+      "supplier": "ООО \"САНТЕХКОМПЛЕКТ\""
+    },
+    {
+      "id": "67e19e315a923d3c7ccb",
+      "date": null,
+      "created_at": null,
+      "number": "1695",
+      "status": null,
+      "supplier": "ИП Панькин Олег Юрьевич"
+    },
+    {
+      "id": "80d6ed6cef9f2a8b2b89",
+      "date": null,
+      "created_at": null,
+      "number": "1695",
+      "status": null,
+      "supplier": "ИП Панькин Олег Юрьевич"
+    },
+    {
+      "id": "b7a865ee83ac3e87b0dc",
+      "date": null,
+      "created_at": null,
+      "number": "208096",
+      "status": null,
+      "supplier": "ООО \"ГК ОЗОН ГРУПП\""
+    },
+    {
+      "id": "abd0cc946e7950a5f9ef",
+      "date": null,
+      "created_at": null,
+      "number": "52550",
+      "status": null,
+      "supplier": "ООО \"ТРИО КЛИМАТ\""
+    },
+    {
+      "id": "c0730c1189fd3c079c6f",
+      "date": null,
+      "created_at": null,
+      "number": "ПКБ-00003477",
+      "status": null,
+      "supplier": "ООО \"КБ ВЕНТРЕШЕНИЕ\""
+    }
+  ],
+  "reconcile_matched_on_copy_count": 3
+}
