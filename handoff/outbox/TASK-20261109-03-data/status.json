@@ -1,0 +1,61 @@
+{
+  "ran_at": "2026-11-09T07:30:13.281127+00:00",
+  "mail_checked": true,
+  "imports": [
+    {
+      "new": 0,
+      "repeated": 0,
+      "statements": 2,
+      "new_ids": [],
+      "statement_details": [
+        {
+          "account": "…1580",
+          "start": "2026-11-08",
+          "end": "2026-11-08"
+        },
+        {
+          "account": "…1572",
+          "start": "2026-11-08",
+          "end": "2026-11-08"
+        }
+      ],
+      "archive": "4d059522b42ab239309ff834322db066cffbc28748ac5ef0c6d7188166c2db4e"
+    }
+  ],
+  "errors": [
+    {
+      "stage": "report",
+      "error": "CalledProcessError: Command '['/home/kocher.av/.report-venv/bin/python', '/home/kocher.av/hogart-scraper/finance/report.py']' returned non-zero exit status 1."
+    }
+  ],
+  "accounts": [
+    {
+      "account": "…1580",
+      "company": "КЛИВЭЛ",
+      "complete_through": "2026-11-08",
+      "needs_statement": false,
+      "internal_gaps": true,
+      "owner_confirmed": true
+    },
+    {
+      "account": "…1572",
+      "company": "ИНСИС",
+      "complete_through": "2026-11-08",
+      "needs_statement": false,
+      "internal_gaps": true,
+      "owner_confirmed": true
+    },
+    {
+      "account": "…1782",
+      "company": "Владелец не определён",
+      "complete_through": "2026-10-04",
+      "needs_statement": true,
+      "internal_gaps": false,
+      "owner_confirmed": false
+    }
+  ],
+  "notifications_configured": true,
+  "posting_enabled": true,
+  "posting_policy": "trade_cash_separate_from_goods;verified_company_cash;reviewed_paired_movements",
+  "report": null
+}

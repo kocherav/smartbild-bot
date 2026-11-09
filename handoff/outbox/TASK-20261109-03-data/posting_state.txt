@@ -1,0 +1,5 @@
+finance/data/posting_paused.json: отсутствует.
+Содержимое: N/A.
+Дата создания: N/A.
+reports/status.json: posting_enabled=true.
+Вывод: явная файловая пауза не является причиной отсутствия новых проводок.

@@ -1,0 +1,7 @@
+systemctl --user list-timers --all: НЕ ПРОВЕРЕНО
+systemctl --user is-enabled statements.timer: НЕ ПРОВЕРЕНО
+Ошибка: Failed to connect to user scope bus via local transport: DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR not defined.
+journalctl --user -u statements.service --since 2026-10-25: НЕ ПРОВЕРЕНО
+Ошибка: No journal files were opened due to insufficient permissions.
+Косвенное read-only свидетельство: reports/status.json modified 2026-11-09T07:30:13.283172+00:00; ran_at 2026-11-09T07:30:13.281127+00:00.
+Последние 10 запусков и коды завершения: НЕ ПРОВЕРЕНО.

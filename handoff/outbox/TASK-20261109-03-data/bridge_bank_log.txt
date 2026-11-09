@@ -1,0 +1,3 @@
+Источник journalctl -u telegram-bridge(.service): НЕ ПРОВЕРЕНО — No journal files were opened due to insufficient permissions.
+Файл /home/kocher.av/telegram-bridge/bridge.log: размер 0 байт, modified 2026-09-22T17:57:53.371565+00:00.
+Строки с 01.10 по фильтру bank|выписк|email payment|megaplan_finance|reconcile_bank: отсутствуют в доступном файловом журнале.

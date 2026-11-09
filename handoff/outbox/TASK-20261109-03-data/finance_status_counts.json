@@ -1,0 +1,20 @@
+{
+  "source": "finance/reports/ledger.json",
+  "source_note": "Readable projection of the authoritative SQLite database; direct SQLite SELECT was denied by the deployed ACL.",
+  "period_from": "2026-10-01",
+  "movement_count": 93,
+  "groups": {
+    "posted_or_reconciled": 39,
+    "waiting_owner_answer_projection": 21,
+    "ambiguous_or_assistant_queue": 31,
+    "confirmed_purpose_waiting_technical_completion": 2,
+    "excluded": 0
+  },
+  "working_review_registry": {
+    "updated_at": "2026-11-09T07:30:13.118973+00:00",
+    "open_tasks": 373,
+    "owner_user": 0,
+    "owner_assistant": 373,
+    "note": "This contradicts the ledger projection: 21 rows are labelled as requiring a general owner card rule, oldest 2026-10-07, but none is routed to owner=user."
+  }
+}

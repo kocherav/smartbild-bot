@@ -1,0 +1,12 @@
+{
+  "available": false,
+  "path": "finance/data/posting_journal.json",
+  "metadata": {
+    "size": 481990,
+    "modified_utc": "2026-11-06T07:32:09.168084+00:00",
+    "mode": "0600",
+    "owner": "nobody:nogroup"
+  },
+  "error": "PermissionError: read denied by ACL mask; restrictions were not bypassed",
+  "uncertain_records": "NOT_CHECKED"
+}
