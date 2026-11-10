@@ -565,6 +565,7 @@ DEAL_SEARCH_KEYBOARD = {"keyboard": [
 ], "resize_keyboard": True}
 DEAL_RECENT_KEYBOARD = {"keyboard": [
     [{"text": "🕘 5"}, {"text": "🕘 10"}, {"text": "🕘 15"}],
+    [{"text": "👤 2 последние сделки клиента"}],
     [{"text": "⬅️ К списку сделок"}],
 ], "resize_keyboard": True}
 DEAL_BASIC_KEYBOARD = {"keyboard": [
@@ -3403,7 +3404,22 @@ def send_deal_list(token, chat_id, spec, result=None, open_unique=False):
     ]
     total_count = int(result.get("total_count") or len(deals))
     shown = f" (показаны последние {len(deals)} из {total_count})" if total_count > len(deals) else ""
-    send_message(token, chat_id, "Найденные сделки" + shown + ":\n\n" + "\n\n".join(lines), deal_selection_keyboard(deals))
+    update_deal_ui_state(chat_id, last_deal_list={"ok": True, "deals": deals,
+                                                  "total_count": total_count})
+    heading = "Найденные сделки" + shown + ":"
+    chunks = []
+    current = heading
+    for card in lines:
+        addition = "\n\n" + card
+        if len(current) + len(addition) > 3500 and current != heading:
+            chunks.append(current)
+            current = heading + addition
+        else:
+            current += addition
+    chunks.append(current)
+    keyboard = deal_selection_keyboard(deals)
+    for index, chunk in enumerate(chunks):
+        send_message(token, chat_id, chunk, keyboard if index == len(chunks) - 1 else None)
 
 
 def focus_deal(chat_id, deal_id):
@@ -4678,6 +4694,18 @@ def show_qa_findings(token, chat_id, only_unnotified=False):
     return delivered
 
 
+DEAL_PROPOSAL_REQUEST_RE = re.compile(
+    r"(?is)(?=.*(?:\bкп\b|коммерческ\w*\s+предложени\w*))"
+    r"(?=.*\bсделк\w*\s*№?\s*\d+)"
+    r"(?=.*\b(?:сдела[йт]?|сформир\w*|подготов\w*|собер\w*|получ\w*|скача\w*|пришл\w*|отправ\w*)\b)"
+)
+
+
+def is_deal_proposal_request(value):
+    """Recognize an explicit KP request regardless of its word order."""
+    return bool(DEAL_PROPOSAL_REQUEST_RE.search(str(value or "")))
+
+
 def handle_deal_ui(token, chat_id, text, _background=False):
     """Handle deterministic deal navigation without sending menu commands to the LLM."""
     value = text.strip()
@@ -4696,9 +4724,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, current_deal_id=selected_id, pending="invoice_full_confirm",
                              invoice_full_preview=preview, invoice_origin="search")
         send_message(token, chat_id,
-                     f"Выставить общий счёт по сделке №{selected_id}?\n"
-                     f"Плательщик: {preview['payer_name']}\nПозиций: {len(preview['rows'])}\n"
-                     f"Сумма: {bank_money(preview['total'])} ₽\nОснование: {preview['basis']}",
+                     full_invoice_preview_text(selected_id, preview),
                      INVOICE_FULL_CONFIRM_KEYBOARD)
         return True
     # A bound deal button is navigation, never free-form input for whichever
@@ -4866,7 +4892,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token,chat_id,f'Отчёт №{report["report_no"]}, сделка №{report["deal_id"]}.\n'+'\n'.join(lines),INSTALLATION_REPORT_REVIEW_KEYBOARD)
         return True
     # Deterministic route, before old draft states or the general model dialogue.
-    proposal_request = re.search(r'(?i)(?:(?:сдела[йт]|сформир|подготов|собер|получ|скача).*(?:\bкп\b|коммерческое предложение).*\bсделк|^кп\s+(?:по|из)\s+сделк)', value)
+    proposal_request = is_deal_proposal_request(value) or re.search(
+        r'(?i)^кп\s+(?:по|из)\s+сделк', value)
     if value == '📄 КП по сделке' or re.fullmatch(r'📄 КП для сделки №\d+', value) or proposal_request:
         selected = current_deal_ui_state(chat_id).get('current_deal_id')
         explicit_id = re.search(r'(?i)сделк\w*\s*№?\s*(\d+)', value)
@@ -5583,7 +5610,17 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if value == "⬅️ К списку сделок":
         update_deal_ui_state(chat_id, pending=None, transitions=None, pending_transition=None)
-        send_message(token, chat_id, "Выберите способ поиска сделки.", deals_keyboard(chat_id))
+        previous_list = state.get("last_deal_list") or {}
+        if previous_list.get("deals"):
+            send_deal_list(token, chat_id, None, previous_list)
+        else:
+            send_message(token, chat_id, "Выберите способ поиска сделки.", deals_keyboard(chat_id))
+        return True
+
+    if value == "👤 2 последние сделки клиента":
+        update_deal_ui_state(chat_id, pending="recent_client")
+        send_message(token, chat_id, "Введите название или часть названия клиента.",
+                     {"keyboard": [[{"text": "⬅️ К списку сделок"}]], "resize_keyboard": True})
         return True
 
     if value == "🔎 Найти счёт":
@@ -6161,7 +6198,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         update_deal_ui_state(chat_id, pending=None)
         prepare_contract_preview(token, chat_id, deal_id)
         return True
-    if pending in ("search_any", "search_client", "search_address", "get_number"):
+    if pending in ("search_any", "search_client", "search_address", "recent_client", "get_number"):
         update_deal_ui_state(chat_id, pending=None)
         if pending == "get_number":
             match = re.search(r"\d+", value)
@@ -6185,6 +6222,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                 )
             else:
                 send_deal_list(token, chat_id, None, result)
+        elif pending == "recent_client":
+            send_deal_list(token, chat_id, {"action": "search_client", "query": value, "limit": 2})
         else:
             send_deal_list(token, chat_id, {"action": pending, "query": value, "limit": 15})
         return True
@@ -10918,6 +10957,12 @@ def main():
             run_background_job(lambda: continue_document_order(token, chat_id, order, details), token, chat_id,
                                operation='договор и счёт по сделке:'+str(order['deal_id']))
             return
+        # A complete proposal command is a document request, not a payment query.
+        # Route it before the broad classifier so ``по сделке ... пришли КП``
+        # cannot select an unrelated operation merely because of word order.
+        if is_owner and msg.get('text') and is_deal_proposal_request(msg.get('text')):
+            if handle_deal_ui(token, chat_id, msg.get('text')):
+                return
         if is_owner and msg.get('text') and handle_human_workflow(token, chat_id, msg.get('text')):
             return
         raw_creation = msg.get("text") or msg.get("caption") or ""

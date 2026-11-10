@@ -739,20 +739,28 @@ def main():
         query = str(spec.get("query") or "").strip().casefold().replace("ё", "е")
         if not query:
             raise ValueError("пустая строка поиска")
-        def searchable(deal):
+        def search_fields(deal):
             contractor = deal.get("contractor") or {}
-            values = [
-                deal.get("name"), contractor.get("name"),
+            client = " ".join(str(value or "") for value in [
+                contractor.get("name"),
                 " ".join(filter(None, [contractor.get("firstName"), contractor.get("lastName")])),
+            ]).casefold().replace("ё", "е")
+            object_text = " ".join(str(value or "") for value in [
+                deal.get("name"),
                 deal.get("Category1000068CustomFieldAdresObEkta"), (deal.get("program") or {}).get("name"),
-            ]
-            return " ".join(str(value or "") for value in values).casefold().replace("ё", "е")
-        ranked = [(natural_match_score(query, searchable(deal)), deal) for deal in deals]
+            ]).casefold().replace("ё", "е")
+            return client, object_text
+        def ranked_score(deal, scorer=natural_match_score):
+            client, object_text = search_fields(deal)
+            # A requested object/essence is more discriminating than a client
+            # shared by many deals. Client-only requests still rank normally.
+            return scorer(query, object_text) * 10 + scorer(query, client)
+        ranked = [(ranked_score(deal), deal) for deal in deals]
         found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
         if not found:
             # «по складу в Химках»: Russian case endings defeat exact tokens, so
             # fall back to word stems only when nothing matched exactly.
-            ranked = [(stem_match_score(query, searchable(deal)), deal) for deal in deals]
+            ranked = [(ranked_score(deal, stem_match_score), deal) for deal in deals]
             found = [deal for score, deal in sorted(ranked, key=lambda row: (row[0], int(row[1].get('id') or 0)), reverse=True) if score]
         total_count = len(found)
         found = found[:max(1, min(int(spec.get("limit", 10)), 20))]

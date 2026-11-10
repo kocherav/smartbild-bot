@@ -916,6 +916,7 @@ def normalized_reference(value):
 
 
 @transaction(lambda: REGISTRY)
+@transaction(lambda: BANK_REGISTRY)
 def reconcile_bank():
     """Apply only unambiguous expense payments to registered supplier invoices."""
     data = ensure_schema(load_json(REGISTRY, empty_registry()))

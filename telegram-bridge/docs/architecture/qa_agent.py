@@ -263,6 +263,9 @@ class Registry:
                          item.get('status') in {'ready', 'approved', 'dispatched', 'fixing',
                                                 'awaiting_verification', 'awaiting_release', 'waiting_input'}), None)
             if not task and same:
+                # The ID is derived from the fingerprint and must stay unique.
+                # A recurrence after a closed/dismissed result reopens that row
+                # instead of appending a second row that UI actions cannot address.
                 task = same[-1]
                 previous = {key: task.get(key) for key in
                             ('status', 'verified_at', 'verification_run', 'developer_report') if task.get(key) is not None}
