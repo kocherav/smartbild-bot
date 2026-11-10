@@ -48,7 +48,7 @@ class CreationAttachmentTests(unittest.TestCase):
   tree=ast.parse(Path(__file__).with_name('bridge.py').read_text())
   node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='process_business_message')
   human_handler=Mock(return_value=True)
-  ns={'current_deal_ui_state':lambda chat:{},'order_continuation':__import__('order_continuation'),'creation_attachment':route,'update_deal_ui_state':Mock(),'invoice_tasks':Mock(),'send_message':Mock(),'token':'test','send_document':Mock(),'handle_human_workflow':human_handler}
+  ns={'current_deal_ui_state':lambda chat:{},'order_continuation':__import__('order_continuation'),'creation_attachment':route,'update_deal_ui_state':Mock(),'invoice_tasks':Mock(),'send_message':Mock(),'token':'test','send_document':Mock(),'handle_human_workflow':human_handler,'is_deal_proposal_request':lambda text:False}
   exec(compile(ast.Module(body=[node],type_ignores=[]),'bridge-entry','exec'),ns)
   ns['process_business_message']({'text':REQUEST},'owner',True,False)
   human_handler.assert_called_once_with('test','owner',REQUEST)

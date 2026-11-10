@@ -266,6 +266,38 @@ class DealStatusJourneys(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office)
         self.assertEqual('3', stand.crm.deals['990003']['status_id'])
 
+    def test_status_uses_current_crm_transition_id_not_fixture_id(self):
+        """QA-D15: stage names are stable; numeric IDs belong to the CRM instance."""
+        def production_ids(crm):
+            office(crm)
+            crm.statuses = {
+                '133': 'Новая', '134': 'Выставление счета',
+                '135': 'Закупка', '136': 'Монтаж', '138': 'Завершена',
+            }
+            mapping = {'1': '133', '2': '134', '3': '135', '4': '136', '5': '138'}
+            for deal in crm.deals.values():
+                deal['status_id'] = mapping[deal['status_id']]
+
+        def journey(person):
+            yield press('🤝 Сделки')
+            yield press('🔎 Найти сделку')
+            yield press('🔎 Найти по клиенту')
+            yield say('Иванов')
+            person.sees_button('№990003 · Кондиционер в квартиру')
+            yield press('№990003 · Кондиционер в квартиру')
+            yield press('🔄 Изменить статус')
+            yield press('➡️ Закупка')
+            person.sees('Подтвердите перевод', 'Закупка')
+            yield press('✅ Подтвердить')
+            person.sees('Статус действительно изменён на «Закупка»',
+                        expected='Название подтверждено обратным чтением CRM')
+
+        stand = self.play(journey, setup=production_ids)
+        writes = [w for w in stand.crm.writes if w['action'] == 'move_status']
+        self.assertEqual(1, len(writes))
+        self.assertEqual('135', writes[0]['spec']['state_id'])
+        self.assertEqual('135', stand.crm.deals['990003']['status_id'])
+
 
 class DealCreationJourneys(HumanJourneyCase, unittest.TestCase):
     def test_create_deal_from_one_message(self):
