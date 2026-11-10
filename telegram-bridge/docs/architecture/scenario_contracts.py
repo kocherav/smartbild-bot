@@ -24,7 +24,7 @@ EXACT = {'invoice_file': 'BUY-INVOICE', 'invoice_menu': 'INVOICE',
          'invoice_status_transition': 'INVOICE', 'invoice_search': 'INVOICE',
          'economics_save': 'FIN',
          'menu': 'NAV', 'deal_sync_confirm':'KP-DEAL',
-         'get_number': 'NAV', 'search_any': 'NAV', 'search_client': 'NAV', 'search_address': 'NAV',
+         'get_number': 'NAV', 'search_any': 'NAV', 'recent_client': 'NAV', 'search_client': 'NAV', 'search_address': 'NAV',
          'price_catalog_confirm':'CATALOG', 'work_price_confirm':'MNT-LEGACY'}
 
 def owner(state):
