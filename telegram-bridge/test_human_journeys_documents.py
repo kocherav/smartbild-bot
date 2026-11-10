@@ -337,6 +337,24 @@ class ProposalJourneys(HumanJourneyCase, unittest.TestCase):
         self.assertEqual(3, len(actions), 'После: запрос, адресат, одно подтверждение; до: 2 действия без preview')
         self.assertEqual(0, len(stand.model.prompts), 'КП по сделке не должно уходить в ИИ')
 
+    def test_proposal_phrase_with_deal_before_command_is_not_payment(self):
+        """QA-D15: word order must not turn a KP document into a payment summary."""
+        def journey(person):
+            yield say('Для Алексея, по сделке 990001. Пришли готовое КП в PDF.')
+            person.sees('Кому адресовать КП по сделке №990001',
+                        expected='Прямой запрос выбран как КП, а не как проверка оплаты')
+            yield say('Алексей')
+            person.sees('Предпросмотр КП', '2 позиции', '114 000,00')
+            yield press('✅ Создать PDF КП')
+            person.got_document('КП', expected='После подтверждения пришёл PDF нужной сделки')
+
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], [w for w in stand.crm.writes if w['action'] != 'publish'],
+                         'Маршрут КП не создаёт сделку, счёт или файл рентабельности')
+        self.assertFalse(any('Статус оплаты' in event.get('text', '')
+                             for event in stand.telegram.events),
+                         'Запрос КП не должен попадать в финансовую сводку')
+
     def test_proposal_from_deal_card(self):
         def journey(person):
             yield from open_deal_by_number(person)

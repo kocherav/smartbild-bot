@@ -4694,6 +4694,18 @@ def show_qa_findings(token, chat_id, only_unnotified=False):
     return delivered
 
 
+DEAL_PROPOSAL_REQUEST_RE = re.compile(
+    r"(?is)(?=.*(?:\bкп\b|коммерческ\w*\s+предложени\w*))"
+    r"(?=.*\bсделк\w*\s*№?\s*\d+)"
+    r"(?=.*\b(?:сдела[йт]?|сформир\w*|подготов\w*|собер\w*|получ\w*|скача\w*|пришл\w*|отправ\w*)\b)"
+)
+
+
+def is_deal_proposal_request(value):
+    """Recognize an explicit KP request regardless of its word order."""
+    return bool(DEAL_PROPOSAL_REQUEST_RE.search(str(value or "")))
+
+
 def handle_deal_ui(token, chat_id, text, _background=False):
     """Handle deterministic deal navigation without sending menu commands to the LLM."""
     value = text.strip()
@@ -4880,7 +4892,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token,chat_id,f'Отчёт №{report["report_no"]}, сделка №{report["deal_id"]}.\n'+'\n'.join(lines),INSTALLATION_REPORT_REVIEW_KEYBOARD)
         return True
     # Deterministic route, before old draft states or the general model dialogue.
-    proposal_request = re.search(r'(?i)(?:(?:сдела[йт]|сформир|подготов|собер|получ|скача).*(?:\bкп\b|коммерческое предложение).*\bсделк|^кп\s+(?:по|из)\s+сделк)', value)
+    proposal_request = is_deal_proposal_request(value) or re.search(
+        r'(?i)^кп\s+(?:по|из)\s+сделк', value)
     if value == '📄 КП по сделке' or re.fullmatch(r'📄 КП для сделки №\d+', value) or proposal_request:
         selected = current_deal_ui_state(chat_id).get('current_deal_id')
         explicit_id = re.search(r'(?i)сделк\w*\s*№?\s*(\d+)', value)
@@ -10944,6 +10957,12 @@ def main():
             run_background_job(lambda: continue_document_order(token, chat_id, order, details), token, chat_id,
                                operation='договор и счёт по сделке:'+str(order['deal_id']))
             return
+        # A complete proposal command is a document request, not a payment query.
+        # Route it before the broad classifier so ``по сделке ... пришли КП``
+        # cannot select an unrelated operation merely because of word order.
+        if is_owner and msg.get('text') and is_deal_proposal_request(msg.get('text')):
+            if handle_deal_ui(token, chat_id, msg.get('text')):
+                return
         if is_owner and msg.get('text') and handle_human_workflow(token, chat_id, msg.get('text')):
             return
         raw_creation = msg.get("text") or msg.get("caption") or ""

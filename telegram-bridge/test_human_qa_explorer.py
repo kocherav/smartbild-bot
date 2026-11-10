@@ -100,6 +100,13 @@ class ExplorerTests(unittest.TestCase):
             seen |= {m['id'] for m in explorer.choose(missions, 4, f'2026-11-{day:02d}')}
         self.assertEqual({m['id'] for m in missions}, seen)
 
+    def test_status_mission_does_not_assume_fixture_specific_id(self):
+        mission = next(m for m in explorer.load_missions() if m['id'] == 'status-by-client')
+        criteria = ' '.join(mission['success'])
+        self.assertNotIn('ID 3', criteria)
+        self.assertIn('ID доступного перехода', criteria)
+        self.assertIn('ID статусов зависят от экземпляра Мегаплана', explorer.JUDGE_RULES)
+
     def test_main_writes_receipt_for_qa_agent(self):
         brain = ScriptedBrain([{'action': 'finish'}] * 3, {'achieved': True, 'defects': [], 'summary': 'ok'})
         with tempfile.TemporaryDirectory() as temporary, \
