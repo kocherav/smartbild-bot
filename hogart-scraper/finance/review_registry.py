@@ -28,6 +28,24 @@ def atomic(path, value):
     finally:
         temp.unlink(missing_ok=True)
 
+def owner_question_text(r):
+    """A concrete question for the owner: which movement and what decision is needed."""
+    try:
+        when = dt.date.fromisoformat(str(r.get('date'))).strftime('%d.%m.%Y')
+    except ValueError:
+        when = str(r.get('date') or '')
+    money = f"{(r.get('amount_cents') or 0) / 100:,.2f}".replace(',', ' ').replace('.', ',') + ' ₽'
+    purpose = ' '.join(str(r.get('purpose') or '').split())[:90]
+    head = f"{r.get('company', '')}, {when}, {r.get('counterparty', '')}, {money}" + (f" ({purpose})" if purpose else '')
+    owner_note = str(r.get('review_owner') or '')
+    if 'карт' in owner_note:
+        return (head + ': покупка по корпоративной карте. Это расход компании (какая статья) или закупка '
+                'для объекта (какого)? Можно ответить общим правилом для таких покупок.')
+    if 'зарплат' in owner_note:
+        return head + ': совпадают сумма и период с другой выплатой. Это зарплата за новый период (какой) или повтор?'
+    return head + ': ' + ('; '.join(r.get('flags') or []) or 'нужно ваше решение по назначению платежа') + '.'
+
+
 def current_tasks(rows, procurement):
     tasks = {}
     for r in rows:
@@ -35,12 +53,16 @@ def current_tasks(rows, procurement):
             continue
         followup = r['status'] == 'Назначение подтверждено; оформление отдельно'
         key = 'bank:' + r['id']
-        owner = 'user' if r.get('owner_question') else 'assistant'
+        # 10.11: rows marked «Пользователь: …» (card purchases, salary periods) were routed to
+        # the assistant because only an already-asked question made a task the owner's — so
+        # no new owner question could ever appear and these rows waited for nobody.
+        to_owner = bool(r.get('owner_question')) or str(r.get('review_owner') or '').startswith('Пользователь')
+        owner = 'user' if to_owner and not followup else 'assistant'
         tasks[key] = dict(id=key, kind='bank_followup' if followup else 'bank_review', owner=owner, state='open',
             bank_ids=[r['id']], company=r['company'], supplier=r['counterparty'],
             inn=r['inn'], category=r['category'], amount_cents=r['amount_cents'],
             invoices=r.get('document_numbers') or r.get('references', ''),
-            action=('Назначение уже подтверждено. Проверить первичные документы и завершить оформление без повторного вопроса об объекте. ' + r.get('decision_note','')) if followup else (r.get('owner_question') or '; '.join(r['flags']) or 'Сверить основание операции'),
+            action=('Назначение уже подтверждено. Проверить первичные документы и завершить оформление без повторного вопроса об объекте. ' + r.get('decision_note','')) if followup else (r.get('owner_question') or (owner_question_text(r) if owner == 'user' else '') or '; '.join(r['flags']) or 'Сверить основание операции'),
             evidence=r.get('crm_evidence', ''), bank_row=r)
     for inv in procurement.get('invoices', []):
         stocks = [s for s in procurement.get('unallocated_stock', [])

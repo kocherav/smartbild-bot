@@ -26,6 +26,29 @@ def health(db):
         result.append({'account':account,'company':owner['name'],'complete_through':str(complete) if complete else None,'needs_statement':complete is None or complete<yesterday,'internal_gaps':len(merged)>1,'owner_confirmed':bool(owner['inn'])})
     return result
 
+# Only an unreliable import can make posting unsafe: the plan is built from the ledger,
+# and a quarantined archive changes nothing in it. A letter waiting for review, a failed
+# Excel report or a secondary-registry sync must not stop posting (10.11: posting ran on
+# one day of seven in November because some earlier stage reported an error).
+POSTING_BLOCKING_STAGES = {'import', 'export'}
+
+
+def posting_blockers(errors):
+    return [e for e in errors if e.get('stage') in POSTING_BLOCKING_STAGES]
+
+
+def error_text(exc):
+    """Keep the cause: «exit status 1» alone made the failing step undiagnosable."""
+    text = type(exc).__name__ + ': ' + str(exc)
+    details = getattr(exc, 'stderr', None) or getattr(exc, 'output', None)
+    if isinstance(details, bytes):
+        details = details.decode('utf-8', 'replace')
+    if details:
+        tail = [line for line in str(details).strip().splitlines() if line.strip()][-6:]
+        text += ' | ' + ' / '.join(tail)
+    return text[:1500]
+
+
 def main():
     os.umask(0o077)
     for folder in ['inbox','archive','quarantine','reports','data']: (ROOT/folder).mkdir(exist_ok=True)
@@ -36,7 +59,7 @@ def main():
             try:
                 notices=retrieve();mail_ok=True
                 errors.extend({'stage':'intake_review',**x} for x in notices)
-            except Exception as e:errors.append({'stage':'mail','error':type(e).__name__+': '+str(e)})
+            except Exception as e:errors.append({'stage':'mail','error':error_text(e)})
         db=connect(ROOT/'data/ledger.sqlite')
         backup=connect(ROOT/'data/ledger.backup.sqlite');db.backup(backup);backup.close()
         for path in sorted((ROOT/'inbox').glob('*.zip')):
@@ -46,7 +69,7 @@ def main():
 
                 destination=ROOT/'archive'/f'{key}.zip'
             except Exception as e:
-                errors.append({'stage':'import','archive':key,'error':type(e).__name__+': '+str(e)})
+                errors.append({'stage':'import','archive':key,'error':error_text(e)})
                 destination=ROOT/'quarantine'/f'{key}.zip'
             shutil.move(str(path),str(destination))
             if path.with_suffix('.json').exists():shutil.move(str(path.with_suffix('.json')),str(destination.with_suffix('.json')))
@@ -61,22 +84,30 @@ def main():
             try:
                 synced[archived.stem]=merge(archived)
                 tmp=sync_path.with_suffix('.tmp');tmp.write_text(json.dumps(synced,ensure_ascii=False));tmp.replace(sync_path)
-            except Exception as exc:errors.append({'stage':'registry_sync','archive':archived.stem,'error':type(exc).__name__})
+            except Exception as exc:errors.append({'stage':'registry_sync','archive':archived.stem,'error':error_text(exc)})
         # Reports are rebuilt from the authoritative ledger, not appended blindly.
+        # Posting and the report are separate stages: one failing never hides the other.
         try:
-            subprocess.run([sys.executable,str(ROOT/'ledger.py'),'export'],check=True,capture_output=True)
-            if not errors and not (ROOT/'data/posting_paused.json').exists():
-                subprocess.run([sys.executable,str(ROOT/'tools/build_finish_company.py')],check=True,capture_output=True)
-                subprocess.run([sys.executable,str(ROOT/'tools/build_posting_plan.py')],check=True,capture_output=True)
+            subprocess.run([sys.executable,str(ROOT/'ledger.py'),'export'],check=True,capture_output=True,text=True)
+        except Exception as e:errors.append({'stage':'export','error':error_text(e)})
+        blockers=posting_blockers(errors)
+        if blockers:
+            errors.append({'stage':'posting','error':'Проводки пропущены: ошибка импорта выписки — '+'; '.join(str(b.get('error'))[:200] for b in blockers)})
+        elif not (ROOT/'data/posting_paused.json').exists():
+            try:
+                subprocess.run([sys.executable,str(ROOT/'tools/build_finish_company.py')],check=True,capture_output=True,text=True)
+                subprocess.run([sys.executable,str(ROOT/'tools/build_posting_plan.py')],check=True,capture_output=True,text=True)
                 plan=json.loads((ROOT/'evidence/posting/plan.json').read_text())
                 journal=json.loads((ROOT/'data/posting_journal.json').read_text()).get('operations',{}) if (ROOT/'data/posting_journal.json').exists() else {}
                 if any(journal.get(p['key'],{}).get('state')!='linked' for p in plan):
-                    subprocess.run(['sudo','-n','/usr/bin/python3',str(ROOT/'tools/run_posting.py')],check=True,capture_output=True,timeout=1500)
-                subprocess.run([sys.executable,str(ROOT/'ledger.py'),'export'],check=True,capture_output=True)
+                    subprocess.run(['sudo','-n','/usr/bin/python3',str(ROOT/'tools/run_posting.py')],check=True,capture_output=True,text=True,timeout=1500)
+                subprocess.run([sys.executable,str(ROOT/'ledger.py'),'export'],check=True,capture_output=True,text=True)
+            except Exception as e:errors.append({'stage':'posting','error':error_text(e)})
+        try:
             py=os.environ.get('STATEMENT_REPORT_PYTHON','/home/kocher.av/.report-venv/bin/python')
             report_run=subprocess.run([py,str(ROOT/'report.py')],check=True,capture_output=True,text=True)
             report_result=json.loads(report_run.stdout)
-        except Exception as e:errors.append({'stage':'report','error':type(e).__name__+': '+str(e)})
+        except Exception as e:errors.append({'stage':'report','error':error_text(e)})
         status={'ran_at':dt.datetime.now(dt.timezone.utc).isoformat(),'mail_checked':mail_ok,'imports':results,'errors':errors,'accounts':health(db),'notifications_configured':True,'posting_enabled':not (ROOT/'data/posting_paused.json').exists(),'posting_policy':'trade_cash_separate_from_goods;verified_company_cash;reviewed_paired_movements'}
         status['report']=report_result
         target=ROOT/'reports/status.json';temp=target.with_suffix('.tmp');temp.write_text(json.dumps(status,ensure_ascii=False,indent=2));temp.replace(target)

@@ -53,4 +53,21 @@ class ReviewRegistryTests(unittest.TestCase):
         self.assertEqual(active(reg)[0]['kind'],'bank_followup')
         self.assertEqual(active(reg)[0]['owner'],'assistant')
 
+    def test_card_purchase_marked_for_owner_becomes_a_concrete_owner_question(self):
+        # 10.11: 21 card purchases waited for «Пользователь: общее правило по карте»,
+        # but the queue routed them to the assistant — no owner question ever existed.
+        card=dict(self.row,id='card1',counterparty='АО "Альфа-Банк"',category='Покупки по корпоративной карте',
+                  review_owner='Пользователь: общее правило по карте',flags=['Нужны чек и объект'],
+                  date='2026-10-07',amount_cents=328000,purpose='Расчеты через ТУ Stroyka')
+        reg=sync([card,self.row],self.root,{})
+        task=reg['tasks']['bank:card1']
+        self.assertEqual('user',task['owner'])
+        self.assertIn('07.10.2026',task['action']);self.assertIn('3 280,00 ₽',task['action'])
+        self.assertIn('общим правилом',task['action'])
+        self.assertEqual('assistant',reg['tasks']['bank:new50']['owner'],'документная работа остаётся ассистенту')
+
+    def test_confirmed_followup_is_never_an_owner_question(self):
+        row=dict(self.row,status='Назначение подтверждено; оформление отдельно',review_owner='Пользователь: общее правило по карте')
+        self.assertEqual('assistant',sync([row],self.root,{})['tasks']['bank:new50']['owner'])
+
 if __name__=='__main__':unittest.main()
