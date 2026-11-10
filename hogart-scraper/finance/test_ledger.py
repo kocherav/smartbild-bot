@@ -1,4 +1,4 @@
-import copy, importlib.util, json, tempfile, unittest, zipfile
+import copy, importlib.util, json, stat, tempfile, unittest, zipfile
 from pathlib import Path
 import ledger
 
@@ -52,5 +52,12 @@ class LedgerTests(unittest.TestCase):
     def test_decimal(self):
         self.assertEqual(ledger.cents('0.29'),29)
         with self.assertRaises(ValueError):ledger.cents('1.001')
+
+    def test_connect_restores_shared_acl_mask_bits_for_report_runner(self):
+        path = self.root/'shared.sqlite'
+        first = ledger.connect(path); first.close()
+        path.chmod(0o600)
+        second = ledger.connect(path); second.close()
+        self.assertEqual(0o660, stat.S_IMODE(path.stat().st_mode) & 0o660)
 
 if __name__=='__main__':unittest.main()
