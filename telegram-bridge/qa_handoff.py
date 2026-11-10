@@ -80,6 +80,8 @@ def ready(path=None, include_notified=True):
     tasks = [item for item in _read(path)['tasks'] if item.get('status') == 'ready']
     if not include_notified:
         tasks = [item for item in tasks if not item.get('owner_notified_at')]
+    # Old registries may contain two rows with the same deterministic QA id.
+    # Never render both; prefer the newest actionable row until migration.
     unique = {}
     for item in tasks:
         unique[item.get('id')] = item
