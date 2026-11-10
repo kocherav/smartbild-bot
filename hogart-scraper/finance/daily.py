@@ -49,6 +49,17 @@ def error_text(exc):
     return text[:1500]
 
 
+def project_and_reconcile(py=None):
+    """Publish linked postings, then idempotently reconcile supplier invoices."""
+    py = py or os.environ.get('STATEMENT_REPORT_PYTHON','/home/kocher.av/.report-venv/bin/python')
+    projection = subprocess.run([py, str(ROOT/'bank_registry_projection.py')], check=True,
+                                capture_output=True, text=True)
+    procurement = subprocess.run(
+        [py, '/home/kocher.av/megaplan-crm/procurement_workflow.py'],
+        input=json.dumps({'action': 'reconcile_bank'}), check=True, capture_output=True, text=True)
+    return {'registry': json.loads(projection.stdout), 'procurement': json.loads(procurement.stdout)}
+
+
 def main():
     os.umask(0o077)
     for folder in ['inbox','archive','quarantine','reports','data']: (ROOT/folder).mkdir(exist_ok=True)
@@ -108,8 +119,14 @@ def main():
             report_run=subprocess.run([py,str(ROOT/'report.py')],check=True,capture_output=True,text=True)
             report_result=json.loads(report_run.stdout)
         except Exception as e:errors.append({'stage':'report','error':error_text(e)})
+        reconciliation=None
+        if not posting_blockers(errors) and not any(e.get('stage') == 'registry_sync' for e in errors):
+            try:
+                reconciliation=project_and_reconcile()
+            except Exception as e:errors.append({'stage':'bank_reconciliation','error':error_text(e)})
         status={'ran_at':dt.datetime.now(dt.timezone.utc).isoformat(),'mail_checked':mail_ok,'imports':results,'errors':errors,'accounts':health(db),'notifications_configured':True,'posting_enabled':not (ROOT/'data/posting_paused.json').exists(),'posting_policy':'trade_cash_separate_from_goods;verified_company_cash;reviewed_paired_movements'}
         status['report']=report_result
+        status['bank_reconciliation']=reconciliation
         target=ROOT/'reports/status.json';temp=target.with_suffix('.tmp');temp.write_text(json.dumps(status,ensure_ascii=False,indent=2));temp.replace(target)
         from daily_notice import notify_status
         try:notify_status(status)

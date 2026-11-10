@@ -8,7 +8,7 @@
 | Файл | Тип | Назначение | Публичный интерфейс |
 |---|---|---|---|
 | `telegram-bridge/allocation_runtime.py` | Рабочий модуль | Resumable application of dashboard-confirmed supplier cost allocations. | `money`, `sync_deal`, `process`, `poll`, `poll_in_environment` |
-| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `load_env`, `create_document_job`, `finish_document_job` (+228) |
+| `telegram-bridge/bridge.py` | Рабочий модуль | Главный Telegram polling-процесс, меню, обработчики сообщений и композиция бизнес-сценариев. | `notify_installers`, `deliver_installation_handoffs`, `notify_megaplan_protection`, `complete_installation_handoff`, `home_keyboard`, `installer_review_keyboard`, `load_approved_installer_reports`, `save_approved_installer_report`, `approved_report_text`, `proposal_resume_label`, `deals_keyboard`, `load_env` (+253) |
 | `telegram-bridge/build_cumulative_deal_execution.py` | Рабочий модуль | Build a cumulative plan/fact workbook for one deal from a multi-period table. | `normalized`, `approved_table_totals`, `build` |
 | `telegram-bridge/build_current_execution.py` | Рабочий модуль | Build the best available cumulative execution workbook for a deal. | `safe`, `build_generic`, `build` |
 | `telegram-bridge/build_installer_report_mockups.py` | Рабочий модуль | Создание демонстрационных XLSX-макетов отчёта монтажника и сверки владельца. | `setup`, `style_body`, `reconciliation_sheet`, `owner_book`, `installer_book` |
@@ -20,6 +20,7 @@
 | `telegram-bridge/company_cards.py` | Рабочий модуль | Serve approved own-company cards without model generation or CRM writes. | `normalize`, `handle_request` |
 | `telegram-bridge/convert_document.py` | Рабочий модуль | Converts a Word/Excel document (supplier invoices/КП often arrive as one of these, not | `convert` |
 | `telegram-bridge/creation_attachment.py` | Рабочий модуль | Explicit creation instructions survive separate attachment/model turns. | `explicit`, `initial_state`, `awaiting_file`, `is_current`, `prompt` |
+| `telegram-bridge/deal_context.py` | Рабочий модуль | One open deal per chat: every deal action works only with the deal now being discussed. | `is_deal_scoped`, `switch_values`, `target`, `stale_button`, `assistant_note`, `number_opens_deal` |
 | `telegram-bridge/deal_creation.py` | Рабочий модуль | Deterministic final review; extraction must never itself authorize a CRM write. | `number`, `rub`, `qty_text`, `review` |
 | `telegram-bridge/decision_channel.py` | Рабочий модуль | Owner decisions via the existing bot polling process, never a second poller. | `consume`, `ask`, `main` |
 | `telegram-bridge/delivery_steps.py` | Рабочий модуль | Per-channel durable receipts; retry must not resend already delivered files. | `deliver` |
@@ -94,6 +95,7 @@
 | `telegram-bridge/legacy_report_ui.py` | Рабочий модуль | Manager preview/mapping for the transition from collected legacy reports. | `stage`, `apply_material_decision`, `apply_mapping`, `source_target`, `edit_rows` |
 | `telegram-bridge/migration_transition_guard.py` | Рабочий модуль | Suppress procurement side effects during an explicitly recorded migration. | `blocked` |
 | `telegram-bridge/model_recovery.py` | Рабочий модуль | Durable, user-visible model failures; no credentials or automatic side-effect replay. | `compact`, `ModelUnavailable`, `failure_kind`, `key`, `save_failure`, `begin_request`, `mark_answered`, `latest`, `failure_message` |
+| `telegram-bridge/net_prefs.py` | Рабочий модуль | Outbound connections: IPv4 first, resolved addresses remembered for a few minutes. | `prefer_ipv4`, `getaddrinfo`, `install` |
 | `telegram-bridge/order_continuation.py` | Рабочий модуль | Keep the requested documents attached to the deal creation intent. | `requested`, `parse`, `question`, `recovery_hint` |
 | `telegram-bridge/partial_shipments.py` | Рабочий модуль | Bridge worker for owner-confirmed dashboard shipments. | `round_document_rows`, `document_payer`, `snapshot`, `validate`, `import_full_jobs`, `poll`, `apply`, `payment_context`, `payment_summary`, `all_edo`, `partial_invoice_text`, `reconcile_partial_invoice` (+3) |
 | `telegram-bridge/periodic_schedule.py` | Рабочий модуль | Persistent rate gate for read-only watchers, including process restarts. | `claim`, `claim_daily` |
@@ -112,29 +114,33 @@
 | `telegram-bridge/settlement_view.py` | Рабочий модуль | Read-only combined settlement view. Never rewrites historical allocations. | `combined` |
 | `telegram-bridge/statement_document_context.py` | Рабочий модуль | Recognize requested statement documents locally; never infer a project or post money. | `match_document`, `prompt_context`, `recent_context`, `deal_candidates`, `exclude_documents` |
 | `telegram-bridge/supplier_completion.py` | Рабочий модуль | Keep committed procurement separate from completion of files and archives. | `pending_steps`, `record`, `summary` |
+| `telegram-bridge/test_assistant_thread.py` | Тест | Узкоспециализированная утилита «test assistant thread»; интерфейс перечислен справа. | `AssistantThreadTest` |
 | `telegram-bridge/test_bridge_protocol.py` | Тест | Узкоспециализированная утилита «test bridge protocol»; интерфейс перечислен справа. | `ProtocolTest` |
 | `telegram-bridge/test_catalog_conversation.py` | Тест | Узкоспециализированная утилита «test catalog conversation»; интерфейс перечислен справа. | `RoutingTests`, `ActualRoutingBlockTests` |
 | `telegram-bridge/test_closing_protection_retry.py` | Тест | Узкоспециализированная утилита «test closing protection retry»; интерфейс перечислен справа. | `ClosingProtectionRetryTest` |
 | `telegram-bridge/test_closing_runtime.py` | Тест | Узкоспециализированная утилита «test closing runtime»; интерфейс перечислен справа. | `ClosingIntegrationTests`, `EdoScreenshotTests` |
 | `telegram-bridge/test_closing_workflow.py` | Тест | Узкоспециализированная утилита «test closing workflow»; интерфейс перечислен справа. | `ClosingTests` |
 | `telegram-bridge/test_company_cards.py` | Тест | Узкоспециализированная утилита «test company cards»; интерфейс перечислен справа. | `CardsTest` |
+| `telegram-bridge/test_context_hops.py` | Тест | Context hops: start an action in deal A, move to deal B, try to continue (owner 07.11). | `ContextHopMatrix` |
 | `telegram-bridge/test_creation_attachment.py` | Тест | Узкоспециализированная утилита «test creation attachment»; интерфейс перечислен справа. | `CreationAttachmentTests` |
 | `telegram-bridge/test_creation_scenario.py` | Тест | Узкоспециализированная утилита «test creation scenario»; интерфейс перечислен справа. | `CreationScenarioTest` |
 | `telegram-bridge/test_crm_runtime_python.py` | Тест | Узкоспециализированная утилита «test crm runtime python»; интерфейс перечислен справа. | `RuntimePythonTests` |
 | `telegram-bridge/test_dashboard_navigation.py` | Тест | Узкоспециализированная утилита «test dashboard navigation»; интерфейс перечислен справа. | `DashboardNavigationTests` |
+| `telegram-bridge/test_deal_context.py` | Тест | One open deal per chat (incident 865/888, 07.11; deal 905, 06.11). | `project_file`, `attaches`, `SwitchRuleTest`, `ProjectUploadContextJourneys`, `StaleActionJourneys` |
 | `telegram-bridge/test_deal_creation_review.py` | Тест | Узкоспециализированная утилита «test deal creation review»; интерфейс перечислен справа. | `ReviewTest` |
 | `telegram-bridge/test_decision_channel.py` | Тест | Узкоспециализированная утилита «test decision channel»; интерфейс перечислен справа. | `DecisionChannelTest` |
 | `telegram-bridge/test_delivery_steps.py` | Тест | Узкоспециализированная утилита «test delivery steps»; интерфейс перечислен справа. | `DeliveryTest` |
 | `telegram-bridge/test_effect_runner.py` | Тест | Узкоспециализированная утилита «test effect runner»; интерфейс перечислен справа. | `EffectsTest` |
 | `telegram-bridge/test_email_notification_ui.py` | Тест | Узкоспециализированная утилита «test email notification ui»; интерфейс перечислен справа. | `EmailNotificationTests` |
+| `telegram-bridge/test_email_poll_health.py` | Тест | 09.11: bank notifications were not processed for days and nobody was told. | `EmailPollHealthTest` |
 | `telegram-bridge/test_full_transfer_stage_path.py` | Тест | Узкоспециализированная утилита «test full transfer stage path»; интерфейс перечислен справа. | `FullTransferPathTests` |
 | `telegram-bridge/test_handoff_watcher.py` | Тест | Узкоспециализированная утилита «test handoff watcher»; интерфейс перечислен справа. | `task_text`, `FakeGit`, `HandoffWatcherTests`, `ReportVerificationTests`, `BridgeHandoffTests`, `TaskWorkspaceTest`, `WaitingCardsTest`, `RetireOlderReleasesTest` |
 | `telegram-bridge/test_historical_partial_prepare.py` | Тест | Узкоспециализированная утилита «test historical partial prepare»; интерфейс перечислен справа. | `HistoricalPrepareTests`, `PartialPaymentContextTests`, `AdvanceDeadlineTests`, `ShipmentIdentityTests`, `ShipmentRoundingTests` |
 | `telegram-bridge/test_hogart_closing.py` | Тест | Узкоспециализированная утилита «test hogart closing»; интерфейс перечислен справа. | `HogartClosingTests` |
 | `telegram-bridge/test_human_fixtures.py` | Тест | Узкоспециализированная утилита «test human fixtures»; интерфейс перечислен справа. | `fake_crm`, `HumanFixtureTests` |
 | `telegram-bridge/test_human_intents.py` | Тест | Узкоспециализированная утилита «test human intents»; интерфейс перечислен справа. | `HumanIntentTests`, `DealNumberInPhraseTest` |
-| `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
-| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsFindableJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `ReplyContextJourneys`, `NavigationJourneys` |
+| `telegram-bridge/test_human_journeys.py` | Тест | Human journeys: a person operates the real bot through Telegram controls. | `office`, `office_with_partial_payment`, `open_deal_by_number`, `DealInformationJourneys`, `PayerJourneys`, `InvoiceJourneys`, `DealStatusJourneys`, `DealCreationJourneys` |
+| `telegram-bridge/test_human_journeys_documents.py` | Тест | Human journeys, third wave: contract, proposal, navigation and help. | `no_contract`, `to_contract_menu`, `to_contract_menu_for`, `ContractJourneys`, `EconomicsJourneys`, `EconomicsFindableJourneys`, `EconomicsWithoutRewritesJourneys`, `ProposalJourneys`, `ContractSubjectJourneys`, `bridge_confirm`, `ReplyContextJourneys`, `NavigationJourneys` (+3) |
 | `telegram-bridge/test_human_journeys_edge.py` | Тест | Human journeys, second wave: how real people actually misuse a bot. | `writes`, `DealReadingVariants`, `UnsupportedInputJourneys`, `PayerEdgeCases`, `InvoiceEdgeCases`, `DealCreationVariants` |
 | `telegram-bridge/test_human_morning_brief.py` | Тест | Узкоспециализированная утилита «test human morning brief»; интерфейс перечислен справа. | `MorningBriefHumanQATests` |
 | `telegram-bridge/test_human_operator_journey.py` | Тест | Узкоспециализированная утилита «test human operator journey»; интерфейс перечислен справа. | `TelegramOperator`, `TelegramPollingMechanicsTests` |
@@ -160,6 +166,7 @@
 | `telegram-bridge/test_legacy_report_ui.py` | Тест | Узкоспециализированная утилита «test legacy report ui»; интерфейс перечислен справа. | `LegacyUITests`, `MaterialDecisionTests` |
 | `telegram-bridge/test_migration_transition_guard.py` | Тест | Узкоспециализированная утилита «test migration transition guard»; интерфейс перечислен справа. | `GuardTests` |
 | `telegram-bridge/test_model_recovery.py` | Тест | Узкоспециализированная утилита «test model recovery»; интерфейс перечислен справа. | `ModelRecoveryTests`, `StatementDocumentTests`, `FailedLedgerTests` |
+| `telegram-bridge/test_net_prefs.py` | Тест | Узкоспециализированная утилита «test net prefs»; интерфейс перечислен справа. | `PreferIpv4Test`, `TelegramHealthTest` |
 | `telegram-bridge/test_operation_status.py` | Тест | Узкоспециализированная утилита «test operation status»; интерфейс перечислен справа. | `StatusTests` |
 | `telegram-bridge/test_order_continuation.py` | Тест | Узкоспециализированная утилита «test order continuation»; интерфейс перечислен справа. | `OrderContinuationTests`, `RecoveryHintTests` |
 | `telegram-bridge/test_partial_invoice_recovery.py` | Тест | Узкоспециализированная утилита «test partial invoice recovery»; интерфейс перечислен справа. | `PartialInvoiceRecoveryTest` |
@@ -200,7 +207,7 @@
 | `megaplan-crm/build_profitability_report.py` | Рабочий модуль | "Расчёт рентабельности сделки" (2026-08-25) - whole-deal economics, the second document | `norm`, `is_aggregate_montage_line`, `load_installation_items`, `load_procurement_items`, `compute_profitability`, `sale_amount`, `row_remark`, `remarks_summary`, `build_xlsx`, `data_fingerprint`, `money_field_matches`, `main` |
 | `megaplan-crm/build_work_statement.py` | Рабочий модуль | "Ведомость работ" calculator (2026-08-25) - last piece of the roadmap item started by | `compute_statement`, `build_xlsx`, `main` |
 | `megaplan-crm/closing_documents.py` | Рабочий модуль | Общие функции оформления закрывающих DOCX-документов. | `font`, `p`, `heading`, `table`, `base`, `signs`, `floating_picture`, `special_notes`, `money`, `sign_block`, `validate_contract_rows`, `act_number` (+6) |
-| `megaplan-crm/contract_invoice.py` | Рабочий модуль | Create a one-line Megaplan invoice from a payment clause in the latest deal contract. | `money`, `megaplan_date`, `contract_basis`, `basis_from_deal`, `document_text`, `parse_contract`, `specification_text`, `contract_scope`, `latest_contract`, `preview_fingerprint`, `validate_contract_context`, `preview` (+14) |
+| `megaplan-crm/contract_invoice.py` | Рабочий модуль | Create a one-line Megaplan invoice from a payment clause in the latest deal contract. | `money`, `megaplan_date`, `contract_basis`, `basis_from_deal`, `document_text`, `parse_contract`, `specification_text`, `contract_scope`, `latest_contract`, `preview_fingerprint`, `validate_contract_context`, `preview` (+16) |
 | `megaplan-crm/currency_fixation.py` | Рабочий модуль | Freeze sale rows from an explicitly approved contract total; never reprice by today's FX. | `dec`, `cents`, `signature`, `plan`, `target_matches`, `apply` |
 | `megaplan-crm/currency_planning.py` | Рабочий модуль | Safe planning conversion for supplier invoices in a foreign currency. | `CurrencyPlanningError`, `invoice_date`, `parse_cbr_markup`, `fetch_cbr_rate`, `plan_invoice_spec` |
 | `megaplan-crm/deal_browser.py` | Рабочий модуль | Read/search Megaplan deals and perform validated, explicit state transitions. | `contract_upload_preflight`, `megaplan_reachable`, `ref_names`, `money_value`, `summary`, `enrich_cached_deal`, `fetch_all`, `refresh_cache_background`, `update_cached_deal`, `search_employees`, `set_executor`, `hydrate` (+6) |
@@ -233,6 +240,7 @@
 | `megaplan-crm/megaplan_transport.py` | Рабочий модуль | Cross-process CRM budgets and circuit breaker. Never replay a write here. | `ProtectionPause`, `connect`, `retry_seconds`, `paused`, `reachable`, `foreground_waiting`, `acquire_slot`, `urlopen`, `notify_status` |
 | `megaplan-crm/megaplan_webhook.py` | Рабочий модуль | Webhook receiver for the "Отправить в ТГ" button the owner configures inside | `load_env`, `get_api`, `find_invoice`, `invoice_pdf`, `download_pdf`, `format_invoice_date`, `invoice_filename`, `invoice_caption`, `send_telegram_document`, `BoundedHTTPServer`, `Handler`, `fetch_invoice_pdf_cli` |
 | `megaplan-crm/morning_brief.py` | Рабочий модуль | Build the owner's read-only morning action list without per-deal CRM calls. | `build`, `main` |
+| `megaplan-crm/net_prefs.py` | Рабочий модуль | Same as telegram-bridge/net_prefs.py (each project runs in its own interpreter). | `prefer_ipv4`, `getaddrinfo`, `install` |
 | `megaplan-crm/offer_catalog_cache.py` | Рабочий модуль | Local cache of Megaplan's Offer catalog, for name-matching (Phase 1b's "check Мегаплан's | `refresh`, `find_candidate` |
 | `megaplan-crm/own_companies.py` | Рабочий модуль | Canonical directory of the legal entities used by SmartBild. | `load_directory`, `normalize_name`, `companies`, `company_by_id`, `resolve_company`, `default_selling_company` |
 | `megaplan-crm/payer_manager.py` | Рабочий модуль | Create/reuse a client's payer and attach it to an existing Megaplan deal. | `digits`, `valid_inn`, `normalize`, `payer_matches`, `contractor_name`, `resolve_contractor`, `apply`, `main` |
@@ -276,7 +284,7 @@
 | `megaplan-crm/test_document_order.py` | Тест | Узкоспециализированная утилита «test document order»; интерфейс перечислен справа. | `DocumentOrderTests` |
 | `megaplan-crm/test_document_tax_policy.py` | Тест | Узкоспециализированная утилита «test document tax policy»; интерфейс перечислен справа. | `TaxPolicyTests` |
 | `megaplan-crm/test_economics_attachment.py` | Тест | Узкоспециализированная утилита «test economics attachment»; интерфейс перечислен справа. | `FakeAPI`, `EconomicsAttachmentTest`, `UnchangedEconomicsTest`, `ProfitabilityFingerprintTest` |
-| `megaplan-crm/test_email_payment_monitor.py` | Тест | Узкоспециализированная утилита «test email payment monitor»; интерфейс перечислен справа. | `EmailPaymentTests` |
+| `megaplan-crm/test_email_payment_monitor.py` | Тест | Узкоспециализированная утилита «test email payment monitor»; интерфейс перечислен справа. | `EmailPaymentTests`, `FakeBox`, `letter`, `IncrementalPollTests` |
 | `megaplan-crm/test_final_addendum.py` | Тест | Узкоспециализированная утилита «test final addendum»; интерфейс перечислен справа. | `FinalAddendumTests` |
 | `megaplan-crm/test_financial_amounts.py` | Тест | Узкоспециализированная утилита «test financial amounts»; интерфейс перечислен справа. | `FinancialAmountsTest` |
 | `megaplan-crm/test_financial_archive.py` | Тест | Узкоспециализированная утилита «test financial archive»; интерфейс перечислен справа. | `FinancialArchiveTest` |
@@ -353,8 +361,9 @@
 | `hogart-scraper/finance/audit45_mail.py` | Финансовый контур | Узкоспециализированная утилита «audit45 mail»; интерфейс перечислен справа. | — |
 | `hogart-scraper/finance/audit45_primary_mail.py` | Финансовый контур | Узкоспециализированная утилита «audit45 primary mail»; интерфейс перечислен справа. | — |
 | `hogart-scraper/finance/audit45_report.py` | Финансовый контур | Evidence ledger for the original 45 groups; preserves incomplete search boundaries. | — |
+| `hogart-scraper/finance/bank_registry_projection.py` | Финансовый контур | Project linked daily-cycle postings into the bank registry used by the bot. | `project`, `main` |
 | `hogart-scraper/finance/crm_context.py` | Финансовый контур | Read existing Megaplan registries. Enrich reports, never create CRM payments. | `read`, `norm`, `money`, `enrich` |
-| `hogart-scraper/finance/daily.py` | Финансовый контур | Read-only IMAP intake + atomic local import. Never sends or deletes mail. | `health`, `main` |
+| `hogart-scraper/finance/daily.py` | Финансовый контур | Read-only IMAP intake + atomic local import. Never sends or deletes mail. | `health`, `posting_blockers`, `error_text`, `project_and_reconcile`, `main` |
 | `hogart-scraper/finance/daily_notice.py` | Финансовый контур | Concrete import receipts and outstanding owner questions. | `money`, `import_notice`, `notify_status` |
 | `hogart-scraper/finance/deep_fetch_additional.py` | Финансовый контур | Узкоспециализированная утилита «deep fetch additional»; интерфейс перечислен справа. | — |
 | `hogart-scraper/finance/deep_fetch_mail.py` | Финансовый контур | Узкоспециализированная утилита «deep fetch mail»; интерфейс перечислен справа. | — |
@@ -390,15 +399,17 @@
 | `hogart-scraper/finance/procurement_workspace.py` | Финансовый контур | Commands for supplier documents share the existing review queue. | `ledgers`, `projection`, `command`, `finish` |
 | `hogart-scraper/finance/report.py` | Финансовый контур | Rebuild review workbook from ledger; workbook is a report, never the source database. | `op_values`, `sheet`, `main`, `date_text` |
 | `hogart-scraper/finance/research.py` | Финансовый контур | Document-backed enrichment; never represents research as owner approval. | `enrich` |
-| `hogart-scraper/finance/review_registry.py` | Финансовый контур | Single working queue. Ledger and procurement are facts, reports are projections. | `read`, `atomic`, `current_tasks`, `sync`, `active`, `owner_context`, `document_projection`, `resolve_manual`, `record_processing_followup` |
+| `hogart-scraper/finance/review_registry.py` | Финансовый контур | Single working queue. Ledger and procurement are facts, reports are projections. | `read`, `atomic`, `owner_question_text`, `current_tasks`, `sync`, `active`, `owner_context`, `document_projection`, `resolve_manual`, `record_processing_followup` |
 | `hogart-scraper/finance/save_verified_links.py` | Финансовый контур | Save evidenced links to existing bank registry, preserving prior assignments. | `main` |
 | `hogart-scraper/finance/send_report.py` | Финансовый контур | Deliver the requested workbook to the owner's existing bot chat. | — |
 | `hogart-scraper/finance/sent_evidence.py` | Финансовый контур | Декодирование доказательств ранее отправленных сообщений. | `decode` |
 | `hogart-scraper/finance/sync_existing.py` | Финансовый контур | Merge a fully validated ZIP into the existing bot bank registry, preserving assignments. | `commission_group`, `merge` |
 | `hogart-scraper/finance/test_allocation_apply.py` | Тест | Узкоспециализированная утилита «test allocation apply»; интерфейс перечислен справа. | `AllocationApplyTests`, `ExecutionTests`, `CurrencyPreflightTests` |
 | `hogart-scraper/finance/test_allocation_workspace.py` | Тест | Узкоспециализированная утилита «test allocation workspace»; интерфейс перечислен справа. | `AllocationTests` |
+| `hogart-scraper/finance/test_bank_registry_projection.py` | Тест | Узкоспециализированная утилита «test bank registry projection»; интерфейс перечислен справа. | `BankRegistryProjectionTests` |
 | `hogart-scraper/finance/test_company_expenses.py` | Тест | Узкоспециализированная утилита «test company expenses»; интерфейс перечислен справа. | `CompanyExpenseTests`, `CompanyIncomeTests`, `CommissionSemanticsTests`, `ReviewedCompanyTests` |
 | `hogart-scraper/finance/test_crm_context.py` | Тест | Узкоспециализированная утилита «test crm context»; интерфейс перечислен справа. | `ContextTests` |
+| `hogart-scraper/finance/test_daily_gating.py` | Тест | 10.11: posting ran on one day of seven in November; the failing step had no cause. | `PostingGateTests` |
 | `hogart-scraper/finance/test_daily_notice.py` | Тест | Узкоспециализированная утилита «test daily notice»; интерфейс перечислен справа. | `NoticeTests` |
 | `hogart-scraper/finance/test_ledger.py` | Тест | Узкоспециализированная утилита «test ledger»; интерфейс перечислен справа. | `LedgerTests` |
 | `hogart-scraper/finance/test_mail_intake.py` | Тест | Узкоспециализированная утилита «test mail intake»; интерфейс перечислен справа. | `MailIntakeTests`, `MailReconnectTests` |
@@ -579,5 +590,5 @@
 
 ## Итого
 
-- Python: 543
+- Python: 554
 - JavaScript/MJS: 11

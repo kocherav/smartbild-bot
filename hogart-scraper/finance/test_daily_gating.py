@@ -1,6 +1,7 @@
 """10.11: posting ran on one day of seven in November; the failing step had no cause."""
 import subprocess
 import unittest
+from unittest.mock import patch
 
 import daily
 
@@ -29,6 +30,18 @@ class PostingGateTests(unittest.TestCase):
     def test_error_text_is_bounded(self):
         exc = subprocess.CalledProcessError(1, ['x'], stderr='строка\n' * 5000)
         self.assertLessEqual(len(daily.error_text(exc)), 1500)
+
+    @patch('daily.subprocess.run')
+    def test_daily_projection_precedes_idempotent_procurement_reconciliation(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout='{"registry_updates": 1}'),
+            subprocess.CompletedProcess([], 0, stdout='{"ok": true, "matched": [{"transaction_id": "x"}]}'),
+        ]
+        result = daily.project_and_reconcile('/test/python')
+        self.assertEqual(1, result['registry']['registry_updates'])
+        self.assertEqual('reconcile_bank', __import__('json').loads(run.call_args_list[1].kwargs['input'])['action'])
+        self.assertIn('bank_registry_projection.py', run.call_args_list[0].args[0][1])
+        self.assertIn('procurement_workflow.py', run.call_args_list[1].args[0][1])
 
 
 if __name__ == '__main__':

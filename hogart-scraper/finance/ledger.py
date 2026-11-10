@@ -77,8 +77,16 @@ def parse(raw):
     return {'header': header, 'balance': balance, 'docs': docs}
 
 def connect(path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Scheduled container and host-side report runner share this state. A 0077
+    # umask used to reduce the inherited ACL mask to zero for newly made DBs.
+    if path.exists():
+        try: path.chmod(path.stat().st_mode | 0o660)
+        except PermissionError: pass
     db = sqlite3.connect(path)
+    try: path.chmod(path.stat().st_mode | 0o660)
+    except PermissionError: pass
     db.executescript('''
       CREATE TABLE IF NOT EXISTS statements(hash TEXT PRIMARY KEY, source TEXT, account TEXT, start TEXT, end TEXT, metadata TEXT);
       CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, identity TEXT, payload TEXT);
