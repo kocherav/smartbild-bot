@@ -231,6 +231,8 @@ def repair_tax(deal_id, api=None):
     try:
         return preview(deal_id, api)
     except ValueError as exc:
+        # The tax write is already verified and must not be reported as rolled
+        # back merely because the next independent preflight check found a type.
         return {'ok': True, 'tax_repaired': True, 'next_error': str(exc)}
 
 
