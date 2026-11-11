@@ -146,7 +146,14 @@ P.contacts = () => page(`
 
 // ---------- assemble
 const order = ['cover', 'why'].concat((D.modules || []).filter((m) => P[m])).concat(['process']).concat(D.table ? ['table'] : []).concat(['contacts']);
-const css = fs.readFileSync(path.join(HERE, 'kp.css'), 'utf8');
+// Inter is bundled (assets/fonts, SIL OFL) so the PDF looks the same on any server.
+const FONTS = path.join(HERE, 'assets', 'fonts');
+const fontCss = fs.existsSync(FONTS) ? fs.readdirSync(FONTS).filter((f) => f.endsWith('.woff2')).map((f) => {
+  const m = f.match(/^inter-(cyrillic|latin)-(\d+)-normal\.woff2$/); if (!m) return '';
+  const range = m[1] === 'cyrillic' ? 'U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116' : 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD';
+  return `@font-face{font-family:Inter;font-style:normal;font-weight:${m[2]};src:url("file://${path.join(FONTS, f)}") format("woff2");unicode-range:${range}}`;
+}).join('\n') : '';
+const css = fontCss + '\n' + fs.readFileSync(path.join(HERE, 'kp.css'), 'utf8');
 const html = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>КП ${esc(D.number)}</title><style>${css}</style></head><body>${order.map((k) => P[k]()).join('\n')}</body></html>`;
 const base = path.join(path.dirname(dealPath), 'КП_' + (D.out || path.basename(dealPath, '.json')));
 fs.writeFileSync(base + '.html', html);

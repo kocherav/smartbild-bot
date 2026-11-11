@@ -195,10 +195,15 @@ def deal_snapshot(deal_id, api=None):
 
 def preview(deal_id, api=None):
     _api, data, _units, _taxes, fingerprint = deal_snapshot(deal_id, api)
-    return {'ok': True, **data, 'count': len(data['rows']), 'fingerprint': fingerprint}
+    import smartbild_kp
+    automation = smartbild_kp.is_automation(data['rows'])
+    _vat, problem = smartbild_kp.single_vat(data['rows'])
+    return {'ok': True, **data, 'count': len(data['rows']), 'fingerprint': fingerprint,
+            'automation': automation, 'template_available': problem is None,
+            'template_problem': problem, 'modules': smartbild_kp.suggest_modules(data['rows'])}
 
 
-def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
+def publish(deal_id, api=None, recipient=None, expected_fingerprint=None, template='classic', modules=None):
     recipient = ' '.join(str(recipient or '').split())
     if not recipient or len(recipient) > 200:
         raise ValueError('Укажите, кому адресовать КП (до 200 символов)')
@@ -212,8 +217,13 @@ def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
         api, data, units, taxes, preview_fingerprint = deal_snapshot(deal_id, api)
         if expected_fingerprint and expected_fingerprint != preview_fingerprint:
             raise ValueError('Сделка изменилась после предпросмотра. Повторите формирование')
-        data['date'] = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m.%Y')
+        moment = datetime.now(ZoneInfo('Europe/Moscow'))
+        data['date'] = moment.strftime('%d.%m.%Y')
         data['recipient'] = recipient
+        if template == 'smartbild':
+            import smartbild_kp
+            data['template'] = 'smartbild'
+            data['modules'] = smartbild_kp.ordered(modules)
         data['letterhead_sha256'] = hashlib.sha256(LETTERHEAD.read_bytes()).hexdigest()
         data['render_version'] = RENDER_VERSION
         fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -222,11 +232,20 @@ def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
             verify_attachment(api, deal_id, stored['file_id'])
             return {**stored, 'reused': True}
         safe_client = re.sub(r'[^\w .-]', '_', data['client'])[:65]
-        path = folder / f'КП КЛИВЭЛ — сделка {deal_id} — {safe_client} — {fingerprint[:8]}.pdf'
-        render(data, path)
+        docx_path = None
+        if template == 'smartbild':
+            work = folder / f'smartbild-{fingerprint[:12]}'
+            built_pdf, built_docx = smartbild_kp.render(data, data['modules'], recipient, moment, work)
+            path = folder / f'КП SmartBild — сделка {deal_id} — {safe_client} — {fingerprint[:8]}.pdf'
+            docx_path = folder / f'КП SmartBild — сделка {deal_id} — {safe_client} — {fingerprint[:8]}.docx'
+            built_pdf.replace(path); built_docx.replace(docx_path)
+        else:
+            path = folder / f'КП КЛИВЭЛ — сделка {deal_id} — {safe_client} — {fingerprint[:8]}.pdf'
+            render(data, path)
         # Refuse to attach a file built from a concurrently changed specification.
         live = snapshot(api._call('GET', f'/deal/{deal_id}')['data'], units, taxes)
-        if live != {k: v for k, v in data.items() if k not in ('date', 'letterhead_sha256', 'render_version', 'recipient')}:
+        if live != {k: v for k, v in data.items() if k not in ('date', 'letterhead_sha256', 'render_version', 'recipient',
+                                                               'template', 'modules')}:
             raise ValueError('Сделка изменилась во время подготовки КП. Повторите формирование')
         receipt_path = folder / 'pending-upload.json'
         receipt = read(receipt_path)
@@ -236,7 +255,9 @@ def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
             uploaded = api.upload_file(str(path))
             save(receipt_path, {'fingerprint': fingerprint, 'file_id': str(uploaded['id'])})
         payload = {'contentType': 'Comment', 'subject': {'contentType': 'Deal', 'id': str(deal_id)},
-                   'content': f'КП КЛИВЭЛ по актуальной спецификации сделки. Версия {fingerprint[:12]}.',
+                   'content': (f'КП SmartBild (автоматизация) по актуальной спецификации сделки. Версия {fingerprint[:12]}.'
+                               if template == 'smartbild' else
+                               f'КП КЛИВЭЛ по актуальной спецификации сделки. Версия {fingerprint[:12]}.'),
                    'attaches': [{'contentType': 'File', 'id': str(uploaded['id'])}]}
         # Preserve previous published versions. Updating an old comment may be
         # forbidden even when adding a comment is allowed; that 403 also trips
@@ -244,7 +265,8 @@ def publish(deal_id, api=None, recipient=None, expected_fingerprint=None):
         comment = api._call('POST', f'/deal/{deal_id}/comments', json_body=payload)['data']
         result = {'ok': True, 'deal_id': str(deal_id), 'path': str(path), 'total': data['total'],
                   'count': len(data['rows']), 'fingerprint': fingerprint, 'file_id': str(uploaded['id']),
-                  'comment_id': str(comment['id'])}
+                  'comment_id': str(comment['id']), 'template': template,
+                  'docx_path': str(docx_path) if docx_path else None}
         save(folder / 'published.json', result)
         save(folder / f'{fingerprint}.json', data)
         verify_attachment(api, deal_id, result['file_id'])
@@ -335,7 +357,8 @@ if __name__ == '__main__':
             result = preview(spec['deal_id'])
         else:
             result = publish(spec['deal_id'], recipient=spec.get('recipient'),
-                             expected_fingerprint=spec.get('expected_fingerprint'))
+                             expected_fingerprint=spec.get('expected_fingerprint'),
+                             template=spec.get('template') or 'classic', modules=spec.get('modules'))
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         # Keep diagnostics useful without sending CRM trace blobs or secrets to chat.

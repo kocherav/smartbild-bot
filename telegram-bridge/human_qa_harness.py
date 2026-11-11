@@ -639,14 +639,26 @@ class FakeMegaplan:
                  'total': str(p['qty'] * p['price'])} for p in deal['positions']]
         fingerprint = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
         if action == 'preview':
+            # The real detection rules of the SmartBild template (megaplan-crm/smartbild_kp.py).
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'megaplan-crm'))
+            import smartbild_kp
             return {'ok': True, 'deal_id': deal['id'], 'rows': rows, 'count': len(rows),
-                    'total': self.price(deal), 'fingerprint': fingerprint}
+                    'total': self.price(deal), 'fingerprint': fingerprint,
+                    'automation': smartbild_kp.is_automation(rows), 'template_available': True,
+                    'modules': smartbild_kp.suggest_modules(rows)}
         if action == 'publish':
             if not deal['positions']:
                 return {'ok': False, 'error': 'в сделке нет позиций'}
             if spec.get('expected_fingerprint') and spec['expected_fingerprint'] != fingerprint:
                 return {'ok': False, 'error': 'Сделка изменилась после предпросмотра. Повторите формирование'}
             self._write('deal_proposal', action, spec)
+            if spec.get('template') == 'smartbild':
+                path = self.root / f"КП SmartBild по сделке {deal['id']}.pdf"
+                path.write_bytes(b'%PDF-1.4 smartbild proposal')
+                docx = self.root / f"КП SmartBild по сделке {deal['id']}.docx"
+                docx.write_bytes(b'PK docx')
+                return {'ok': True, 'path': str(path), 'docx_path': str(docx), 'template': 'smartbild',
+                        'count': len(deal['positions']), 'total': self.price(deal)}
             path = self.root / f"КП по сделке {deal['id']}.pdf"
             path.write_bytes(b'%PDF-1.4 proposal')
             return {'ok': True, 'path': str(path), 'count': len(deal['positions']), 'total': self.price(deal)}
