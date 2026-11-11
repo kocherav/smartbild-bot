@@ -47,6 +47,7 @@ import closing_runtime
 import product_matching_runtime
 import allocation_runtime
 import procurement_intake_runtime
+import bank_reconciliation_runtime
 import math
 from workflow_runtime import Store as WorkflowStore
 from ui_context import StateStore
@@ -3173,6 +3174,22 @@ def continue_procurement_after_stock(token, chat_id, deal_id, status="Закуп
     return procurement
 
 
+def reconcile_requested_bank_payments(token, chat_id):
+    """Run a supplier-payment reconciliation requested by the daily finance cycle."""
+    outcome = bank_reconciliation_runtime.poll(run_procurement_workflow)
+    if outcome and not outcome.get("ok") and outcome.get("notify_owner"):
+        send_message(token, chat_id,
+                     "⚠️ Отложенная сверка оплат поставщикам не выполнена. "
+                     "Запрос сохранён и будет повторён; причина: " + outcome["error"])
+    if outcome and outcome.get("ok"):
+        # Same follow-up as a manual statement upload: refresh the procurement register
+        # of every deal whose supplier payment was just matched.
+        matched = (((outcome.get("receipt") or {}).get("result") or {}).get("matched") or [])
+        for paid_deal_id in sorted({str(item.get("deal_id")) for item in matched if item.get("deal_id")}):
+            publish_procurement_register(token, chat_id, paid_deal_id)
+    return outcome
+
+
 def publish_procurement_register(token, chat_id, deal_id):
     """Build, attach to Megaplan, and send the human-named procurement workbook."""
     stored = build_and_store_procurement_register(deal_id)
@@ -4941,10 +4958,11 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         draft = proposal_state['proposal_draft']
         target, recipient = str(draft['deal_id']), draft['recipient']
         send_message(token, chat_id, f'📄 Возобновляю КП №{target}. Адресат: {recipient}.', DEAL_ACTIONS_KEYBOARD)
+        resume = {'recipient': recipient, 'template': draft.get('template') or 'classic', 'modules': draft.get('modules')}
         if _background:
-            send_deal_proposal(token, chat_id, target, recipient=recipient)
+            send_deal_proposal(token, chat_id, target, **resume)
         else:
-            run_background_job(lambda: send_deal_proposal(token, chat_id, target, recipient=recipient), token, chat_id,
+            run_background_job(lambda: send_deal_proposal(token, chat_id, target, **resume), token, chat_id,
                                operation=f'КП по сделке:{target}')
         return True
     if proposal_state.get('pending') == 'proposal_recipient':
@@ -4975,14 +4993,37 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             return True
         update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
     proposal_state = current_deal_ui_state(chat_id)
+    if proposal_state.get('pending') == 'proposal_confirm' and (
+            value in (PROPOSAL_TO_SMARTBILD, PROPOSAL_TO_CLASSIC) or value[:2] in ('☑ ', '☐ ')):
+        template = proposal_state.get('proposal_template') or 'classic'
+        modules = list(proposal_state.get('proposal_modules') or [])
+        available = proposal_state.get('proposal_template_available', True)
+        if value == PROPOSAL_TO_SMARTBILD and available:
+            template = 'smartbild'
+        elif value == PROPOSAL_TO_CLASSIC:
+            template = 'classic'
+        elif template == 'smartbild':
+            key = next((k for k, label in PROPOSAL_MODULES if label == value[2:]), None)
+            if key:
+                modules = [m for m in modules if m != key] if key in modules else modules + [key]
+        update_deal_ui_state(chat_id, proposal_template=template, proposal_modules=modules)
+        send_message(token, chat_id, f'КП по сделке №{proposal_state.get("proposal_deal_id")}. '
+                     + proposal_choice_text(template, modules),
+                     proposal_choice_keyboard(template, modules, available))
+        return True
     if proposal_state.get('pending') == 'proposal_confirm' and value == '✅ Создать PDF КП':
         target = proposal_state.get('proposal_deal_id')
         recipient = proposal_state.get('proposal_recipient')
         fingerprint = proposal_state.get('proposal_fingerprint')
+        template = proposal_state.get('proposal_template') or 'classic'
+        modules = list(proposal_state.get('proposal_modules') or [])
         update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None, proposal_recipient=None, proposal_fingerprint=None,
-                             proposal_draft={'deal_id': str(target), 'recipient': recipient})
-        send_message(token, chat_id, f'📄 Формирую КП №{target}.', DEAL_ACTIONS_KEYBOARD)
-        kwargs = {'recipient': recipient, 'expected_fingerprint': fingerprint}
+                             proposal_template=None, proposal_modules=None, proposal_template_available=None,
+                             proposal_draft={'deal_id': str(target), 'recipient': recipient,
+                                             'template': template, 'modules': modules})
+        send_message(token, chat_id, f'📄 Формирую КП №{target}' + (' в шаблоне SmartBild' if template == 'smartbild' else '') + '.',
+                     DEAL_ACTIONS_KEYBOARD)
+        kwargs = {'recipient': recipient, 'expected_fingerprint': fingerprint, 'template': template, 'modules': modules}
         if _background:
             send_deal_proposal(token, chat_id, target, **kwargs)
         else:
@@ -7837,24 +7878,69 @@ def run_deal_proposal(spec):
         return {'ok': False, 'error': 'Не удалось завершить формирование КП. Повторная попытка не создаст новую сделку.'}
 
 
+PROPOSAL_MODULES = (('light', 'Свет и шторы'), ('climate', 'Климат'), ('media', 'Медиа и кино'),
+                    ('telegram', 'Уведомления'), ('scenes', 'Сценарии'))
+PROPOSAL_TO_SMARTBILD = '🎨 Оформить в шаблоне SmartBild'
+PROPOSAL_TO_CLASSIC = '📄 Обычный КП'
+
+
+def proposal_choice_keyboard(template, modules, template_available=True):
+    """Preview keyboard: module switches (☑/☐, never ✅ — typed «да» confirms the single ✅),
+    template switch, confirm, cancel."""
+    rows = []
+    if template == 'smartbild':
+        chosen = set(modules or [])
+        buttons = [{'text': ('☑ ' if key in chosen else '☐ ') + label} for key, label in PROPOSAL_MODULES]
+        rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([{'text': PROPOSAL_TO_CLASSIC}])
+    elif template_available:
+        rows.append([{'text': PROPOSAL_TO_SMARTBILD}])
+    rows += [[{'text': '✅ Создать PDF КП'}], [{'text': '❌ Отмена'}]]
+    return {'keyboard': rows, 'resize_keyboard': True, 'one_time_keyboard': True}
+
+
+def proposal_choice_text(template, modules):
+    if template != 'smartbild':
+        return 'Оформление: обычный КП КЛИВЭЛ.'
+    labels = [label for key, label in PROPOSAL_MODULES if key in set(modules or [])]
+    return ('Оформление: КП SmartBild по автоматизации (PDF + Word).\n'
+            'Модули: ' + (', '.join(labels) if labels else 'без страниц модулей') +
+            '. Нажмите модуль, чтобы включить или убрать его.')
+
+
 def show_deal_proposal_preview(token, chat_id, target, recipient, preview):
     rows = '\n'.join(f'• {row["name"]}: {row["qty"]} {row["unit"]} — {bank_money(row["total"])} ₽' for row in preview['rows'])
+    available = preview.get('template_available', False)
+    # Owner 11.11: automation deals are suggested in the SmartBild template.
+    template = 'smartbild' if preview.get('automation') and available else 'classic'
+    modules = list(preview.get('modules') or [])
     update_deal_ui_state(chat_id, pending='proposal_confirm', proposal_deal_id=str(target),
-                         proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'])
+                         proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'],
+                         proposal_template=template, proposal_modules=modules,
+                         proposal_template_available=available)
     send_message(token, chat_id,
                  f'📄 Предпросмотр КП по сделке №{target}\nАдресат: {recipient}\n'
                  f'{preview["count"]} позиции:\n\n{rows}\n\n'
-                 f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.', DEAL_PROPOSAL_CONFIRM_KEYBOARD)
+                 f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.\n\n'
+                 + proposal_choice_text(template, modules),
+                 proposal_choice_keyboard(template, modules, available))
 
 
-def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None, expected_fingerprint=None):
-    result = run_deal_proposal({'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient,
-                                'expected_fingerprint': expected_fingerprint})
+def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None, expected_fingerprint=None,
+                       template='classic', modules=None):
+    spec = {'action': 'publish', 'deal_id': str(deal_id), 'recipient': recipient,
+            'expected_fingerprint': expected_fingerprint}
+    if template == 'smartbild':
+        spec.update(template='smartbild', modules=list(modules or []))
+    result = run_deal_proposal(spec)
     if not result.get('ok'):
         send_message(token, chat_id, 'КП не сформировано: ' + result.get('error', 'ошибка проверки'), DEAL_ACTIONS_KEYBOARD)
         return False
-    caption = f"КП КЛИВЭЛ по сделке №{deal_id}: {result['count']} позиций, {bank_money(result['total'])} ₽. Копия сохранена в сделке."
+    brand = 'КП SmartBild' if result.get('template') == 'smartbild' else 'КП КЛИВЭЛ'
+    caption = f"{brand} по сделке №{deal_id}: {result['count']} позиций, {bank_money(result['total'])} ₽. Копия сохранена в сделке."
     sent = send_document(token, chat_id, result['path'], caption)
+    if sent and result.get('docx_path'):
+        send_document(token, chat_id, result['docx_path'], f'{brand} по сделке №{deal_id} — Word для правок.')
     draft = current_deal_ui_state(chat_id).get('proposal_draft') or {}
     if (sent and str(draft.get('deal_id')) == str(deal_id)
             and draft.get('recipient') == recipient):
@@ -12512,6 +12598,9 @@ def main():
             run_singleton_background_job("product-matching", product_matching_runtime.poll, token, authorized_chat_id)
             run_singleton_background_job("procurement-intake", procurement_intake_runtime.poll_in_environment, token, authorized_chat_id)
             run_singleton_background_job("supplier-allocation", allocation_runtime.poll_in_environment, token, authorized_chat_id)
+            run_singleton_background_job("bank-reconciliation",
+                                         lambda: reconcile_requested_bank_payments(token, authorized_chat_id),
+                                         token, authorized_chat_id)
             next_closing_check = time.time() + 60
         if not draining_reload and time.time() >= next_transition_retry:
             if durable_json.read(PENDING_TRANSITIONS_FILE, dict):

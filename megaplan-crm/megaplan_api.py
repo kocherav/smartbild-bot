@@ -672,7 +672,13 @@ class MegaplanAPI:
         return result["data"]
 
     def persist_cloned_position_types(self, deal, kinds):
-        """Copy document types to Megaplan's cloned Offers after deal creation."""
+        """Copy document types to Megaplan's cloned Offers after deal creation.
+
+        Megaplan does not preserve the custom document-type field when it clones a
+        catalog Offer into a deal.  The native product/service flag is also not a
+        reliable substitute.  Persist the already resolved type on each clone and
+        verify it without touching quantities or money.
+        """
         from position_types import FIELD, GOODS, WORK, new_offer_type
         rows = deal.get("positions") or []
         if len(rows) != len(kinds):

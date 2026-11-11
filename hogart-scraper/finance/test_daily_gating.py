@@ -31,17 +31,16 @@ class PostingGateTests(unittest.TestCase):
         exc = subprocess.CalledProcessError(1, ['x'], stderr='строка\n' * 5000)
         self.assertLessEqual(len(daily.error_text(exc)), 1500)
 
+    @patch('daily.bank_reconciliation_queue.enqueue')
     @patch('daily.subprocess.run')
-    def test_daily_projection_precedes_idempotent_procurement_reconciliation(self, run):
-        run.side_effect = [
-            subprocess.CompletedProcess([], 0, stdout='{"registry_updates": 1}'),
-            subprocess.CompletedProcess([], 0, stdout='{"ok": true, "matched": [{"transaction_id": "x"}]}'),
-        ]
+    def test_daily_projection_precedes_idempotent_procurement_reconciliation(self, run, enqueue):
+        run.return_value = subprocess.CompletedProcess([], 0, stdout='{"registry_updates": 1}')
+        enqueue.return_value = {"request_id": "bank-reconcile:x", "state": "queued", "receipt": None}
         result = daily.project_and_reconcile('/test/python')
         self.assertEqual(1, result['registry']['registry_updates'])
-        self.assertEqual('reconcile_bank', __import__('json').loads(run.call_args_list[1].kwargs['input'])['action'])
-        self.assertIn('bank_registry_projection.py', run.call_args_list[0].args[0][1])
-        self.assertIn('procurement_workflow.py', run.call_args_list[1].args[0][1])
+        self.assertEqual('queued', result['procurement']['state'])
+        self.assertIn('bank_registry_projection.py', run.call_args.args[0][1])
+        enqueue.assert_called_once_with('/home/kocher.av/megaplan-crm/bank_statement_registry.json')
 
 
 if __name__ == '__main__':

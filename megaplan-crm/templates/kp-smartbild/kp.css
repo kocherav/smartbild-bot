@@ -1,0 +1,101 @@
+/* SmartBild.pro — КП, A4 альбом (297×210 мм = 1123×794 px). Цвета и шрифт — по брендбуку v1.0 */
+:root{--green:#19D38A;--egreen:#6AF28E;--black:#0B0F10;--dgray:#1A1E22;--lgray:#E6E8EB;--mid:#5B6168}
+@page{size:297mm 210mm;margin:0}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{font-family:Inter,Arial,sans-serif;color:var(--black);font-size:10.5pt;line-height:1.45}
+.page{position:relative;width:1123px;height:794px;overflow:hidden;page-break-after:always;padding:46px 56px 0 56px;background:#fff}
+.page:last-child{page-break-after:auto}
+/* шапка внутренних страниц: зелёная черта + надзаголовок, как в брендбуке */
+.head{display:flex;align-items:center;gap:12px;height:18px;margin-bottom:14px}
+.head .bar{width:34px;height:3px;background:var(--green);border-radius:2px}
+.kicker{font-size:7.5pt;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--green)}
+h2{font-weight:600;font-size:25pt;line-height:1.12;margin:0 0 10px;letter-spacing:-.01em;padding-bottom:12px;border-bottom:1px solid var(--lgray)}
+.lead{font-size:11.5pt;color:#2b3036;margin:0 0 18px;max-width:900px}
+.foot{position:absolute;left:56px;right:56px;bottom:22px;display:flex;justify-content:space-between;align-items:center;font-size:7.5pt;color:var(--mid)}
+.foot img{height:24px}
+/* обложка и последняя страница */
+.dark{background:var(--black);color:#fff;padding:0}
+.circ{position:absolute;inset:0;width:100%;height:100%}
+.cv{position:relative;height:100%;padding:58px 64px;display:flex;flex-direction:column}
+.cv .logo{height:46px;align-self:flex-start}
+.cvmid{margin-top:auto}
+.gbar{width:46px;height:4px;background:var(--green);border-radius:2px;margin-bottom:18px}
+.cvk{font-size:9pt;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--green);margin-bottom:12px}
+.dark h1{font-weight:600;font-size:46pt;line-height:1.06;margin:0;letter-spacing:-.02em;max-width:700px}
+.cvs{font-size:13pt;color:#b9c0c7;margin:16px 0 0;max-width:560px}
+.cvt{margin-top:34px;border-collapse:collapse;font-size:10pt}
+.cvt td{padding:5px 0;border-top:1px solid #23292e}
+.cvt td:first-child{color:#7f8891;width:150px;padding-right:20px}
+.cvf{margin-top:26px;font-size:8pt;color:#6b747c;letter-spacing:.06em}
+/* устройства */
+.ipad{background:#15191c;border-radius:22px;padding:11px;border:1.5px solid #2a3035}
+.ipad img{display:block;width:100%;border-radius:11px}
+.iphone{background:#15191c;border-radius:34px;padding:8px;border:1.5px solid #2a3035}
+.iphone img{display:block;width:100%;border-radius:27px}
+/* «почему» */
+.why{display:flex;gap:30px}
+.ben{width:470px;display:grid;grid-template-columns:1fr 1fr;gap:16px 22px;align-content:start}
+.b{display:flex;gap:12px}
+.b .ic{flex:0 0 40px;height:40px;border-radius:10px;background:#f2f4f5;display:flex;align-items:center;justify-content:center}
+.b .ic svg,.gar .ic svg{width:26px;height:26px}
+.b b,.c b,.st b,.gar b{display:block;font-weight:600;font-size:10.5pt;line-height:1.3;margin-bottom:3px}
+.b span,.c span,.st span,.gar span{display:block;font-size:9pt;color:#4a5057;line-height:1.4}
+.devs{position:relative;flex:1}
+.devs .big{width:480px;margin-top:4px}
+.devs .over{position:absolute;width:120px;right:-6px;top:150px}
+/* модуль: текст слева, экраны справа */
+.mod{display:flex;gap:34px;height:590px}
+.mod .txt{width:400px;display:flex;flex-direction:column}
+.mod h2{font-size:22pt}
+.pts{list-style:none;margin:0;padding:0}
+.pts li{position:relative;padding:0 0 0 20px;margin:0 0 10px;font-size:10pt;color:#2b3036;line-height:1.42}
+.pts li:before{content:"";position:absolute;left:0;top:7px;width:7px;height:7px;border-radius:50%;background:var(--green)}
+.pts b{font-weight:600;color:var(--black)}
+.compat{margin-top:auto;font-size:7.8pt;letter-spacing:.02em;color:var(--mid);border-top:1px solid var(--lgray);padding-top:10px}
+.vis{position:relative;flex:1}
+.vis .m1{position:absolute;width:470px;left:0;top:0}
+.vis .m2{position:absolute;width:360px;right:0;bottom:24px}
+.vis .m1.t{width:500px}
+/* мессенджер */
+.tg{position:absolute;right:6px;bottom:4px;width:250px;height:470px;overflow:hidden;background:#15191c}
+.tg .tgh,.tg .tgb{background:#eef1ec}
+.tg .tgh{display:flex;align-items:center;gap:9px;padding:14px 14px 10px;border-radius:27px 27px 0 0;background:#fff;border-bottom:1px solid #e3e6e8}
+.tg .tgh img{width:30px;height:30px}
+.tg .tgh b{display:block;font-size:9.5pt}.tg .tgh span{font-size:7.5pt;color:var(--mid)}
+.tg .tgb{height:404px;padding:10px 10px 12px;border-radius:0 0 27px 27px;display:flex;flex-direction:column;gap:7px;justify-content:flex-end}
+.msg{background:#fff;border-radius:12px 12px 12px 4px;padding:7px 9px 14px;font-size:7.8pt;line-height:1.35;position:relative;border:1px solid #e3e6e8}
+.msg i{position:absolute;right:8px;bottom:3px;font-style:normal;font-size:6.5pt;color:#8a9097}
+/* сценарии */
+.scn{display:flex;gap:28px}
+.cards{width:430px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.c{border:1px solid var(--lgray);border-radius:12px;padding:12px 13px;border-top:3px solid var(--green)}
+.vis1{flex:1}.vis1 .big{width:100%}
+/* этапы */
+.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:10px}
+.st{border-top:2px solid var(--black);padding-top:12px}
+.st .n{font-size:26pt;font-weight:300;color:var(--green);line-height:1;margin-bottom:10px}
+.gar{display:flex;gap:14px;align-items:center;margin-top:40px;background:#f4f6f7;border-radius:14px;padding:18px 22px}
+.gar .ic{flex:0 0 44px;height:44px;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center}
+/* расчёт */
+.calc{width:100%;border-collapse:collapse;font-size:9pt}
+.calc th{font-size:7.5pt;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--mid);text-align:left;padding:7px 8px;border-bottom:2px solid var(--black)}
+.calc td{padding:6px 8px;border-bottom:1px solid var(--lgray)}
+.calc .r{text-align:right;white-space:nowrap}
+.calc tr.sec td{font-weight:600;color:var(--green);padding-top:12px;font-size:8.5pt;letter-spacing:.04em;text-transform:uppercase;border-bottom:none}
+.calc tr.sub td{font-weight:600;background:#f4f6f7}
+.calc tfoot td{font-weight:700;font-size:11pt;border-top:2px solid var(--black);border-bottom:none;padding-top:10px}
+
+/* было → стало */
+.ba{display:flex;align-items:stretch;gap:10px;margin-top:14px}
+.ba>div{flex:1;border-radius:12px;padding:11px 13px;font-size:9.5pt;line-height:1.35;background:#f4f6f7;color:#4a5057}
+.ba>div.arr{flex:0 0 auto;background:none;padding:0;display:flex;align-items:center;font-size:16pt;color:var(--green)}
+.ba>div.now{background:var(--black);color:#fff}
+.ba i{display:block;font-style:normal;font-size:7pt;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--mid);margin-bottom:4px}
+.ba .now i{color:var(--green)}
+/* почему SmartBild */
+.whyus{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:40px;padding-top:24px;border-top:1px solid var(--lgray)}
+.whyus .b .ic svg{width:26px;height:26px}
+.gar{margin-top:26px}
+
+.calc tfoot tr.vat td{font-weight:400;font-size:9.5pt;border-top:none;padding-top:2px;color:#4a5057}
