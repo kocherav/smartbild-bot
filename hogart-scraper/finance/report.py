@@ -39,6 +39,16 @@ def sheet(wb,name,headers,values,money_cols=()):
             for c in row:c.fill=PatternFill('solid',fgColor='EFF5F7')
     return ws
 
+def queue_row(t):
+    """One row of the working queue. The registry is shared with other modules whose
+    tasks carry fewer fields (11.11: one task without «supplier» made report.py fail,
+    so neither the Excel nor the owner's questions reached the daily notice)."""
+    bank_ids=[str(x) for x in (t.get('bank_ids') or [])]
+    return [t.get('id',''),t.get('company',''),t.get('supplier') or t.get('counterparty') or '',t.get('inn',''),
+            t.get('category') or t.get('kind',''),len(bank_ids),(t.get('amount_cents') or 0)/100,
+            t.get('action') or t.get('task') or '','Пользователь' if t.get('owner')=='user' else 'Ассистент',
+            ', '.join(bank_ids),t.get('invoices',''),t.get('name',''),t.get('qty','')]
+
 def main():
     db=connect(ROOT/'data/ledger.sqlite');accounts=json.loads((ROOT/'accounts.json').read_text());rows=records(db,accounts)
     wb=Workbook();wb.remove(wb.active)
@@ -51,12 +61,10 @@ def main():
     work=active(registry)
     questions=[]
     for t in work:
-        questions.append([t['id'],t.get('company',''),t['supplier'],t.get('inn',''),
-            t.get('category',t['kind']),len(t['bank_ids']),t['amount_cents']/100,
-            t['action'],'Пользователь' if t['owner']=='user' else 'Ассистент',', '.join(t['bank_ids']),t.get('invoices',''),t.get('name',''),t.get('qty','')])
+        questions.append(queue_row(t))
     ws=sheet(wb,'Рабочая очередь',['Задача','Компания','Контрагент','ИНН','Тип','Операций','Сумма, ₽','Что требуется','Ответственный','ID операций','Счёт','Позиция','Остаток, ед.'],questions,(7,))
     ws.column_dimensions['J'].hidden=True
-    owner_questions=[[t['action'],''] for t in work if t['owner']=='user']
+    owner_questions=[[t.get('action') or '',''] for t in work if t.get('owner')=='user' and t.get('action')]
     sheet(wb,'История ответов',['Поставщик','Счета','Ответ','Результат'],[
         [q.get('supplier',''),q.get('invoices',''),q.get('owner_answer') or q.get('answer',''),q.get('resolution','')]
         for q in registry['historical_answers']])
