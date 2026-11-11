@@ -66,5 +66,31 @@ class BankReconciliationRuntimeTests(unittest.TestCase):
         self.assertEqual({"tx-1"}, applied)
 
 
+class BridgeFollowUpTest(unittest.TestCase):
+    def test_matched_payments_refresh_procurement_registers_like_a_manual_upload(self):
+        import bridge
+        from unittest import mock
+        outcome = {'ok': True, 'receipt': {'result': {'ok': True, 'matched': [
+            {'deal_id': '905', 'transaction_id': 't1'}, {'deal_id': '905', 'transaction_id': 't2'},
+            {'deal_id': '888', 'transaction_id': 't3'}]}}}
+        with mock.patch.object(bridge.bank_reconciliation_runtime, 'poll', return_value=outcome), \
+             mock.patch.object(bridge, 'publish_procurement_register') as publish, \
+             mock.patch.object(bridge, 'send_message') as send:
+            bridge.reconcile_requested_bank_payments('t', 'owner')
+        self.assertEqual(['888', '905'], [c.args[2] for c in publish.call_args_list])
+        send.assert_not_called()
+
+    def test_first_failure_is_told_to_the_owner(self):
+        import bridge
+        from unittest import mock
+        outcome = {'ok': False, 'error': 'PermissionError: x', 'notify_owner': True}
+        with mock.patch.object(bridge.bank_reconciliation_runtime, 'poll', return_value=outcome), \
+             mock.patch.object(bridge, 'publish_procurement_register') as publish, \
+             mock.patch.object(bridge, 'send_message') as send:
+            bridge.reconcile_requested_bank_payments('t', 'owner')
+        publish.assert_not_called()
+        self.assertIn('PermissionError: x', send.call_args.args[2])
+
+
 if __name__ == "__main__":
     unittest.main()

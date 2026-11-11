@@ -3166,6 +3166,22 @@ def continue_procurement_after_stock(token, chat_id, deal_id, status="Закуп
     return procurement
 
 
+def reconcile_requested_bank_payments(token, chat_id):
+    """Run a supplier-payment reconciliation requested by the daily finance cycle."""
+    outcome = bank_reconciliation_runtime.poll(run_procurement_workflow)
+    if outcome and not outcome.get("ok") and outcome.get("notify_owner"):
+        send_message(token, chat_id,
+                     "⚠️ Отложенная сверка оплат поставщикам не выполнена. "
+                     "Запрос сохранён и будет повторён; причина: " + outcome["error"])
+    if outcome and outcome.get("ok"):
+        # Same follow-up as a manual statement upload: refresh the procurement register
+        # of every deal whose supplier payment was just matched.
+        matched = (((outcome.get("receipt") or {}).get("result") or {}).get("matched") or [])
+        for paid_deal_id in sorted({str(item.get("deal_id")) for item in matched if item.get("deal_id")}):
+            publish_procurement_register(token, chat_id, paid_deal_id)
+    return outcome
+
+
 def publish_procurement_register(token, chat_id, deal_id):
     """Build, attach to Megaplan, and send the human-named procurement workbook."""
     stored = build_and_store_procurement_register(deal_id)
@@ -12467,14 +12483,8 @@ def main():
             run_singleton_background_job("product-matching", product_matching_runtime.poll, token, authorized_chat_id)
             run_singleton_background_job("procurement-intake", procurement_intake_runtime.poll_in_environment, token, authorized_chat_id)
             run_singleton_background_job("supplier-allocation", allocation_runtime.poll_in_environment, token, authorized_chat_id)
-            def reconcile_requested_bank_payments():
-                outcome = bank_reconciliation_runtime.poll(run_procurement_workflow)
-                if outcome and not outcome.get("ok") and outcome.get("notify_owner"):
-                    send_message(token, authorized_chat_id,
-                                 "⚠️ Отложенная сверка оплат поставщикам не выполнена. "
-                                 "Запрос сохранён и будет повторён; причина: " + outcome["error"])
-                return outcome
-            run_singleton_background_job("bank-reconciliation", reconcile_requested_bank_payments,
+            run_singleton_background_job("bank-reconciliation",
+                                         lambda: reconcile_requested_bank_payments(token, authorized_chat_id),
                                          token, authorized_chat_id)
             next_closing_check = time.time() + 60
         if not draining_reload and time.time() >= next_transition_retry:
