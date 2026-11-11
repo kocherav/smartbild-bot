@@ -1,0 +1,17 @@
+{
+  "number": "КП-2026-___",
+  "date": "11 ноября 2026",
+  "client": "Иванов Иван Иванович",
+  "object": "Квартира 180 м², г. Москва",
+  "modules": ["light", "climate", "media", "telegram", "scenes"],
+  "table": "table_example.csv",
+  "valid": "30 дней",
+  "warranty": "по договору",
+  "manager": {
+    "name": "Кочержинский Артем Вадимович",
+    "role": "Руководитель проектов",
+    "phone": "+7 (495) 846-72-71",
+    "email": "info@smartbild.pro",
+    "site": "smartbild.pro"
+  }
+}

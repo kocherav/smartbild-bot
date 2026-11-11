@@ -1,0 +1,16 @@
+{
+  "name": "kp-smartbild",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Коммерческое предложение SmartBild по автоматизации: PDF и Word из файла сделки (JSON) и таблицы расчёта (CSV)",
+  "scripts": {
+    "pdf": "node build.cjs",
+    "docx": "node build_docx.cjs",
+    "word-assets": "node word_assets.cjs"
+  },
+  "dependencies": {
+    "docx": "9.7.1",
+    "playwright": "1.56.1"
+  },
+  "engines": { "node": ">=18" }
+}
