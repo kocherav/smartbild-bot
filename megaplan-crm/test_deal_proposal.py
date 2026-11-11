@@ -116,6 +116,35 @@ class ProposalTests(unittest.TestCase):
         api.upload_file.assert_not_called()
         self.assertFalse(any(call.args[0] == 'POST' for call in api._call.call_args_list))
 
+    def test_explicit_tax_repair_preserves_money_then_continues(self):
+        deal = example(); deal['timeCreated'] = {'value': '2026-11-11T10:00:00+00:00'}; deal['positions'][0]['id']='1'
+        api = Mock(); api._call.side_effect = lambda method, path, **kw: {'data': copy.deepcopy(deal)}
+        api.update_deal_tax.return_value = '8'
+        with patch('seller_documents.selected_seller', return_value={'id':'cliwell'}), \
+             patch('document_tax_policy.company_rate', return_value=5), \
+             patch('document_tax_policy.settings', return_value={'companies':{'cliwell':[{'from':'2026-10-01','rate':5}]}}), \
+             patch('document_tax_policy.row_rates', return_value=[5]), \
+             patch.object(kp, 'preview', return_value={'ok':True,'fingerprint':'fp'}) as preview:
+            result = kp.repair_tax('42', api)
+        self.assertTrue(result['ok']); api.update_deal_tax.assert_called_once_with('42','5')
+        preview.assert_called_once_with('42', api)
+
+    def test_explicit_type_repair_only_changes_untyped_obvious_work(self):
+        from position_types import FIELD, WORK
+        deal = example(); deal['positions'] = [
+            {'id':'1','quantity':1,'sum':{'value':100},'offer':{'id':'11','name':'Монтажные работы','type':'product'}},
+            {'id':'2','quantity':1,'sum':{'value':200},'offer':{'id':'12','name':'Контроллер','type':'product'}},
+        ]
+        def call(method, path, json_body=None, **kw):
+            if method == 'POST': deal['positions'][0]['offer'][FIELD] = json_body[FIELD]
+            return {'data': copy.deepcopy(deal)}
+        api=Mock(); api._call.side_effect=call
+        with patch.object(kp,'preview',return_value={'ok':True}) as preview:
+            self.assertTrue(kp.repair_position_types('42',api)['ok'])
+        posts=[c for c in api._call.call_args_list if c.args[0]=='POST']
+        self.assertEqual(len(posts),1); self.assertEqual(posts[0].args[1],'/offer/11')
+        self.assertEqual(posts[0].kwargs['json_body'][FIELD],WORK); preview.assert_called_once()
+
     def test_change_after_preview_requires_a_new_confirmation(self):
         api = self.api()
         fingerprint = kp.preview('42', api)['fingerprint']

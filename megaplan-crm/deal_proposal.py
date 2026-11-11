@@ -203,6 +203,58 @@ def preview(deal_id, api=None):
             'template_problem': problem, 'modules': smartbild_kp.suggest_modules(data['rows'])}
 
 
+def repair_tax(deal_id, api=None):
+    """Explicit recovery for a newly created deal carrying a stale tax id."""
+    api = api or MegaplanAPI()
+    deal = api._call('GET', f'/deal/{deal_id}')['data']
+    from document_tax_policy import company_rate, settings
+    from seller_documents import selected_seller
+    seller_id = selected_seller(deal_id)['id']
+    rate = company_rate(seller_id)
+    if rate is None:
+        raise ValueError('Для организации сделки не настроена налоговая политика')
+    created = str((deal.get('timeCreated') or {}).get('value') or '')[:10]
+    if not created:
+        raise ValueError('Не подтверждена дата создания сделки; налог автоматически не меняю')
+    matching = [r for r in settings().get('companies', {}).get(seller_id, []) if r['from'] <= created]
+    if not matching or int(max(matching, key=lambda r: r['from'])['rate']) != rate:
+        raise ValueError('Сделка создана до текущей налоговой политики; нужна дата передачи')
+    before = [(str(r['id']), str(r.get('quantity')), str((r.get('sum') or {}).get('value'))) for r in deal.get('positions') or []]
+    api.update_deal_tax(deal_id, 'none' if rate == -1 else str(rate))
+    checked = api._call('GET', f'/deal/{deal_id}')['data']
+    after = [(str(r['id']), str(r.get('quantity')), str((r.get('sum') or {}).get('value'))) for r in checked.get('positions') or []]
+    if after != before:
+        raise ValueError('Суммы или количества изменились при обновлении НДС; КП не выпускаю')
+    from document_tax_policy import row_rates
+    if set(row_rates(checked, api)) != {rate}:
+        raise ValueError('Мегаплан не подтвердил новую ставку во всех позициях')
+    try:
+        return preview(deal_id, api)
+    except ValueError as exc:
+        return {'ok': True, 'tax_repaired': True, 'next_error': str(exc)}
+
+
+def repair_position_types(deal_id, api=None):
+    """Persist only unambiguous work names after an explicit UI confirmation."""
+    api = api or MegaplanAPI()
+    deal = api._call('GET', f'/deal/{deal_id}')['data']
+    from position_types import FIELD, WORK, name_kind
+    before = [(str(r['id']), str(r.get('quantity')), str((r.get('sum') or {}).get('value'))) for r in deal.get('positions') or []]
+    changed = []
+    for row in deal.get('positions') or []:
+        offer = row.get('offer') or {}
+        if not offer.get(FIELD) and offer.get('type') == 'product' and name_kind(offer.get('name')) == 'work':
+            api._call('POST', f"/offer/{offer['id']}", json_body={'contentType': 'Offer', FIELD: WORK})
+            changed.append(str(row['id']))
+    if not changed:
+        raise ValueError('Не найдено однозначных типов работ для исправления')
+    checked = api._call('GET', f'/deal/{deal_id}')['data']
+    after = [(str(r['id']), str(r.get('quantity')), str((r.get('sum') or {}).get('value'))) for r in checked.get('positions') or []]
+    if after != before:
+        raise ValueError('Суммы или количества изменились при обновлении типов; КП не выпускаю')
+    return preview(deal_id, api)
+
+
 def publish(deal_id, api=None, recipient=None, expected_fingerprint=None, template='classic', modules=None):
     recipient = ' '.join(str(recipient or '').split())
     if not recipient or len(recipient) > 200:
@@ -355,6 +407,10 @@ if __name__ == '__main__':
             result = ack(spec['deal_id'], spec.get('event'), enqueue=action == 'enqueue')
         elif action == 'preview':
             result = preview(spec['deal_id'])
+        elif action == 'repair_tax':
+            result = repair_tax(spec['deal_id'])
+        elif action == 'repair_position_types':
+            result = repair_position_types(spec['deal_id'])
         else:
             result = publish(spec['deal_id'], recipient=spec.get('recipient'),
                              expected_fingerprint=spec.get('expected_fingerprint'),

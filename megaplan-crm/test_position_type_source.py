@@ -65,6 +65,24 @@ class PositionTypeSourceTests(unittest.TestCase):
   with self.assertRaises(ValueError):apply(api,change)
 
 class ExistingCatalogTypeTests(unittest.TestCase):
+ def test_cloned_offer_types_are_persisted_without_money_changes(self):
+  api=object.__new__(MegaplanAPI)
+  deal={'id':'9','positions':[
+   {'id':'31','quantity':1,'sum':{'value':100},'offer':{'id':'71','name':'Монтажные работы'}},
+   {'id':'32','quantity':2,'sum':{'value':200},'offer':{'id':'72','name':'Контроллер'}},
+  ]}
+  writes=[]
+  def call(method,path,json_body=None):
+   if method=='POST':
+    writes.append((path,json_body)); idx=0 if path.endswith('/71') else 1
+    deal['positions'][idx]['offer'][FIELD]=json_body[FIELD]
+   return {'data':copy.deepcopy(deal)}
+  api._call=Mock(side_effect=call)
+  result=api.persist_cloned_position_types(copy.deepcopy(deal),['work','equipment'])
+  self.assertEqual([x[1][FIELD] for x in writes],[WORK,GOODS])
+  self.assertEqual([r['sum']['value'] for r in result['positions']],[100,200])
+  self.assertEqual([r['quantity'] for r in result['positions']],[1,2])
+
  def test_existing_catalog_work_persists_explicit_type_without_changing_money(self):
   from position_types import prepare_offer
   offer={'id':'7','name':'Монтаж платы','type':'product','price':{'value':100}}

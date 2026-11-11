@@ -671,6 +671,28 @@ class MegaplanAPI:
         result = self._call("POST", "/deal", json_body=payload)
         return result["data"]
 
+    def persist_cloned_position_types(self, deal, kinds):
+        """Copy document types to Megaplan's cloned Offers after deal creation."""
+        from position_types import FIELD, GOODS, WORK, new_offer_type
+        rows = deal.get("positions") or []
+        if len(rows) != len(kinds):
+            raise ValueError("Мегаплан вернул другой состав позиций после создания сделки")
+        before = [(str(r.get("id")), str(r.get("quantity")), str((r.get("sum") or {}).get("value"))) for r in rows]
+        for row, kind in zip(rows, kinds):
+            label = WORK if new_offer_type((row.get("offer") or {}).get("name"), kind) == "service" else GOODS
+            offer_id = (row.get("offer") or {}).get("id")
+            self._call("POST", f"/offer/{offer_id}", json_body={"contentType": "Offer", FIELD: label})
+        checked = self._call("GET", f"/deal/{deal['id']}")["data"]
+        after_rows = checked.get("positions") or []
+        after = [(str(r.get("id")), str(r.get("quantity")), str((r.get("sum") or {}).get("value"))) for r in after_rows]
+        if after != before:
+            raise ValueError("Количество или сумма позиции изменились при сохранении типа")
+        for row, kind in zip(after_rows, kinds):
+            expected = WORK if new_offer_type((row.get("offer") or {}).get("name"), kind) == "service" else GOODS
+            if (row.get("offer") or {}).get(FIELD) != expected:
+                raise ValueError("Тип позиции не сохранился в клоне Мегаплана")
+        return checked
+
     def resolve_tax_id(self, tax_mode):
         """Resolve none/5/22 to an existing Megaplan Tax id."""
         desired_rate = -1 if str(tax_mode).lower() in ("none", "no_vat", "без ндс") else int(tax_mode)
@@ -822,7 +844,7 @@ class MegaplanAPI:
             resolved_by_tier = parsed.get("resolved") or []
             unresolved = parsed.get("unresolved") or []
 
-        positions, ledger_entries = [], []
+        positions, ledger_entries, document_types = [], [], []
 
         for it in preset_items:
             offer_id = self.find_or_create_offer(
@@ -830,6 +852,7 @@ class MegaplanAPI:
                 cost_material=it.get("cost_material"), cost_work=it.get("cost_work"), kind=it.get("kind"),
             )
             positions.append({"offer_id": offer_id, "qty": it["qty"], "unit_price": it["unit_price"]})
+            document_types.append(it.get("kind"))
             ledger_entries.append({
                 "offer_id": offer_id, "name": it["name"], "qty": it["qty"],
                 "sell_price": it["unit_price"],
@@ -847,6 +870,7 @@ class MegaplanAPI:
             # means confirming whatever cost came along with it.
             sell_price = candidate["price"]
             positions.append({"offer_id": candidate["id"], "qty": it["qty"], "unit_price": sell_price})
+            document_types.append(it.get("kind"))
             ledger_entries.append({
                 "offer_id": candidate["id"], "name": it["name"], "qty": it["qty"],
                 "sell_price": sell_price,
@@ -858,6 +882,7 @@ class MegaplanAPI:
         for r in resolved_by_tier:
             offer_id = self.find_or_create_offer(r["name"], r["sell_price"], cost_material=r.get("cost_price"))
             positions.append({"offer_id": offer_id, "qty": r["qty"], "unit_price": r["sell_price"]})
+            document_types.append(r.get("kind"))
             ledger_entries.append({
                 "offer_id": offer_id, "name": r["name"], "qty": r["qty"],
                 "sell_price": r["sell_price"],
@@ -871,6 +896,7 @@ class MegaplanAPI:
             name = u["name"] + UNRESOLVED_SUFFIX
             offer_id = self.find_or_create_offer(name, 0)
             positions.append({"offer_id": offer_id, "qty": u["qty"], "unit_price": 0})
+            document_types.append(u.get("kind"))
             ledger_entries.append({
                 "offer_id": offer_id, "name": name, "qty": u["qty"],
                 "sell_price": 0, "cost_material": None, "cost_work": None, "price_source": "unresolved",
@@ -886,6 +912,7 @@ class MegaplanAPI:
         # (unverified whether it does) - GET /deal/{id} is already the established,
         # tested way to see real position/offer_row ids (see Phase 1's live tests).
         deal = self._call("GET", f"/deal/{deal['id']}")["data"]
+        deal = self.persist_cloned_position_types(deal, document_types)
         upsert_deal_browser_cache(deal)
 
         # IMPORTANT (discovered 2026-08-23, real deal 879): Мегаплан CLONES each
@@ -967,7 +994,8 @@ if __name__ == "__main__":
                     cost_material=item.get("cost_material"), cost_work=item.get("cost_work"),
                     unit_id=item.get("unit_id", "1"), kind=item.get("kind"),
                 )
-                positions.append({"offer_id": offer_id, "qty": item["qty"], "unit_price": item["unit_price"]})
+                positions.append({"offer_id": offer_id, "qty": item["qty"], "unit_price": item["unit_price"],
+                                  "kind": item.get("kind")})
             deal = api.create_deal_with_positions(
                 contractor_id, resolved_client_kind, positions,
                 description=spec.get("description"), custom_fields=spec.get("custom_fields"), tax_id=tax_id,
@@ -977,6 +1005,7 @@ if __name__ == "__main__":
             # existed only in create-deal-from-spec, so fully-priced KP deals vanished
             # from "recent deals" and their positions looked empty (real deal 887).
             deal = api._call("GET", f"/deal/{deal['id']}")["data"]
+            deal = api.persist_cloned_position_types(deal, [item.get("kind") for item in spec["items"]])
             # Megaplan clones every catalog Offer attached to a deal. Cost fields set
             # on the source offer therefore do not reliably survive. Copy economics
             # to the actual cloned offers before building the ledger.
