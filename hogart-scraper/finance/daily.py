@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from ledger import ROOT, connect, import_zip
 
 from mail_intake import retrieve
+import bank_reconciliation_queue
 
 def health(db):
     today=dt.datetime.now(ZoneInfo('Europe/Moscow')).date(); yesterday=today-dt.timedelta(days=1)
@@ -50,14 +51,13 @@ def error_text(exc):
 
 
 def project_and_reconcile(py=None):
-    """Publish linked postings, then idempotently reconcile supplier invoices."""
+    """Publish linked postings, then request reconciliation from its owner."""
     py = py or os.environ.get('STATEMENT_REPORT_PYTHON','/home/kocher.av/.report-venv/bin/python')
     projection = subprocess.run([py, str(ROOT/'bank_registry_projection.py')], check=True,
                                 capture_output=True, text=True)
-    procurement = subprocess.run(
-        [py, '/home/kocher.av/megaplan-crm/procurement_workflow.py'],
-        input=json.dumps({'action': 'reconcile_bank'}), check=True, capture_output=True, text=True)
-    return {'registry': json.loads(projection.stdout), 'procurement': json.loads(procurement.stdout)}
+    procurement = bank_reconciliation_queue.enqueue(
+        '/home/kocher.av/megaplan-crm/bank_statement_registry.json')
+    return {'registry': json.loads(projection.stdout), 'procurement': procurement}
 
 
 def main():
