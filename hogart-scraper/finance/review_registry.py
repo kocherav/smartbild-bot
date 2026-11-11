@@ -170,12 +170,12 @@ def document_projection(registry):
             'missing':[],'found':[],'pending_assistant_review':[]}
     excluded={'Покупки по корпоративной карте','Перевод между своими счетами','Взыскание','Штрафы','Страховые взносы','Связь','Выдача под отчёт'}
     for t in active(registry):
-        if t['kind'] not in ('bank_review','primary_document'):continue
+        if t.get('kind') not in ('bank_review','primary_document') or not t.get('bank_row'):continue
         r=t['bank_row']
-        if r['direction']!='out' or r['group']!='Внешняя' or r['category'] in excluded:continue
+        if r.get('direction')!='out' or r.get('group')!='Внешняя' or r.get('category') in excluded:continue
         rr=refs(r);known=bool(rr) and all((r['inn'],n) in KNOWN for n in rr)
-        row=[r['counterparty'],r['inn'],r['company'],'; '.join(rr) or 'Номер отсутствует',r['date']+' №'+r['number'],1,r['amount_cents']/100,t['action'],t['evidence'],r['purpose']]
-        result['found' if known else ('missing' if t['owner']=='user' else 'pending_assistant_review')].append(row)
+        row=[r.get('counterparty',''),r.get('inn',''),r.get('company',''),'; '.join(rr) or 'Номер отсутствует',str(r.get('date',''))+' №'+str(r.get('number','')),1,(r.get('amount_cents') or 0)/100,t.get('action',''),t.get('evidence',''),r.get('purpose','')]
+        result['found' if known else ('missing' if t.get('owner')=='user' else 'pending_assistant_review')].append(row)
     return result
 
 def resolve_manual(task_id, evidence, root=ROOT):
