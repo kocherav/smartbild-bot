@@ -47,6 +47,7 @@ import closing_runtime
 import product_matching_runtime
 import allocation_runtime
 import procurement_intake_runtime
+import bank_reconciliation_runtime
 import math
 from workflow_runtime import Store as WorkflowStore
 from ui_context import StateStore
@@ -12466,6 +12467,15 @@ def main():
             run_singleton_background_job("product-matching", product_matching_runtime.poll, token, authorized_chat_id)
             run_singleton_background_job("procurement-intake", procurement_intake_runtime.poll_in_environment, token, authorized_chat_id)
             run_singleton_background_job("supplier-allocation", allocation_runtime.poll_in_environment, token, authorized_chat_id)
+            def reconcile_requested_bank_payments():
+                outcome = bank_reconciliation_runtime.poll(run_procurement_workflow)
+                if outcome and not outcome.get("ok") and outcome.get("notify_owner"):
+                    send_message(token, authorized_chat_id,
+                                 "⚠️ Отложенная сверка оплат поставщикам не выполнена. "
+                                 "Запрос сохранён и будет повторён; причина: " + outcome["error"])
+                return outcome
+            run_singleton_background_job("bank-reconciliation", reconcile_requested_bank_payments,
+                                         token, authorized_chat_id)
             next_closing_check = time.time() + 60
         if not draining_reload and time.time() >= next_transition_retry:
             if durable_json.read(PENDING_TRANSITIONS_FILE, dict):
