@@ -725,6 +725,14 @@ DEAL_PROPOSAL_CONFIRM_KEYBOARD = {
     'keyboard': [[{'text': '✅ Создать PDF КП'}], [{'text': '❌ Отмена'}]],
     'resize_keyboard': True, 'one_time_keyboard': True,
 }
+DEAL_PROPOSAL_TAX_REPAIR_KEYBOARD = {
+    'keyboard': [[{'text': '✅ Обновить НДС и продолжить КП'}], [{'text': '❌ Отмена'}]],
+    'resize_keyboard': True, 'one_time_keyboard': True,
+}
+DEAL_PROPOSAL_TYPE_REPAIR_KEYBOARD = {
+    'keyboard': [[{'text': '✅ Исправить типы работ и продолжить КП'}], [{'text': '❌ Отмена'}]],
+    'resize_keyboard': True, 'one_time_keyboard': True,
+}
 HUMAN_PAYER_CONFIRM_KEYBOARD = {
     'keyboard': [[{'text': '✅ Сменить плательщика'}], [{'text': '❌ Отмена'}]],
     'resize_keyboard': True, 'one_time_keyboard': True,
@@ -4905,6 +4913,29 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         send_message(token, chat_id, f'Кому адресовать КП по сделке №{target}?\nУкажите имя/ФИО или готовое обращение, например: «Уважаемая Татьяна,». Клиента самой сделки это не меняет.', PAYER_UPLOAD_KEYBOARD)
         return True
     proposal_state = current_deal_ui_state(chat_id)
+    if proposal_state.get('pending') in ('proposal_tax_repair', 'proposal_type_repair'):
+        expected = ('✅ Обновить НДС и продолжить КП' if proposal_state['pending'] == 'proposal_tax_repair'
+                    else '✅ Исправить типы работ и продолжить КП')
+        if value == expected:
+            target = proposal_state.get('proposal_deal_id')
+            recipient = proposal_state.get('proposal_recipient')
+            action = 'repair_tax' if proposal_state['pending'] == 'proposal_tax_repair' else 'repair_position_types'
+            repaired = run_deal_proposal({'action': action, 'deal_id': str(target)})
+            if not repaired.get('ok'):
+                send_message(token, chat_id, 'Исправление не применено: ' + repaired.get('error', 'ошибка проверки'), PAYER_UPLOAD_KEYBOARD)
+                return True
+            if repaired.get('next_error'):
+                error = repaired['next_error']
+                if 'старый тип «Товар» противоречит названию работы' in error:
+                    update_deal_ui_state(chat_id, pending='proposal_type_repair', proposal_deal_id=str(target),
+                                         proposal_recipient=recipient)
+                    send_message(token, chat_id, 'НДС обновлён и проверен. ' + error +
+                                 '\nТеперь подтвердите исправление только однозначных типов работ.', DEAL_PROPOSAL_TYPE_REPAIR_KEYBOARD)
+                    return True
+                send_message(token, chat_id, 'НДС обновлён, но осталась отдельная проверка: ' + error, PAYER_UPLOAD_KEYBOARD)
+                return True
+            show_deal_proposal_preview(token, chat_id, target, recipient, repaired)
+            return True
     resume_label = proposal_resume_label(proposal_state)
     if resume_label and value == resume_label:
         draft = proposal_state['proposal_draft']
@@ -4927,15 +4958,20 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                 return True
             preview = run_deal_proposal({'action': 'preview', 'deal_id': str(target), 'recipient': recipient})
             if not preview.get('ok'):
+                error = preview.get('error', 'ошибка проверки')
+                if 'По политике продавца требуется НДС' in error:
+                    update_deal_ui_state(chat_id, pending='proposal_tax_repair', proposal_deal_id=str(target),
+                                         proposal_recipient=recipient)
+                    send_message(token, chat_id, error + '\nСуммы и количества не изменятся. Подтвердите обновление ставки всех позиций и продолжение КП.', DEAL_PROPOSAL_TAX_REPAIR_KEYBOARD)
+                    return True
+                if 'старый тип «Товар» противоречит названию работы' in error:
+                    update_deal_ui_state(chat_id, pending='proposal_type_repair', proposal_deal_id=str(target),
+                                         proposal_recipient=recipient)
+                    send_message(token, chat_id, error + '\nБот исправит только однозначные названия работ; суммы и количества не изменятся.', DEAL_PROPOSAL_TYPE_REPAIR_KEYBOARD)
+                    return True
                 send_message(token, chat_id, 'Не удалось прочитать состав сделки: ' + preview.get('error', 'ошибка проверки'), PAYER_UPLOAD_KEYBOARD)
                 return True
-            rows = '\n'.join(f'• {row["name"]}: {row["qty"]} {row["unit"]} — {bank_money(row["total"])} ₽' for row in preview['rows'])
-            update_deal_ui_state(chat_id, pending='proposal_confirm', proposal_deal_id=str(target),
-                                 proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'])
-            send_message(token, chat_id,
-                         f'📄 Предпросмотр КП по сделке №{target}\nАдресат: {recipient}\n'
-                         f'{preview["count"]} позиции:\n\n{rows}\n\n'
-                         f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.', DEAL_PROPOSAL_CONFIRM_KEYBOARD)
+            show_deal_proposal_preview(token, chat_id, target, recipient, preview)
             return True
         update_deal_ui_state(chat_id, pending=None, proposal_deal_id=None)
     proposal_state = current_deal_ui_state(chat_id)
@@ -7799,6 +7835,16 @@ def run_deal_proposal(spec):
         return json.loads(result.stdout)
     except Exception:
         return {'ok': False, 'error': 'Не удалось завершить формирование КП. Повторная попытка не создаст новую сделку.'}
+
+
+def show_deal_proposal_preview(token, chat_id, target, recipient, preview):
+    rows = '\n'.join(f'• {row["name"]}: {row["qty"]} {row["unit"]} — {bank_money(row["total"])} ₽' for row in preview['rows'])
+    update_deal_ui_state(chat_id, pending='proposal_confirm', proposal_deal_id=str(target),
+                         proposal_recipient=recipient, proposal_fingerprint=preview['fingerprint'])
+    send_message(token, chat_id,
+                 f'📄 Предпросмотр КП по сделке №{target}\nАдресат: {recipient}\n'
+                 f'{preview["count"]} позиции:\n\n{rows}\n\n'
+                 f'Итого: {bank_money(preview["total"])} ₽. PDF ещё не создан.', DEAL_PROPOSAL_CONFIRM_KEYBOARD)
 
 
 def send_deal_proposal(token, chat_id, deal_id, automatic=False, recipient=None, expected_fingerprint=None):
