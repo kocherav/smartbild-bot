@@ -1,0 +1,38 @@
+{
+  "circuits": [
+    {
+      "host": "cclimat.megaplan.ru",
+      "until": 0.0,
+      "failures": 0,
+      "reason": "",
+      "until_utc": ""
+    }
+  ],
+  "notices": [
+    {
+      "host": "uncertain-writes",
+      "state": "1"
+    },
+    {
+      "host": "cclimat.megaplan.ru",
+      "state": "ok"
+    }
+  ],
+  "notice_times": [
+    {
+      "host": "cclimat.megaplan.ru",
+      "at": 1794515290.1757193,
+      "at_utc": "2026-11-12T20:28:10.175719Z"
+    }
+  ],
+  "uncertain": [
+    {
+      "fingerprint": "d3638ec49e27a13197e269a1b9c2da0b06626fd953d3aa2a9a04167295c5ef3a",
+      "host": "cclimat.megaplan.ru",
+      "method": "POST",
+      "path": "/api/v3/deal/903/applyTransition",
+      "at": 1793176224.5368104,
+      "at_utc": "2026-10-28T08:30:24.536810Z"
+    }
+  ]
+}
