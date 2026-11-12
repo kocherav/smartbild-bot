@@ -2,10 +2,12 @@
 import csv
 import datetime
 import json
+import os
 import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import smartbild_kp as k
 
@@ -89,14 +91,39 @@ class Inputs(unittest.TestCase):
             k.build_inputs(data, [], '', datetime.date(2026, 11, 11))
 
 
-@unittest.skipUnless((k.KP_DIR / 'node_modules' / 'playwright').is_dir(),
-                     'зависимости шаблона не установлены (npm ci в kp-smartbild)')
-class RealRender(unittest.TestCase):
-    def test_kp906_from_crm_rows_renders_pdf_and_word_with_the_exact_total(self):
+class RenderBoundary(unittest.TestCase):
+    def test_crm_rows_cross_both_renderers_and_verify_the_exact_pdf_total(self):
+        calls = []
+
+        def runner(command, **options):
+            calls.append((command, options))
+            deal_data = json.loads(Path(command[-1]).read_text(encoding='utf-8'))
+            suffix = '.pdf' if Path(command[1]).name == 'build.cjs' else '.docx'
+            Path(command[-1]).with_name(f"КП_{deal_data['out']}{suffix}").write_bytes(b'x' * 10001)
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+
         with tempfile.TemporaryDirectory() as folder:
             rows = kp906_rows()
-            pdf, docx = k.render(deal(rows), k.suggest_modules(rows), 'Сергей', datetime.date(2026, 11, 11), folder)
-            self.assertTrue(pdf.stat().st_size > 10000); self.assertTrue(docx.stat().st_size > 10000)
+            pdf, docx = k.render(
+                deal(rows), k.suggest_modules(rows), 'Сергей', datetime.date(2026, 11, 11), folder,
+                runner=runner, pdf_text_reader=lambda _path: 'Итого 839 452,00 руб.')
+            self.assertGreater(pdf.stat().st_size, 10000)
+            self.assertGreater(docx.stat().st_size, 10000)
+        self.assertEqual(['build.cjs', 'build_docx.cjs'], [Path(call[0][1]).name for call in calls])
+        self.assertTrue(all(call[1]['capture_output'] and call[1]['timeout'] == 240 for call in calls))
+
+
+# The real Node/Playwright render remains an integration check for an installed
+# template runtime.  The source-only gate deliberately does not discover it:
+# subprocesses are forbidden there and are covered through RenderBoundary.
+if (k.KP_DIR / 'node_modules' / 'playwright').is_dir() and not os.environ.get('SMARTBILD_OFFLINE_TESTS'):
+    class RealRender(unittest.TestCase):
+        def test_kp906_from_crm_rows_renders_pdf_and_word_with_the_exact_total(self):
+            with tempfile.TemporaryDirectory() as folder:
+                rows = kp906_rows()
+                pdf, docx = k.render(deal(rows), k.suggest_modules(rows), 'Сергей',
+                                     datetime.date(2026, 11, 11), folder)
+                self.assertTrue(pdf.stat().st_size > 10000); self.assertTrue(docx.stat().st_size > 10000)
 
 
 if __name__ == '__main__':

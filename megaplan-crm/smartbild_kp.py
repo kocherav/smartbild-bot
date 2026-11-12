@@ -139,7 +139,8 @@ def build_inputs(data, modules, recipient, moment, kp_dir=KP_DIR):
     return deal, out.getvalue()
 
 
-def render(data, modules, recipient, moment, folder, runner=subprocess.run, kp_dir=KP_DIR):
+def render(data, modules, recipient, moment, folder, runner=subprocess.run, kp_dir=KP_DIR,
+           pdf_text_reader=None):
     """Render PDF and Word into ``folder``; returns their paths."""
     deal, table = build_inputs(data, modules, recipient, moment, kp_dir)
     folder = Path(folder)
@@ -156,8 +157,11 @@ def render(data, modules, recipient, moment, folder, runner=subprocess.run, kp_d
     pdf, docx = folder / f"КП_{deal['out']}.pdf", folder / f"КП_{deal['out']}.docx"
     if not pdf.is_file() or not docx.is_file():
         raise ValueError('Шаблон SmartBild не создал PDF или Word')
-    from pypdf import PdfReader
-    text = ' '.join((page.extract_text() or '') for page in PdfReader(str(pdf)).pages)
+    if pdf_text_reader is None:
+        from pypdf import PdfReader
+        pdf_text_reader = lambda path: ' '.join(
+            (page.extract_text() or '') for page in PdfReader(str(path)).pages)
+    text = pdf_text_reader(pdf)
     text = text.replace('\xa0', ' ').replace('\u202f', ' ')
     expected = f"{_dec(data['total']):,.2f}".replace(',', ' ').replace('.', ',')
     if expected not in text:
