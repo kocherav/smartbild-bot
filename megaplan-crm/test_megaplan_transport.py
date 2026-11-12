@@ -80,7 +80,7 @@ class TransportTest(unittest.TestCase):
         from unittest.mock import MagicMock
         with patch.object(t.socket,'create_connection',return_value=MagicMock()) as probe:
             self.assertTrue(t.reachable());self.assertTrue(t.reachable());probe.assert_called_once()
-            self.error(503);self.assertFalse(t.reachable());probe.assert_called_once()
+            self.outage(503);self.assertFalse(t.reachable());probe.assert_called_once()
 
     def test_minute_budget(self):
         with patch.object(t,'MINUTE_LIMIT',1):
@@ -127,6 +127,53 @@ class TransportTest(unittest.TestCase):
             for thread in threads:thread.join()
         self.assertEqual([],errors);self.assertEqual(1,maximum)
 
+    def outage(self,code=503,age=0):
+        """A real outage: FAILURE_THRESHOLD failures in a row, the first one `age` seconds ago."""
+        for _ in range(t.FAILURE_THRESHOLD):
+            with t.connect() as db:db.execute('UPDATE circuits SET until=0')
+            self.error(code)
+        if age:
+            with t.connect() as db:db.execute('UPDATE circuits SET since=since-?',(age,))
+
+    def test_single_timeout_does_not_pause_other_requests(self):
+        # 12.11 (owner screenshot): one slow answer paused everyone and produced a notice pair.
+        with patch.object(urllib.request,'urlopen',side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                with t.urlopen(self.request()):pass
+        self.assertFalse(t.paused())
+        self.assertEqual(b'{}',self.success())
+
+    def test_repeated_failures_pause_and_back_off(self):
+        self.outage(503)
+        self.assertTrue(t.paused())
+        with t.connect() as db:
+            row=db.execute('SELECT until,failures FROM circuits').fetchone()
+        self.assertEqual(t.FAILURE_THRESHOLD,row['failures'])
+
+    def test_success_between_failures_resets_the_streak(self):
+        self.error(503);self.success();self.error(503);self.error(503)
+        self.assertFalse(t.paused(),'серия прервана успешным ответом')
+
+    def test_short_outage_is_not_announced(self):
+        messages=[];send=lambda msg:messages.append(msg) or True
+        self.outage(503,age=60)
+        t.notify_status(send)
+        self.assertEqual([],messages,'сбой короче 10 минут — без сообщения владельцу')
+        with t.connect() as db:db.execute('UPDATE circuits SET until=0')
+        self.success()
+        with t.connect() as db:db.execute("UPDATE calls SET at=at-601 WHERE status!='ok'")
+        t.notify_status(send)
+        self.assertEqual([],messages,'и без «снова ответил», раз предупреждения не было')
+
+    def test_429_still_pauses_at_once(self):
+        self.error(429,headers={'Retry-After':'120'})
+        self.assertTrue(t.paused())
+
+    def test_call_duration_is_recorded(self):
+        self.success()
+        with t.connect() as db:
+            self.assertIsNotNone(db.execute('SELECT seconds FROM calls').fetchone()[0])
+
     def test_uncertain_write_never_replayed_after_timeout(self):
         req=self.request('POST',b'{"price":10}')
         with patch.object(urllib.request,'urlopen',side_effect=TimeoutError):
@@ -150,10 +197,11 @@ class TransportTest(unittest.TestCase):
         self.error(500,'POST')
         with t.connect() as db:self.assertEqual(1,db.execute('SELECT count(*) FROM uncertain').fetchone()[0])
 
-    def test_malformed_json_pauses(self):
-        with patch.object(urllib.request,'urlopen',return_value=io.BytesIO(b'<html>')):
-            with self.assertRaises(ValueError):
-                with t.urlopen(self.request()) as r:json.loads(r.read())
+    def test_malformed_json_pauses_when_repeated(self):
+        for _ in range(t.FAILURE_THRESHOLD):
+            with patch.object(urllib.request,'urlopen',return_value=io.BytesIO(b'<html>')):
+                with self.assertRaises(ValueError):
+                    with t.urlopen(self.request()) as r:json.loads(r.read())
         self.assertTrue(t.paused())
 
     def test_401_does_not_cause_login_storm(self):
@@ -187,7 +235,7 @@ class TransportTest(unittest.TestCase):
                 with self.assertRaises(t.ProtectionPause):self.success()
 
     def test_notice_once_and_only_confirmed_recovery(self):
-        self.error(503);messages=[]
+        self.outage(503,age=t.OUTAGE_NOTICE_AFTER+1);messages=[]
         send=lambda msg:messages.append(msg) or True
         t.notify_status(send);t.notify_status(send);self.assertEqual(1,len(messages))
         with t.connect() as db:db.execute('UPDATE circuits SET until=0')
@@ -200,13 +248,13 @@ class TransportTest(unittest.TestCase):
         messages=[];send=lambda msg:messages.append(msg) or True
         for code in (503,502,429,401):
             with t.connect() as db:db.execute('UPDATE circuits SET until=0')
-            self.error(code);t.notify_status(send)
+            self.outage(code,age=t.OUTAGE_NOTICE_AFTER+1);t.notify_status(send)
             with t.connect() as db:db.execute('UPDATE circuits SET until=0')
             self.success();t.notify_status(send)
         self.assertEqual(1,len(messages))
 
     def test_failed_notice_delivery_is_retried(self):
-        self.error(503);t.notify_status(lambda msg:False)
+        self.outage(503,age=t.OUTAGE_NOTICE_AFTER+1);t.notify_status(lambda msg:False)
         messages=[];t.notify_status(lambda msg:messages.append(msg) or True)
         self.assertEqual(1,len(messages))
 
