@@ -14,7 +14,7 @@ const KEYS = { 'Почему автоматизация': 'why', 'Модуль �
   'Модуль · Медиа': 'media', 'Модуль · Уведомления': 'telegram', 'Модуль · Сценарии': 'scenes' };
 (async () => {
   const { chromium } = require('playwright');
-  const b = await chromium.launch();
+  const b = await chromium.launch({ args: ['--disable-dev-shm-usage', '--no-sandbox'], ...(process.env.KP_CHROMIUM_PATH ? { executablePath: process.env.KP_CHROMIUM_PATH } : {}) });
   const p = await b.newPage({ viewport: { width: 1123, height: 794 }, deviceScaleFactor: 2 });
   await p.goto('file://' + html); await p.waitForTimeout(500);
   const pages = await p.$$('section.page');
