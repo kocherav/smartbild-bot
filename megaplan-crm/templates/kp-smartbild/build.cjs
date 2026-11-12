@@ -159,7 +159,7 @@ const base = path.join(path.dirname(dealPath), 'КП_' + (D.out || path.basename
 fs.writeFileSync(base + '.html', html);
 (async () => {
   const { chromium } = require('playwright');
-  const b = await chromium.launch(); const p = await b.newPage();
+  const b = await chromium.launch({ args: ['--disable-dev-shm-usage', '--no-sandbox'], ...(process.env.KP_CHROMIUM_PATH ? { executablePath: process.env.KP_CHROMIUM_PATH } : {}) }); const p = await b.newPage();
   await p.goto('file://' + base + '.html'); await p.waitForTimeout(400);
   await p.pdf({ path: base + '.pdf', width: '297mm', height: '210mm', printBackground: true, margin: { top: 0, right: 0, bottom: 0, left: 0 } });
   if (process.argv.includes('--png')) {

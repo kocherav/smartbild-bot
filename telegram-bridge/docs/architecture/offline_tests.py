@@ -33,6 +33,12 @@ def main():
     sys.dont_write_bytecode = True
     with tempfile.TemporaryDirectory(prefix='smartbild-offline-') as temporary:
         sandbox = Path(temporary).resolve()
+        # Test modules can use this explicit capability marker to replace an
+        # external-process boundary with an injected local double.  Merely
+        # finding an untracked runtime (for example node_modules on a service
+        # host) must not make a source-only gate start a child process.
+        previous_offline = os.environ.get('SMARTBILD_OFFLINE_TESTS')
+        os.environ['SMARTBILD_OFFLINE_TESTS'] = '1'
         paths, names, source_hashes = [], [], {}
         for project in PROJECTS:
             target = sandbox / project.name
@@ -156,6 +162,10 @@ def main():
             enabled = False
             os.path.expanduser = original_expanduser
             os.chdir(original_cwd)
+            if previous_offline is None:
+                os.environ.pop('SMARTBILD_OFFLINE_TESTS', None)
+            else:
+                os.environ['SMARTBILD_OFFLINE_TESTS'] = previous_offline
         output = stream.getvalue()
         print(output)
         report = {'ran_at':dt.datetime.now(dt.timezone.utc).isoformat(),'source_hashes':source_hashes,'source_dirs':sorted({str(Path(p).parent) for p in source_hashes if p.endswith('.py')}),'asset_globs':asset_globs,'tests': result.testsRun, 'failures': len(result.failures), 'errors': len(result.errors),
