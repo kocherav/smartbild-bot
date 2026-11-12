@@ -27,6 +27,13 @@ BACKGROUND_LIMIT = 400
 MIN_INTERVAL = 3.0
 NOTICE_INTERVAL = 3600
 RECOVERY_QUIET = 600
+# 12.11 (owner): a single slow answer paused every request for everyone and produced a
+# «⚠️ защита … / ✅ снова ответил» pair several times an evening. Transient failures
+# (timeout, connection, 5xx, malformed reply) now open the host circuit only after
+# FAILURE_THRESHOLD in a row; 429 and 401 are Megaplan's own signals and still pause at once.
+FAILURE_THRESHOLD = 3
+# The owner is told only about an outage that lasts; short blips stay in the log.
+OUTAGE_NOTICE_AFTER = 600
 
 
 class ProtectionPause(RuntimeError):
@@ -57,6 +64,12 @@ def connect():
         db.execute("ALTER TABLE endpoints ADD COLUMN method TEXT NOT NULL DEFAULT '*'")
     # Preserve active cooldowns created by the old schema, but narrow them from
     # wildcard to the operation that actually received 403.
+    circuit_columns={row[1] for row in db.execute('PRAGMA table_info(circuits)')}
+    if 'since' not in circuit_columns:
+        db.execute('ALTER TABLE circuits ADD COLUMN since REAL DEFAULT 0')
+    call_columns={row[1] for row in db.execute('PRAGMA table_info(calls)')}
+    if 'seconds' not in call_columns:
+        db.execute('ALTER TABLE calls ADD COLUMN seconds REAL')
     db.execute('''UPDATE endpoints SET method=COALESCE((
         SELECT calls.method FROM calls
         WHERE calls.host=endpoints.host AND calls.path=endpoints.path AND calls.status='403'
@@ -180,12 +193,13 @@ def urlopen(request, timeout=30):
             # cannot lose it. A confirmed response removes it below.
             if write:db.execute('INSERT INTO uncertain VALUES(?,?,?,?,?)',(fingerprint,host,method,path,now))
             db.commit()
+            started=time.monotonic()
             try:
                 with urllib.request.urlopen(request,timeout=min(timeout,60)) as response:
                     yield response
-                db.execute('UPDATE calls SET status=? WHERE id=?',('ok',call_id))
+                db.execute('UPDATE calls SET status=?,seconds=? WHERE id=?',('ok',round(time.monotonic()-started,3),call_id))
                 if write:db.execute('DELETE FROM uncertain WHERE fingerprint=?',(fingerprint,))
-                db.execute("INSERT INTO circuits(host) VALUES(?) ON CONFLICT(host) DO UPDATE SET until=0,failures=0,reason=''",(host,))
+                db.execute("INSERT INTO circuits(host) VALUES(?) ON CONFLICT(host) DO UPDATE SET until=0,failures=0,reason='',since=0",(host,))
                 db.commit()
             except (urllib.error.URLError,OSError,ValueError,http.client.HTTPException) as exc:
                 status=getattr(exc,'code',None);failures=(row['failures'] if row else 0)+1
@@ -199,13 +213,21 @@ def urlopen(request, timeout=30):
                     delay=0
                     db.execute('INSERT OR REPLACE INTO endpoints(host,path,until,method) VALUES(?,?,?,?)',
                                (host,path,time.time()+1800,method))
-                elif status is None or status>=500:delay=min(900,30*2**min(failures-1,5))
+                elif status is None or status>=500:
+                    # Transient: pause only when it repeats, then back off exponentially.
+                    delay=min(900,30*2**min(failures-FAILURE_THRESHOLD,5)) if failures>=FAILURE_THRESHOLD else 0
                 # 4xx is a confirmed rejection, not an uncertain commit.
                 if write and status is not None and 400<=status<500:
                     db.execute('DELETE FROM uncertain WHERE fingerprint=?',(fingerprint,))
-                db.execute('UPDATE calls SET status=? WHERE id=?',(reason,call_id))
-                if delay:
-                    db.execute('INSERT OR REPLACE INTO circuits VALUES(?,?,?,?)',(host,time.time()+delay,failures,reason))
+                db.execute('UPDATE calls SET status=?,seconds=? WHERE id=?',(reason,round(time.monotonic()-started,3),call_id))
+                if status!=403:
+                    since=(row['since'] if row and row['failures'] and row['since'] else time.time())
+                    until=time.time()+delay if delay else 0
+                    # A failure below the threshold is remembered (to count the streak) but
+                    # does not pause and does not change what the owner is told.
+                    shown=reason if delay else ((row['reason'] if row else '') or '')
+                    db.execute('INSERT OR REPLACE INTO circuits(host,until,failures,reason,since) VALUES(?,?,?,?,?)',
+                               (host,until,failures,shown,since))
                 db.commit()
                 raise
 
@@ -228,6 +250,8 @@ def notify_status(send):
             now=time.time()
             last_notice=db.execute('SELECT at FROM notice_times WHERE host=?',(host,)).fetchone()
             if state!='ok' and last_notice and now-last_notice[0]<NOTICE_INTERVAL:continue
+            # Tell the owner only about an outage that lasts, not a short blip.
+            if state!='ok' and (not row['since'] or now-row['since']<OUTAGE_NOTICE_AFTER):continue
             if state=='ok':
                 last_failure=db.execute("SELECT max(at) FROM calls WHERE host=? AND status NOT IN ('ok','started')",(host,)).fetchone()[0]
                 blocked=db.execute('SELECT 1 FROM endpoints WHERE host=? AND until>?',(host,now)).fetchone()
