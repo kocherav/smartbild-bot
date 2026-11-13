@@ -83,10 +83,10 @@ function renderScope(rows){
 function render(){
   $('#stage-filter').value=state.stage;$('#hide-zero').checked=state.hideZero==='1';
   const rows=filtered(), age=(Date.now()-new Date(data.synced_at))/60000;
-  $('#sync-info').innerHTML=`<span><i class="live-dot"></i> Мегаплан · ${esc(new Date(data.synced_at).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))} МСК</span><span>Автообновление CRM каждые 10 минут</span><span>Выписки: ${(data.bank_status?.accounts||[]).map(a=>esc(a.company)+" по "+esc(datefmt(a.complete_through))).join(" · ")||"дата не подтверждена"}</span><span>Выбрано ${rows.length} из ${data.deals.filter(d=>!d.is_purchase).length} продаж</span>`;
-  const stale=age>30||data.sync_status.ok===false;
+  $('#sync-info').innerHTML=`<span><i class="live-dot"></i> Мегаплан · ${esc(new Date(data.synced_at).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))} МСК</span><span>Автообновление CRM раз в час</span><span>Выписки: ${(data.bank_status?.accounts||[]).map(a=>esc(a.company)+" по "+esc(datefmt(a.complete_through))).join(" · ")||"дата не подтверждена"}</span><span>Выбрано ${rows.length} из ${data.deals.filter(d=>!d.is_purchase).length} продаж</span>`;
+  const stale=age>90||data.sync_status.ok===false;
   $('#banner').hidden=!stale;
-  $('#banner').textContent='Показан последний успешный снимок. '+(data.sync_status.ok===false?'Последнее обновление CRM не удалось. ':'Данные старше 30 минут. ')+'Следующая попытка выполняется автоматически.';
+  $('#banner').textContent='Показан последний успешный снимок. '+(data.sync_status.ok===false?'Последнее обновление CRM не удалось. ':'Данные старше 90 минут. ')+'Следующая попытка выполняется автоматически.';
   renderScope(rows);
   const chips=['result','year','manager','company'].filter(id=>$('#'+id).value!=='all').map(id=>`<button class="chip" data-clear-select="${id}">${esc($('#'+id).selectedOptions[0].textContent)} ×</button>`).join('')+($('#search').value.trim()?`<button class="chip" data-clear-select="search">Поиск: ${esc($('#search').value)} ×</button>`:'');
   $('#active-filters').innerHTML=chips+(state.hideZero==='1'?'<button class="chip" data-clear="hideZero">Скрыты сделки на 0 ₽ ×</button>':'')+(state.alert?`<button class="chip" data-clear="alert">${esc(labels[state.alert])} ×</button>`:'')+(state.stage?`<button class="chip" data-clear="stage">${esc(data.deals.find(d=>d.state_id===state.stage)?.state)} ×</button>`:'')+(state.week?`<button class="chip" data-clear="week">Платежи с ${esc(datefmt(state.week))} ×</button>`:'');
