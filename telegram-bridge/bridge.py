@@ -9402,10 +9402,20 @@ def find_and_send_megaplan_invoice(token, chat_id, query):
     if direct_deal_id and bare_number_match and not explicit_deal_match:
         found = run_contract_invoice({"action": "find_number", "number": direct_deal_id})
         matches = [(None, invoice) for invoice in found.get("invoices") or []] if found.get("ok") else []
-        deals = []
-        if not matches:
-            deal_result = run_deal_browser({"action": "get", "deal_id": direct_deal_id})
-            deals = [deal_result["deal"]] if deal_result.get("ok") and deal_result.get("deal") else []
+        deal_result = run_deal_browser({"action": "get", "deal_id": direct_deal_id})
+        deals = [deal_result["deal"]] if deal_result.get("ok") and deal_result.get("deal") else []
+        foreign = [invoice for _, invoice in matches if str(invoice.get("deal_id") or "") != direct_deal_id]
+        if deals and foreign:
+            # Invoice numbers and deal ids are both counters: «905» may be invoice №905 of
+            # another deal or deal №905. Never send a document of a deal the person did not mean.
+            send_message(token, chat_id,
+                         f"{direct_deal_id} — это и номер счёта (сделка №{foreign[0].get('deal_id') or '?'}), "
+                         f"и номер сделки. Напишите «пришли счёт №{direct_deal_id}» или «пришли счёт по сделке {direct_deal_id}».",
+                         {"keyboard": [[{"text": "⬅️ Главное меню"}]], "resize_keyboard": True})
+            update_deal_ui_state(chat_id, pending="invoice_search")
+            return True
+        if matches:
+            deals = []
     elif direct_deal_id:
         matches = []
         deal_result = run_deal_browser({"action": "get", "deal_id": direct_deal_id})
