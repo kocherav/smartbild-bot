@@ -92,6 +92,27 @@ def _invoice_intent(folded, deal_id):
     return None
 
 
+def _compact_invoice_intent(folded):
+    """Recognize an unambiguously complete invoice command typed without spaces.
+
+    This is deliberately anchored and limited to the same verbs accepted by the
+    ordinary parser: compact arbitrary text must not be guessed into an action.
+    A truncated colloquial ``посделк`` is accepted because the following
+    multi-digit ID makes the document and deal boundary explicit.
+    """
+    compact = re.sub(r"[^a-zа-я0-9]", "", folded)
+    match = re.fullmatch(
+        r"(?P<verb>выстави|сформируй|подготовь|сделай|создай|оформи|пришли|скинь|отправь|дай|покажи|получи|скачай|достань|найди|где)"
+        r"(?:последний)?счетпосделк(?:е|и|у|ой|а)?(?P<deal>\d{2,})",
+        compact,
+    )
+    if not match:
+        return None
+    issue_verbs = {"выстави", "сформируй", "подготовь", "сделай", "создай", "оформи"}
+    return Intent(ISSUE_INVOICE if match.group("verb") in issue_verbs else GET_INVOICE,
+                  match.group("deal"))
+
+
 def _status_intent(original, folded, deal_id):
     asks = (re.search(r"\bстатус", folded) and re.search(r"\b(?:перевед|переведи|перевест|поменя|смени|измени|постав|сдела)\w*|\bсделк", folded)) \
         or (re.search(r"\b(?:перевед|переведи|перевест)\w*\b", folded) and re.search(r"\bсделк", folded))
@@ -145,6 +166,9 @@ def classify(text):
     if not (folded[0].isalnum() or folded[0] in "«\"("):
         # Telegram buttons start with an emoji; their meaning belongs to the screen.
         return None
+    compact_invoice = _compact_invoice_intent(folded)
+    if compact_invoice:
+        return compact_invoice
     deal_id = _deal_id(original)
 
     # «Создай счёт по сделке 900» asks for an invoice, not a new deal.
