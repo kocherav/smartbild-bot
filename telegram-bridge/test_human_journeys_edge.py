@@ -219,6 +219,48 @@ class InvoiceEdgeCases(HumanJourneyCase, unittest.TestCase):
         stand = self.play(journey, setup=office)
         self.assertEqual([], stand.crm.writes)
 
+    def test_find_existing_invoice_from_money_by_bare_number_prefers_invoice(self):
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('311')
+            person.got_document('Счёт №311')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
+    def test_find_existing_invoice_from_money_by_deal_id(self):
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('посделк990001')
+            person.got_document('Счёт №311')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
+    def test_find_existing_invoice_from_money_by_bare_deal_id_falls_back_to_deal(self):
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('990001')
+            person.got_document('Счёт №311')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+
+    def test_bare_number_that_is_both_an_invoice_and_another_deal_asks_which(self):
+        def setup(crm):
+            office(crm)
+            crm.add_invoice('990003', [{'name': 'Кондиционер', 'qty': 1, 'price': 50000}], number='990001')
+
+        def journey(person):
+            yield press('🏦 Деньги')
+            yield press('🔎 Найти счёт')
+            yield say('990001')
+            person.sees('и номер счёта', expected='Неоднозначный номер — бот спрашивает, а не шлёт счёт чужой сделки')
+            yield say('пришли счёт по сделке 990001')
+            person.got_document('Счёт №311')
+        stand = self.play(journey, setup=setup)
+        self.assertEqual([], stand.crm.writes)
+
     def test_issue_invoice_by_phrase_to_the_end(self):
         def journey(person):
             yield say('Выстави счёт по сделке 990001')

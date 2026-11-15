@@ -12,12 +12,16 @@ them in the preview.
 import csv
 import io
 import json
+import os
 import re
 import subprocess
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 KP_DIR = Path(__file__).resolve().parent / 'templates' / 'kp-smartbild'
+# Chromium lives inside the template folder (the bot's user cannot write ~/.cache):
+#   PLAYWRIGHT_BROWSERS_PATH=<KP_DIR>/.browsers npx playwright install chromium
+BROWSERS = '.browsers'
 CENT = Decimal('0.01')
 MONTHS = ('января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа',
           'сентября', 'октября', 'ноября', 'декабря')
@@ -149,8 +153,9 @@ def render(data, modules, recipient, moment, folder, runner=subprocess.run, kp_d
     deal_path = folder / 'deal.json'
     deal_path.write_text(json.dumps(deal, ensure_ascii=False, indent=2), encoding='utf-8')
     for script in ('build.cjs', 'build_docx.cjs'):
+        env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': str(Path(kp_dir) / BROWSERS)}
         result = runner(['node', str(Path(kp_dir) / script), str(deal_path)], cwd=str(kp_dir),
-                        capture_output=True, text=True, timeout=240)
+                        capture_output=True, text=True, timeout=240, env=env)
         if result.returncode != 0:
             tail = ' / '.join((result.stderr or result.stdout or '').strip().splitlines()[-3:])
             raise ValueError(f'Шаблон SmartBild не собрал КП ({script}): {tail[:300]}')

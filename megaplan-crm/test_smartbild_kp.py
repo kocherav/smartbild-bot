@@ -111,12 +111,15 @@ class RenderBoundary(unittest.TestCase):
             self.assertGreater(docx.stat().st_size, 10000)
         self.assertEqual(['build.cjs', 'build_docx.cjs'], [Path(call[0][1]).name for call in calls])
         self.assertTrue(all(call[1]['capture_output'] and call[1]['timeout'] == 240 for call in calls))
+        # Chromium is installed into the template folder, not the unwritable ~/.cache.
+        self.assertTrue(all(call[1]['env']['PLAYWRIGHT_BROWSERS_PATH'] == str(k.KP_DIR / '.browsers')
+                            for call in calls))
 
 
 # The real Node/Playwright render remains an integration check for an installed
 # template runtime.  The source-only gate deliberately does not discover it:
 # subprocesses are forbidden there and are covered through RenderBoundary.
-if (k.KP_DIR / 'node_modules' / 'playwright').is_dir() and not os.environ.get('SMARTBILD_OFFLINE_TESTS'):
+if (k.KP_DIR / '.browsers').is_dir() and not os.environ.get('SMARTBILD_OFFLINE_TESTS'):
     class RealRender(unittest.TestCase):
         def test_kp906_from_crm_rows_renders_pdf_and_word_with_the_exact_total(self):
             with tempfile.TemporaryDirectory() as folder:

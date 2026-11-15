@@ -44,7 +44,7 @@ STATUS = (
 )
 
 INVOICE_FILES = ('пришли счет по сделке 990001', 'скинь счёт по 990001', 'где счёт по сделке 990001?',
-                 'дай последний счет по сделке 990001')
+                 'дай последний счет по сделке 990001', 'пришлисчетпосделк990001')
 
 
 class PhrasingTests(HumanJourneyCase, unittest.TestCase):
@@ -121,6 +121,14 @@ class PhrasingTests(HumanJourneyCase, unittest.TestCase):
                     yield say(phrase)
                     person.got_document('311')
                 self.play(journey, setup=office)
+
+    def test_compact_issue_invoice_still_opens_creation_preview(self):
+        def journey(person):
+            yield say('выстависчетпосделке990001')
+            person.sees_button('📋 Общий счёт по спецификации')
+        stand = self.play(journey, setup=office)
+        self.assertEqual([], stand.crm.writes)
+        self.assertEqual(0, len(stand.model.prompts))
 
     def test_classifier_keeps_unrelated_messages_alone(self):
         for text in ('переведи 5000 монтажнику', 'Привет', 'Оплати счет', 'Какие позиции нужно закупить у Hogart?',
