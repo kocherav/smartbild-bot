@@ -106,6 +106,35 @@ class AutopilotTest(unittest.TestCase):
         self.assertIn('Прогонов: 1', text)
 
 
+    def test_repeated_runs_with_only_planned_coverage_are_not_problems(self):
+        # 17.11: the owner read «5 прогонов; 1 успешный; 4 с замечаниями» as four failures.
+        planned_gap = [{'id': 'coverage:HUMAN-PROCUREMENT'}, {'id': 'coverage:HUMAN-INSTALLATION'}]
+        runs = [{'at': f'2026-11-17T{h:02d}:40:00+00:00', 'profile': 'human', 'successful': False,
+                 'failures': planned_gap} for h in (0, 4, 8, 12)]
+        runs += [{'at': '2026-11-17T01:01:00+00:00', 'profile': 'full', 'successful': True},
+                 {'at': '2026-11-17T21:01:00+00:00', 'profile': 'browser', 'successful': False,
+                  'failures': [{'id': 'infra:playwright-browser'}]}]
+        tasks = [{'id': 'QA-H', 'status': 'waiting_input', 'failures': planned_gap}]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'state.json'
+            path.write_text(json.dumps({'runs': runs, 'tasks': tasks}))
+            text = qa_autopilot.digest(path, dt.datetime(2026, 11, 17, 22, tzinfo=dt.timezone.utc))
+        self.assertIn('Прогонов: 6; без проблем: 5; с проблемами: 1.', text)
+        self.assertIn('• browser: на сервере не запускается браузер', text)
+        self.assertNotIn('• human', text)
+        self.assertIn('Ещё не автоматизированы (в плане тестировщика)', text)
+
+    def test_a_problem_repeated_in_several_runs_is_named_once_with_a_count(self):
+        runs = [{'at': f'2026-11-17T{h:02d}:00:00+00:00', 'profile': 'explore', 'successful': False,
+                 'failures': [{'id': 'infra:explore-no-receipt'}]} for h in (1, 2)]
+        runs.append({'at': '2026-11-17T03:00:00+00:00', 'profile': 'explore', 'successful': True})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'state.json'
+            path.write_text(json.dumps({'runs': runs, 'tasks': []}))
+            text = qa_autopilot.digest(path, dt.datetime(2026, 11, 17, 22, tzinfo=dt.timezone.utc))
+        self.assertEqual(1, text.count('модель не ответила вовремя'))
+        self.assertIn('• explore (2 из 3 прогонов):', text)
+
     def test_digest_tells_what_each_task_is_about_and_who_acts(self):
         now = dt.datetime(2026, 10, 24, 15, 0, tzinfo=dt.timezone.utc)
         tasks = [{'id': f'QA-W{n}', 'status': 'waiting_input', 'severity': 'P1',
