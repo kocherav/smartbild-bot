@@ -23,6 +23,16 @@ class ClosingIntegrationTests(unittest.TestCase):
   return self.reg.patch(j['id'],status=status,fingerprint='fp',documents=docs,note='note',links=[],data={'payer_name':'Client','number':'Contract','payment':{'clause':'6.4.2'}})
  def test_import_real_interfaces(self):
   self.assertTrue(hasattr(c.WorkflowStore,'create'))
+ def test_owner_can_disable_edo_reminders_without_false_confirmation(self):
+  j=self.job('live','awaiting_edo')
+  due=datetime.fromisoformat('2026-11-17T10:00:00+03:00')
+  j=self.reg.patch(j['id'],remind_at=due.isoformat())
+  self.assertTrue(c.edo_reminder_due(j,due))
+  j=self.reg.patch(j['id'],edo_reminders_disabled_at='2026-11-17T12:00:00+03:00',
+                   edo_reminders_disabled_by='owner')
+  self.assertFalse(c.edo_reminder_due(j,due))
+  self.assertEqual(j['status'],'awaiting_edo')
+  self.assertNotIn('edo_confirmation',j)
  def test_test_publish_never_writes_crm_or_archive(self):
   j=self.job()
   with patch.object(c,'api',side_effect=AssertionError('CRM write not allowed')):c.publish(j)

@@ -23,6 +23,13 @@ def recipient(config):
  p=BASE/'edo_recipient_chat_id.txt'
  return p.read_text().strip() if p.exists() else str(config.get('EDO_NOTIFY_TELEGRAM_CHAT_ID') or '')
 
+def edo_reminder_due(job, moment):
+ """A disabled reminder is not a false EDO confirmation and never becomes due."""
+ return (job.get('status') in ('awaiting_edo','needs_info')
+         and not job.get('edo_reminders_disabled_at')
+         and bool(job.get('remind_at'))
+         and moment >= datetime.fromisoformat(job['remind_at']))
+
 def now():return datetime.now(ZoneInfo('Europe/Moscow'))
 def registry():return Registry(REGISTRY)
 def api():
@@ -403,7 +410,7 @@ def _process(job_id):
      registry().patch(job_id,status='completed',settlement=proof,last_error=None)
      effect(job,'completed-notice',lambda:tg('sendMessage',{'chat_id':env()['TELEGRAM_CHAT_ID'],'text':f"Сделка №{job['deal_id']}: полная оплата подтверждена выпиской, статус «Завершена»."}))
     registry().patch(job_id,checked_bank_digest=bank_digest)
-   elif job['status'] in ('awaiting_edo','needs_info') and now()>=datetime.fromisoformat(job['remind_at']):
+   elif edo_reminder_due(job, now()):
     due=job['remind_at'];cfg=env()
     for chat in dict.fromkeys([recipient(cfg),cfg['TELEGRAM_CHAT_ID']]):effect(job,'remind-'+due+'-'+chat,lambda chat=chat:tg('sendMessage',{'chat_id':chat,'text':f"Напоминание: по сделке №{job['deal_id']} ещё не подтверждена отправка акта, УПД и счёта через ЭДО. Если нужны уточнения, укажите их в боте."}))
     registry().patch(job_id,remind_at=next_business_day(now()).isoformat())
