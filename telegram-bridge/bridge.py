@@ -3017,6 +3017,30 @@ MORNING_BRIEF_RETRY_SECONDS = 150
 MORNING_BRIEF_TRANSIENT_RE = re.compile(r"(?i)очередь запросов занята|повторите позже|временно не ответил|timed? ?out|таймаут")
 
 
+def crm_error_words(error):
+    """A CRM failure in words for a person; the raw API answer stays in the service log.
+
+    17.11: the owner got «Megaplan API error 422: {'meta': … 'Invoice have not this fields:
+    timeCreated' …}» every morning — a JSON dump that says nothing to a person."""
+    text = str(error or "").strip()
+    match = re.search(r"Megaplan API error (\d{3})", text)
+    if match:
+        code = int(match.group(1))
+        print(f"{LOG_PREFIX} CRM error shown to a person in plain words: {text[:500]}", file=sys.stderr)
+        if code == 429 or code >= 500:
+            return f"Мегаплан временно не отвечает (код {code}). Повторю позже."
+        if code in (401, 403):
+            return f"Мегаплан не пустил бота (код {code}): проверьте доступ бота к CRM."
+        return (f"Мегаплан отклонил запрос бота (код {code}). Это ошибка в самом боте, а не "
+                "недоступность CRM — её исправляет разработчик.")
+    if not text:
+        return "неизвестна"
+    if "{" in text or "Traceback" in text or len(text) > 200:
+        print(f"{LOG_PREFIX} CRM error shown to a person in plain words: {text[:500]}", file=sys.stderr)
+        return "техническая ошибка чтения Мегаплана (подробности — в журнале бота)."
+    return text
+
+
 def send_morning_brief(token, chat_id, config=None):
     config = config or qa_schedule.morning_brief_config()
     spec = {"invoice_days": config["invoice_overdue_days"], "stale_days": config["deal_stale_days"],
@@ -3031,10 +3055,11 @@ def send_morning_brief(token, chat_id, config=None):
         if attempt < attempts:
             time.sleep(int(config.get("retry_seconds") or MORNING_BRIEF_RETRY_SECONDS))
     if not result.get("ok"):
-        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН: CRM недоступна или вернула ошибку"
+        send_message(token, chat_id, "Утренний список дел НЕ СОБРАН"
                      + (f" ({attempt} попыт., около {attempt * int(config.get('retry_seconds') or MORNING_BRIEF_RETRY_SECONDS) // 60} мин.)"
                         if attempt > 1 else "") +
-                     ". Пустой результат не считаю отсутствием задач. Причина: " + str(result.get("error") or "неизвестна"))
+                     ".\nПричина: " + crm_error_words(result.get("error"))
+                     + "\nПустой список не считаю отсутствием задач.")
         return False
     overdue = sorted(result.get("overdue") or [], key=lambda item: -int(item.get("days") or 0))
     stale = sorted(result.get("stale") or [], key=lambda item: -float(item.get("amount") or 0))

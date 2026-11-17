@@ -100,6 +100,19 @@ class MorningBriefHumanQATests(unittest.TestCase):
         self.assertEqual(1, len(failures))
         self.assertIn(f'{bridge.MORNING_BRIEF_RETRIES} попыт.', failures[0])
 
+    def test_megaplan_rejection_is_explained_in_words_not_json(self):
+        # 17.11: the owner got a raw API dump every morning.
+        raw = ("Megaplan API error 422: {'meta': {'status': 422, 'errors': [{'field': '', 'type': "
+               "'Megaplan\\\\Api3\\\\Exception\\\\Api3ValidationException', 'message': "
+               "'Invoice have not this fields: timeCreated', 'trace': [], 'meta': [], 'internalType': ''}]}, 'data': {}}")
+        self._send({'ok': False, 'error': raw})
+        text = '\n'.join(event['text'] for event in self.telegram.events)
+        self.assertIn('НЕ СОБРАН', text)
+        self.assertIn('Мегаплан отклонил запрос бота (код 422)', text)
+        for junk in ('{', 'Api3', 'meta', 'timeCreated'):
+            self.assertNotIn(junk, text)
+        self.assertEqual(1, self.runs.call_count, 'отказ Мегаплана не лечится ожиданием')
+
     def test_non_transient_error_is_reported_without_retries(self):
         self._send({'ok': False, 'error': 'нет прав на чтение счетов'})
         self.assertEqual(1, self.runs.call_count)

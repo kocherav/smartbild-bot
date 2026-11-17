@@ -511,7 +511,7 @@ def find_invoice_number(spec, api):
     if not wanted:
         raise ValueError("не указан номер счёта")
     found, seen = [], set()
-    params = {"limit": 100, "fields": ["number", "deal", "timeCreated", "sum", "invoiceDate", "status"]}
+    params = {"limit": 100, "fields": ["number", "deal", "sum", "invoiceDate", "status"]}
     while True:
         response = api._call("GET", "/invoice", params=params)
         page = response.get("data") or []

@@ -29,6 +29,20 @@ def _moment(value):
         return None
 
 
+def _issued(invoice):
+    """The invoice date. Megaplan's Invoice has no ``timeCreated`` (asking for it fails the
+    whole request with 422, every morning since it was added); ``invoiceDate`` is the
+    document date {year, month (0-based), day}."""
+    date = invoice.get("invoiceDate")
+    if isinstance(date, dict) and date.get("year"):
+        try:
+            return datetime(int(date["year"]), int(date.get("month") or 0) + 1, int(date.get("day") or 1),
+                            tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+    return _moment(invoice.get("created_at"))
+
+
 def _money(value):
     if isinstance(value, dict):
         value = value.get("value")
@@ -41,7 +55,7 @@ def _money(value):
 
 def _all_invoices(api):
     rows = []
-    params = {"limit": 100, "fields": ["deal", "timeCreated", "status", "sum", "number"]}
+    params = {"limit": 100, "fields": ["deal", "invoiceDate", "status", "sum", "number"]}
     while True:
         response = api._call("GET", "/invoice", params=params)
         page = response.get("data") or []
@@ -69,7 +83,7 @@ def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=
     by_deal = {}
     for invoice in invoices:
         deal_id = str((invoice.get("deal") or {}).get("id") or invoice.get("deal_id") or "")
-        issued = _moment(invoice.get("timeCreated") or invoice.get("created_at"))
+        issued = _issued(invoice)
         # Paid invoices take part in the allocation too: the money that settled
         # them must not be counted again against a later unpaid invoice (QA 23.10).
         if deal_id and issued and str(invoice.get("status") or "") in ("drawn", "partially_paid", "paid"):
