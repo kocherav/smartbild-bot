@@ -5,6 +5,17 @@ from unittest.mock import patch
 import morning_brief
 
 
+# Fields Megaplan accepts for /invoice (the dashboard snapshot uses them daily). Anything
+# else fails the whole request: «Invoice have not this fields: timeCreated» (422, 11.2026).
+INVOICE_FIELDS = {'deal', 'sum', 'status', 'number', 'invoiceDate', 'financeOperations',
+                  'financeOperationsCount', 'recipient'}
+
+
+def day(iso):
+    moment = dt.datetime.fromisoformat(iso)
+    return {'contentType': 'DateOnly', 'year': moment.year, 'month': moment.month - 1, 'day': moment.day}
+
+
 class FakeAPI:
     def __init__(self, invoices):
         self.invoices = invoices
@@ -13,6 +24,9 @@ class FakeAPI:
     def _call(self, method, path, params=None):
         self.calls.append((method, path, params))
         if path == '/invoice':
+            unknown = set((params or {}).get('fields') or []) - INVOICE_FIELDS
+            if unknown:
+                raise RuntimeError(f'Megaplan API error 422: Invoice have not this fields: {sorted(unknown)}')
             return {'data': self.invoices, 'meta': {'pagination': {'hasMoreNext': False}}}
         raise AssertionError(path)
 
@@ -31,9 +45,9 @@ class MorningBriefTests(unittest.TestCase):
         ]
         invoices = [
             {'id': '11', 'deal': {'id': '1'}, 'number': 'A', 'status': 'drawn',
-             'timeCreated': {'value': old}, 'sum': {'value': '100'}},
+             'invoiceDate': day(old), 'sum': {'value': '100'}},
             {'id': '12', 'deal': {'id': '2'}, 'number': 'B', 'status': 'drawn',
-             'timeCreated': {'value': old}, 'sum': {'value': '200'}},
+             'invoiceDate': day(old), 'sum': {'value': '200'}},
         ]
         bank = {'transactions': [{'deal_id': '2', 'amount': '200', 'status': 'assigned', 'direction': 'income'}]}
         api = FakeAPI(invoices)
@@ -50,7 +64,7 @@ class MorningBriefTests(unittest.TestCase):
         deal = {'id': '1', 'contractor': {'name': 'Клиент'}, 'state': {'name': 'В работе'},
                 'timeCreated': {'value': old}, 'timeUpdated': {'value': old}, 'price': {'value': '100'}}
         invoice = {'id': '11', 'deal': {'id': '1'}, 'status': 'drawn',
-                   'timeCreated': {'value': old}, 'sum': {'value': '100'}}
+                   'invoiceDate': day(old), 'sum': {'value': '100'}}
         with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=[deal]),
               patch.object(morning_brief.bank_statement, 'load_registry', return_value={'transactions': [
                   {'deal_id': '1', 'amount': '40', 'status': 'assigned', 'direction': 'income'}]})):
@@ -65,15 +79,35 @@ class MorningBriefTests(unittest.TestCase):
         deal = {'id': '1', 'contractor': {'name': 'Клиент'}, 'state': {'name': 'В работе'},
                 'timeCreated': {'value': older}, 'timeUpdated': {'value': old}, 'price': {'value': '150'}}
         invoices = [{'id': '10', 'deal': {'id': '1'}, 'number': 'A', 'status': 'paid',
-                     'timeCreated': {'value': older}, 'sum': {'value': '100'}},
+                     'invoiceDate': day(older), 'sum': {'value': '100'}},
                     {'id': '11', 'deal': {'id': '1'}, 'number': 'B', 'status': 'drawn',
-                     'timeCreated': {'value': old}, 'sum': {'value': '50'}}]
+                     'invoiceDate': day(old), 'sum': {'value': '50'}}]
         bank = {'transactions': [{'deal_id': '1', 'amount': '100', 'status': 'assigned', 'direction': 'income'}]}
         with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=[deal]),
               patch.object(morning_brief.bank_statement, 'load_registry', return_value=bank)):
             result = morning_brief.build(FakeAPI(invoices), now=dt.datetime(2026, 10, 23, tzinfo=dt.timezone.utc),
                                          completed_statuses=['заверш'])
         self.assertEqual([('B', '50')], [(x['invoice_number'], x['remainder']) for x in result['overdue']])
+
+    def test_only_fields_megaplan_has_are_requested(self):
+        # Every morning since 11.2026: «Утренний список дел НЕ СОБРАН … 422 … timeCreated».
+        api = FakeAPI([])
+        with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=[]),
+              patch.object(morning_brief.bank_statement, 'load_registry', return_value={'transactions': []})):
+            self.assertTrue(morning_brief.build(api)['ok'])
+        self.assertLessEqual(set(api.calls[0][2]['fields']), INVOICE_FIELDS)
+
+    def test_invoice_age_counts_from_the_invoice_date(self):
+        deal = {'id': '1', 'contractor': {'name': 'Клиент'}, 'state': {'name': 'В работе'},
+                'timeUpdated': {'value': '2026-10-22T06:00:00+00:00'}, 'price': {'value': '100'}}
+        recent = {'id': '11', 'deal': {'id': '1'}, 'status': 'drawn', 'invoiceDate': day('2026-10-20T00:00:00'),
+                  'sum': {'value': '100'}}
+        with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=[deal]),
+              patch.object(morning_brief.bank_statement, 'load_registry', return_value={'transactions': []})):
+            fresh = morning_brief.build(FakeAPI([recent]), now=dt.datetime(2026, 10, 23, tzinfo=dt.timezone.utc))
+            late = morning_brief.build(FakeAPI([recent]), now=dt.datetime(2026, 11, 3, tzinfo=dt.timezone.utc))
+        self.assertEqual([], fresh['overdue'], 'счёт от 20.10 на 23.10 ещё не просрочен')
+        self.assertEqual(14, late['overdue'][0]['days'])
 
 
 if __name__ == '__main__':

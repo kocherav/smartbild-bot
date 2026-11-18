@@ -167,17 +167,32 @@ def digest(path=qa_handoff.PRODUCTION_STATE, now=None, journeys=None, limit=5):
     active = sorted((x for x in tasks if x.get('status') in STATUS_WORDS), key=severity)
     code = [x for x in active if x.get('status') != 'waiting_input']
     waiting = [x for x in active if x.get('status') == 'waiting_input']
-    passed = sum(bool(x.get('successful')) for x in runs)
+    # 17.11: «5 прогонов, 1 успешный, 4 с замечаниями» were five repeats of one human
+    # profile whose only «failure» is journeys not automated yet — the tester's plan, not a
+    # problem. Such runs count as passed; a real problem is named once per profile with how
+    # many runs showed it.
+    def problems(run):
+        return [] if run.get('successful') else [f for f in run.get('failures') or [] if not planned(f)]
+
+    def clean(run):
+        return bool(run.get('successful')) or (bool(run.get('failures')) and not problems(run))
+
+    passed = sum(clean(x) for x in runs)
     lines = ["🧪 AI-тестировщик за сегодня",
-             f"Прогонов: {len(runs)}; успешных: {passed}; с замечаниями: {len(runs) - passed}."]
-    failed = {}
+             f"Прогонов: {len(runs)}; без проблем: {passed}; с проблемами: {len(runs) - passed}."]
+    failed, totals = {}, {}
     for run in runs:
-        if not run.get('successful'):
-            failed.setdefault(run.get('profile') or 'проверка', []).extend(run.get('failures') or [])
-    for profile, failures in failed.items():
+        profile = run.get('profile') or 'проверка'
+        totals[profile] = totals.get(profile, 0) + 1
+        if not clean(run):
+            entry = failed.setdefault(profile, [0, []])
+            entry[0] += 1
+            entry[1].extend(problems(run))
+    for profile, (count, failures) in failed.items():
         words = list(dict.fromkeys(failure_gist(item, titles) for item in failures))
-        lines.append(f"• {profile}: " + ('; '.join(words[:2]) + (f' (+ ещё {len(words) - 2})' if len(words) > 2 else '')
-                                         if words else 'прогон не завершился'))
+        times = f" ({count} из {totals[profile]} прогонов)" if totals[profile] > 1 else ''
+        lines.append(f"• {profile}{times}: " + ('; '.join(words[:2]) + (f' (+ ещё {len(words) - 2})' if len(words) > 2 else '')
+                                                if words else 'прогон не завершился'))
     if code:
         lines += [f"\nДефекты кода ({len(code)}) — их ведут тестировщик и разработчик, от вас ничего не нужно:"]
         lines += _task_lines(code, titles, limit)

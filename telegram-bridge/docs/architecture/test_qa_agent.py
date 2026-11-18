@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -198,6 +199,20 @@ class QaAgentTests(unittest.TestCase):
             report = json.loads(receipt.read_text())
         self.assertEqual([{'id': 'infra:playwright-browser', 'status': 'blocked'}], report['cases'])
         self.assertIn('--evidence', runner.call_args.args[0])
+
+    def test_browser_profile_uses_the_chromium_installed_for_the_kp_template(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            browsers = Path(temporary) / '.browsers'
+            browsers.mkdir()
+            runner = Mock(return_value=Mock(returncode=0, stdout='', stderr=''))
+            with unittest.mock.patch.object(qa_agent, 'KP_BROWSERS', browsers), \
+                 unittest.mock.patch.dict(os.environ, {}, clear=False) as env:
+                env.pop('PLAYWRIGHT_BROWSERS_PATH', None)
+                qa_agent.run_profile('browser', temporary, runner=runner)
+                qa_agent.run_profile('human', temporary, runner=runner)
+        browser_env, human_env = (call.kwargs['env'] for call in runner.call_args_list)
+        self.assertEqual(str(browsers), browser_env['PLAYWRIGHT_BROWSERS_PATH'])
+        self.assertNotIn('PLAYWRIGHT_BROWSERS_PATH', human_env)
 
 
 

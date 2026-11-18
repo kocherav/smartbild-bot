@@ -22,6 +22,7 @@ DEFAULT_STATE = ROOT / 'qa-agent-state.json'
 DEFAULT_EVIDENCE = ROOT / 'qa-agent-evidence'
 FULL_GATE = [PYTHON, str(ROOT / 'quality_gate.py'), '--run']
 BROWSER_GATE = ['/usr/bin/python3', '/home/kocher.av/hogart-scraper/dashboard/tests/run_browser_checks.py']
+KP_BROWSERS = Path('/home/kocher.av/megaplan-crm/templates/kp-smartbild/.browsers')
 # The isolated runner copies only sources; then the registry is read in place.
 HUMAN_JOURNEYS = next((path for path in (
     ROOT / 'HUMAN_JOURNEYS.json',
@@ -404,6 +405,10 @@ def run_profile(profile, evidence_root=DEFAULT_EVIDENCE, runner=subprocess.run):
     elif profile == 'browser':
         command = command + ['--evidence', str(folder / 'browser-audit.json')]
     environment = {**os.environ, 'QA_HUMAN_REGISTRY': str(HUMAN_JOURNEYS)}
+    if profile == 'browser' and not environment.get('PLAYWRIGHT_BROWSERS_PATH') and KP_BROWSERS.is_dir():
+        # The bot user cannot write ~/.cache/ms-playwright; Chromium for the same
+        # Playwright 1.62.1 was installed with the SmartBild proposal template (15.11).
+        environment['PLAYWRIGHT_BROWSERS_PATH'] = str(KP_BROWSERS)
     completed = runner(command, cwd=BRIDGE if profile == 'explore' else ROOT, capture_output=True,
                        text=True, env=environment)
     execution = {'profile': profile, 'command': command, 'returncode': completed.returncode,
