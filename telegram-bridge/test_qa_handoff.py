@@ -66,6 +66,9 @@ class QaHandoffTests(unittest.TestCase):
             qa_handoff._grant_shared_access('/tmp/qa-state')
         self.assertEqual('setfacl', run.call_args.args[0][0])
         self.assertIn('u:smartbild-projects:rw', run.call_args.args[0][2])
+        # 18.11: «-m» merged into an inherited ACL with a dangling uid → «Duplicate entries».
+        self.assertEqual('--set', run.call_args.args[0][1])
+        self.assertTrue(run.call_args.args[0][2].startswith('u::rw,g::r,o::---,'))
 
     def test_bot_starts_developer_only_after_inline_approval(self):
         jobs = []

@@ -20,11 +20,18 @@ def acl_spec():
     return ','.join(f'u:{user}:rw' for user in users) + ',m:rw'
 
 
+def acl_set_spec():
+    """The whole ACL for ``setfacl --set``.  ``-m`` merges into what the file inherited, and
+    18.11 the directory's default ACL carried a dangling ``user:4294967295`` entry: every
+    registry write failed with «Duplicate entries».  Setting the ACL outright ignores it."""
+    return 'u::rw,g::r,o::---,' + acl_spec()
+
+
 def _grant_shared_access(path):
     # Shared QA files inherit a default ACL.  The confined service account is
     # allowed to write data but intentionally cannot rewrite filesystem ACLs.
     completed = subprocess.run(
-        ['setfacl', '-m', acl_spec(), str(path)],
+        ['setfacl', '--set', acl_set_spec(), str(path)],
         capture_output=True, text=True,
     )
     if completed.returncode:

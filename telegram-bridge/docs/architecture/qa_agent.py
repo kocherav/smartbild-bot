@@ -63,6 +63,13 @@ def acl_spec():
     return ','.join(f'u:{user}:rw' for user in users) + ',m:rw'
 
 
+def acl_set_spec():
+    """The whole ACL for ``setfacl --set``.  ``-m`` merges into what the file inherited, and
+    18.11 the directory's default ACL carried a dangling ``user:4294967295`` entry: every
+    registry write failed with «Duplicate entries».  Setting the ACL outright ignores it."""
+    return 'u::rw,g::r,o::---,' + acl_spec()
+
+
 def atomic_save(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +85,7 @@ def atomic_save(path, value):
             # os.access() only describes the current writer.  The previous
             # guard silently removed the *other* writer on every atomic replace.
             completed = subprocess.run(
-                ['setfacl', '-m', acl_spec(), temporary],
+                ['setfacl', '--set', acl_set_spec(), temporary],
                 capture_output=True, text=True,
             )
             if completed.returncode:
