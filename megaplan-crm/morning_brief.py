@@ -66,6 +66,18 @@ def _all_invoices(api):
         params = {**params, "pageAfter": {"contentType": "Invoice", "id": page[-1]["id"]}}
 
 
+def _open(deal, completed):
+    """Whether a deal is still in work. Megaplan's ``result`` (``active`` while open; set when
+    the deal is won or lost) decides; status names are only a fallback for a cache read before
+    ``result`` was requested. 18.11: 829 of 859 «stale» deals had no status name in the
+    compact cache and counted as open; 281 of 312 «overdue» invoices were older than a year."""
+    result = str(deal.get("result") or (deal.get("state") or {}).get("type") or "")
+    if result:
+        return result == "active"
+    status = str(deal_browser.summary(deal).get("status") or "").casefold()
+    return not any(marker in status for marker in completed)
+
+
 def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=()):
     """Return presentation-neutral rows. Payments are allocated oldest invoice first."""
     now = now or datetime.now(timezone.utc)
@@ -79,6 +91,7 @@ def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=
             key = str(tx["deal_id"])
             payments[key] = payments.get(key, Decimal("0")) + _money(tx.get("amount"))
 
+    completed = tuple(str(x).casefold() for x in completed_statuses)
     overdue = []
     by_deal = {}
     for invoice in invoices:
@@ -98,20 +111,20 @@ def build(api=None, now=None, invoice_days=7, stale_days=14, completed_statuses=
             age = (now - issued).days
             if str(invoice.get("status") or "") == "paid":
                 continue
-            if remainder > 0 and age > int(invoice_days):
-                deal = deals.get(deal_id) or {}
+            deal = deals.get(deal_id) or {}
+            # A won or lost deal is not today's work: its old unpaid invoice is history.
+            if remainder > 0 and age > int(invoice_days) and (not deal or _open(deal, completed)):
                 overdue.append({"deal_id": deal_id, "client": deal_browser.summary(deal).get("client"),
                                 "amount": str(total), "remainder": str(remainder), "days": age,
                                 "invoice_number": invoice.get("number") or invoice.get("id")})
 
-    completed = tuple(str(x).casefold() for x in completed_statuses)
     stale = []
     for deal_id, deal in deals.items():
         item = deal_browser.summary(deal)
         status = str(item.get("status") or "")
         updated = _moment(deal.get("timeUpdated") or deal.get("timeCreated"))
         age = (now - updated).days if updated else -1
-        if updated and age > int(stale_days) and not any(marker in status.casefold() for marker in completed):
+        if updated and age > int(stale_days) and _open(deal, completed):
             stale.append({"deal_id": deal_id, "client": item.get("client"), "amount": str(_money(item.get("price"))),
                           "days": age, "status": status})
     return {"ok": True, "overdue": overdue, "stale": stale}

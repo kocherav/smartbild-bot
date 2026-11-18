@@ -109,6 +109,35 @@ class MorningBriefTests(unittest.TestCase):
         self.assertEqual([], fresh['overdue'], 'счёт от 20.10 на 23.10 ещё не просрочен')
         self.assertEqual(14, late['overdue'][0]['days'])
 
+    def test_megaplan_result_decides_open_deals_when_status_names_are_missing(self):
+        # 18.11: 829 of 859 «stale» deals had a compact state without a name and counted as
+        # open; 281 of 312 «overdue» invoices were older than a year.
+        old = '2025-06-01T06:00:00+00:00'
+        def deal(ident, result):
+            return {'id': ident, 'contractor': {'name': f'Клиент {ident}'}, 'state': {'id': '9'},
+                    'result': result, 'timeUpdated': {'value': old}, 'price': {'value': '100'}}
+        deals = [deal('1', 'active'), deal('2', 'won'), deal('3', 'lost')]
+        invoices = [{'id': f'1{n}', 'deal': {'id': n}, 'number': n, 'status': 'drawn',
+                     'invoiceDate': day(old), 'sum': {'value': '100'}} for n in ('1', '2', '3')]
+        with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=deals),
+              patch.object(morning_brief.bank_statement, 'load_registry', return_value={'transactions': []})):
+            result = morning_brief.build(FakeAPI(invoices), now=dt.datetime(2026, 11, 18, tzinfo=dt.timezone.utc),
+                                         completed_statuses=['заверш'])
+        self.assertEqual(['1'], [x['deal_id'] for x in result['stale']], 'закрытые сделки — не «без движения»')
+        self.assertEqual(['1'], [x['deal_id'] for x in result['overdue']], 'счета закрытых сделок — история')
+
+    def test_status_names_still_decide_for_a_cache_without_result(self):
+        old = '2026-09-01T06:00:00+00:00'
+        deals = [{'id': '1', 'contractor': {'name': 'А'}, 'state': {'id': '1', 'name': 'Заказ'},
+                  'timeUpdated': {'value': old}, 'price': {'value': '1'}},
+                 {'id': '2', 'contractor': {'name': 'Б'}, 'state': {'id': '2', 'name': 'Завершена'},
+                  'timeUpdated': {'value': old}, 'price': {'value': '1'}}]
+        with (patch.object(morning_brief.deal_browser, 'fetch_all', return_value=deals),
+              patch.object(morning_brief.bank_statement, 'load_registry', return_value={'transactions': []})):
+            result = morning_brief.build(FakeAPI([]), now=dt.datetime(2026, 11, 18, tzinfo=dt.timezone.utc),
+                                         completed_statuses=['заверш'])
+        self.assertEqual(['1'], [x['deal_id'] for x in result['stale']])
+
 
 if __name__ == '__main__':
     unittest.main()
