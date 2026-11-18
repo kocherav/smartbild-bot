@@ -37,7 +37,9 @@ CACHE_REFRESH_LOCK = CACHE_PATH + ".refresh.lock"
 ECONOMICS_ATTACHMENTS_PATH = os.path.join(BASE_DIR, "economics_attachments.json")
 ECONOMICS_ATTACHMENTS_LOCK = ECONOMICS_ATTACHMENTS_PATH + ".lock"
 LIST_FIELDS = [
-    "state", "contractor", "program", "manager", "description", "timeCreated", "timeUpdated",
+    # «result» (active / won / lost) says whether the deal is still open even when the
+    # compact «state» reference carries no name (18.11: 829 of 859 old deals).
+    "state", "result", "contractor", "program", "manager", "description", "timeCreated", "timeUpdated",
     "price", "positionsCount", "possibleTransitions",
     "Category1000068CustomFieldAdresObEkta", "Category1000068CustomFieldIspolnitel",
 ]
