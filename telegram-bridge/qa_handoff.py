@@ -27,6 +27,11 @@ def acl_set_spec():
     return 'u::rw,g::r,o::---,' + acl_spec()
 
 
+def service_acl_set_spec():
+    """Fallback for id-mapped mounts where the interactive owner has no valid uid."""
+    return f'u::rw,g::r,o::---,u:{QA_SERVICE_USER}:rw,m:rw'
+
+
 def _grant_shared_access(path):
     # Shared QA files inherit a default ACL.  The confined service account is
     # allowed to write data but intentionally cannot rewrite filesystem ACLs.
@@ -34,6 +39,13 @@ def _grant_shared_access(path):
         ['setfacl', '--set', acl_set_spec(), str(path)],
         capture_output=True, text=True,
     )
+    if completed.returncode and 'Invalid argument' in completed.stderr:
+        # The deployed id-mapped mount exposes the host owner as uid 4294967295.
+        # Keep the service writer usable without preserving that malformed entry.
+        completed = subprocess.run(
+            ['setfacl', '--set', service_acl_set_spec(), str(path)],
+            capture_output=True, text=True,
+        )
     if completed.returncode:
         raise OSError('Не удалось выдать доступ к QA-реестру: ' + completed.stderr.strip())
 
