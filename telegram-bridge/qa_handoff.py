@@ -88,7 +88,10 @@ def _mutate(path, change):
     with open(lock, 'a', encoding='utf-8') as stream:
         if os.fstat(stream.fileno()).st_uid == os.geteuid():
             os.chmod(lock, 0o660)
-        if _is_production_state(path):
+        # A shared lock may be owned by the interactive maintainer while the
+        # service already has rw through ACL.  Rewriting that ACL as the
+        # service is both unnecessary and forbidden by the filesystem.
+        if _is_production_state(path) and not os.access(lock, os.R_OK | os.W_OK):
             _grant_shared_access(lock)
         fcntl.flock(stream, fcntl.LOCK_EX)
         state = _read(path); result = change(state); _save(path, state); return result
@@ -98,7 +101,8 @@ def ready(path=None, include_notified=True):
     path = STATE if path is None else path
     tasks = [item for item in _read(path)['tasks'] if item.get('status') == 'ready']
     if not include_notified:
-        tasks = [item for item in tasks if not item.get('owner_notified_at')]
+        tasks = [item for item in tasks
+                 if not item.get('owner_notified_at') and not item.get('owner_notification_claimed_at')]
     # Old registries may contain two rows with the same deterministic QA id.
     # Never render both; prefer the newest actionable row until migration.
     unique = {}
@@ -153,6 +157,19 @@ def mark_notified(task_id, message_id, path=None):
                      if item.get('id') == task_id and item.get('status') == 'ready'), None)
         if not task: return False
         task.update(owner_notified_at=now(), owner_message_id=message_id); return True
+    return _mutate(path, change)
+
+
+def claim_notification(task_id, path=None):
+    """Reserve one owner delivery before Telegram is called (at-most-once)."""
+    path = STATE if path is None else path
+    def change(state):
+        task = next((item for item in reversed(state['tasks'])
+                     if item.get('id') == task_id and item.get('status') == 'ready'), None)
+        if not task or task.get('owner_notified_at') or task.get('owner_notification_claimed_at'):
+            return False
+        task['owner_notification_claimed_at'] = now()
+        return True
     return _mutate(path, change)
 
 

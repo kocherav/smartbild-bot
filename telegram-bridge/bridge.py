@@ -4738,6 +4738,12 @@ def show_qa_findings(token, chat_id, only_unnotified=False):
             send_message(token, chat_id, 'Новых QA-проблем, ожидающих вашего решения, нет.', MAIN_KEYBOARD)
         return False
     task = tasks[0]
+    try:
+        if only_unnotified and not qa_handoff.claim_notification(task['id']):
+            return False
+    except (ValueError, OSError) as exc:
+        print(f"{LOG_PREFIX} QA notification claim failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
     delivered = send_message(token, chat_id, qa_handoff.summarize(task), qa_task_keyboard(task['id']))
     if delivered:
         qa_handoff.mark_notified(task['id'], True)

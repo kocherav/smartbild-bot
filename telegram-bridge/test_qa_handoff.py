@@ -45,6 +45,24 @@ class QaHandoffTests(unittest.TestCase):
         self.assertEqual('closed', rows[0]['status'])
         self.assertEqual('approved', rows[1]['status'])
 
+    def test_notification_is_claimed_before_send_and_restart_does_not_repeat_it(self):
+        with patch.object(qa_handoff, 'STATE', self.path), \
+             patch.object(bridge, 'send_message', side_effect=RuntimeError('process died')) as send:
+            with self.assertRaises(RuntimeError):
+                bridge.show_qa_findings('token', 'owner', only_unnotified=True)
+            self.assertFalse(bridge.show_qa_findings('token', 'owner', only_unnotified=True))
+        send.assert_called_once()
+        task = qa_handoff._read(self.path)['tasks'][0]
+        self.assertIn('owner_notification_claimed_at', task)
+        self.assertNotIn('owner_notified_at', task)
+
+    def test_writable_production_lock_does_not_require_acl_rewrite(self):
+        with patch.object(qa_handoff, '_is_production_state', return_value=True), \
+             patch.object(qa_handoff, '_save'), \
+             patch.object(qa_handoff, '_grant_shared_access', side_effect=PermissionError) as grant:
+            self.assertTrue(qa_handoff.mark_notified('QA-A1', 42, self.path))
+        grant.assert_not_called()
+
     def test_rejection_never_reaches_developer(self):
         self.assertEqual('dismissed', qa_handoff.decide('QA-A1', False, self.path)['status'])
         self.assertIsNone(qa_handoff.claim('QA-A1', self.path))
