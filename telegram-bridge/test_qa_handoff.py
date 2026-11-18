@@ -70,6 +70,17 @@ class QaHandoffTests(unittest.TestCase):
         self.assertEqual('--set', run.call_args.args[0][1])
         self.assertTrue(run.call_args.args[0][2].startswith('u::rw,g::r,o::---,'))
 
+    def test_invalid_owner_uid_falls_back_to_service_only_acl(self):
+        invalid = type('Completed', (), {'returncode': 1, 'stderr': 'Invalid argument'})()
+        accepted = type('Completed', (), {'returncode': 0, 'stderr': ''})()
+        with patch.object(qa_handoff.subprocess, 'run', side_effect=[invalid, accepted]) as run:
+            qa_handoff._grant_shared_access('/tmp/qa-state')
+        self.assertEqual(2, run.call_count)
+        fallback = run.call_args_list[1].args[0]
+        self.assertEqual('--set', fallback[1])
+        self.assertIn('u:smartbild-projects:rw', fallback[2])
+        self.assertNotIn('u:kocher.av:rw', fallback[2])
+
     def test_bot_starts_developer_only_after_inline_approval(self):
         jobs = []
         with patch.object(qa_handoff, 'STATE', self.path), patch.object(bridge, 'send_message'), \
