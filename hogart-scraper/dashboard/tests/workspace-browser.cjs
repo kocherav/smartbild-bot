@@ -2,7 +2,7 @@ const {chromium}=require('playwright');
 const fs=require('fs');const assert=require('assert/strict');
 (async()=>{
  const b=await chromium.launch({headless:true});const ctx=await b.newContext({viewport:{width:1536,height:1100}});const page=await ctx.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const base='http://127.0.0.1:8097/deal-dashboard/', origin='http://127.0.0.1:8097';
+ const base='http://127.0.0.1:48097/deal-dashboard/', origin='http://127.0.0.1:48097';
  const fixture=JSON.parse(fs.readFileSync('/tmp/deal-dashboard-test-auth.json','utf8'));
  let r=await ctx.request.post(base+'api/plans',{headers:{Origin:origin},data:{}});assert.equal(r.status(),401);
  r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:origin},data:{initData:fixture.valid}});assert.equal(r.status(),200);const {token}=await r.json();

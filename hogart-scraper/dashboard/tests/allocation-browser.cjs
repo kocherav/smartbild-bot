@@ -1,5 +1,5 @@
 const {chromium}=require('playwright');const assert=require('assert/strict');
-(async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage({viewport:{width:1440,height:1050}});const errors=[];p.on('pageerror',e=>errors.push(e.message));const base='http://127.0.0.1:8098/deal-dashboard/';
+(async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage({viewport:{width:1440,height:1050}});const errors=[];p.on('pageerror',e=>errors.push(e.message));const base='http://127.0.0.1:48098/deal-dashboard/';
 assert.equal((await p.request.get(base+'api/supplier-allocation')).status(),401);
 await p.goto(base+'supplier-allocation');await p.evaluate(()=>sessionStorage.setItem('dashboard_session','fixture'));await p.reload();await p.locator('.invoice-button').filter({hasText:'TEST-ALLOC'}).click();await p.waitForSelector('#bulk-deal');
 assert.match(await p.locator('#mode').innerText(),/черновик/);
