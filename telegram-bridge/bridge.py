@@ -2920,7 +2920,7 @@ def process_installer_report(token, chat_id, path):
             "keyboard": [[{"text": "📦 Всякая всячина"}], [{"text": "❌ Отменить отчёт"}]], "resize_keyboard": True,
         })
         return
-    installer_table_waiver.waive(session, installation_remaining)
+    installer_table_waiver.waive(session, installation_remaining, installation_open_remainders)
     waived = installer_table_waiver.waived_text(session)
     required = int(session.get("required_tables") or 0)
     if required:
@@ -2938,6 +2938,12 @@ def installation_remaining(deal_id):
     """Read-only: the open remainder of a deal's installation statement, or None."""
     result = run_installation_workflow({"action": "remaining", "deal_id": str(deal_id)})
     return result.get("result") if result.get("ok") else None
+
+
+def installation_open_remainders():
+    """Read-only: open statement remainder per deal handed to installers, or {}."""
+    result = run_installation_workflow({"action": "open_remainders"})
+    return result.get("result") if result.get("ok") else {}
 
 
 def installer_tables_request_text(session):
@@ -2962,7 +2968,7 @@ def finish_installer_report_files(token, chat_id, session):
     completed = result["session"]
     # Lines closing the statement need no file (owner 20.11) — also for a report that was
     # already waiting for tables when this rule shipped.
-    installer_table_waiver.waive(completed, installation_remaining)
+    installer_table_waiver.waive(completed, installation_remaining, installation_open_remainders)
     if int(completed.get("required_tables") or 0):
         session.update({key: completed.get(key) for key in ("required_tables", "table_requests", "waived_tables")})
         update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)

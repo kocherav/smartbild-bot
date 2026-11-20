@@ -119,7 +119,13 @@ def attach_tables(exceptions, table_paths):
         if not own:
             remaining_paths.append(path);continue
         matches=[t for t in targets if str(t.get('deal_id'))==own['deal_id'] and not t.get('table_path')]
-        if len(matches)!=1:raise ValueError('Для ведомости №'+own['deal_id']+' нужна одна соответствующая строка «По таблице» в отчёте')
+        if not matches:
+            # 20.11: the report parser left every «по таблице» line without a deal; the table
+            # names its deal, the line's amount equals the table's current completion.
+            matches=[t for t in targets if not t.get('deal_id') and not t.get('table_path')
+                     and t.get('amount') is not None and abs(float(t['amount'])-float(own['total']))<.01]
+            if len(matches)==1:matches[0]['deal_id']=own['deal_id']
+        if len(matches)!=1:raise ValueError(f"Таблица по сделке №{own['deal_id']} на {own['total']:.2f}: в отчёте нет одной строки «По таблице» с этой сделкой или суммой")
         target=matches[0];total=own['total']
         target.update(table_file=os.path.basename(path),table_path=os.path.realpath(path),table_rows=own['rows'],table_rows_count=len(own['rows']),table_calculated_total=sum(r['plan_amount'] for r in own['rows']),completion_column=own['column'],completion_sum=total,completion_footer=total,completion_matches_report=abs(total-float(target.get('amount') or 0))<.01,table_match_confidence=1.0,reason='Количество сверено с принятым объёмом; подтвердите выполнение')
     targets=[t for t in targets if not t.get('table_path')]

@@ -32,17 +32,40 @@ def statement_rows(statement):
     return rows
 
 
-def waive(session, remaining):
+def guess_deal(item, remainders, taken):
+    """The only open statement whose remainder equals the line's amount, else None."""
+    amount = item.get("amount")
+    if amount is None:
+        return None
+    matches = [deal for deal, total in (remainders or {}).items()
+               if deal not in taken and float(total or 0) > 0 and abs(float(total) - float(amount)) < TOLERANCE]
+    return matches[0] if len(matches) == 1 else None
+
+
+def waive(session, remaining, remainders=None):
     """Mark table lines whose amount equals the statement's open remainder as 100 %.
 
     ``remaining(deal_id)`` returns the statement (``remaining_total``, ``rows``) or None.
+    ``remainders()`` — open remainder per deal of objects handed to installers; used only
+    for a line without a deal (the report parser could not map its object, 20.11): a single
+    deal with exactly that remainder is taken, two or more — the line still needs a file.
     Returns the waived exceptions; ``required_tables`` and ``table_requests`` keep only
     the lines that still need a file."""
     waived = []
     cache = {}
+    open_totals = None
+    taken = {str(item.get("deal_id")) for item in session.get("exceptions") or [] if item.get("deal_id")}
     for item in session.get("exceptions") or []:
         if item.get("type") != "table" or item.get("table_path") or item.get("table_waived"):
             continue
+        if not item.get("deal_id") and remainders is not None:
+            if open_totals is None:
+                open_totals = remainders() or {}
+            guessed = guess_deal(item, open_totals, taken)
+            if guessed:
+                item["deal_id"] = guessed
+                item["deal_guessed_by_remainder"] = True
+                taken.add(guessed)
         deal_id = str(item.get("deal_id") or "")
         if not deal_id or item.get("amount") is None:
             continue
@@ -65,7 +88,9 @@ def waive(session, remaining):
             "table_match_confidence": 1.0,
             "resolution": "выполнение принято по таблице — 100 % остатка ведомости, без файла",
             "reason": ("сумма совпадает с остатком монтажной ведомости — выполнение 100 % "
-                       "без файла таблицы; руководитель подтвердит при утверждении"),
+                       "без файла таблицы; руководитель подтвердит при утверждении"
+                       + ("; сделка определена по совпадению суммы с остатком ведомости"
+                          if item.get("deal_guessed_by_remainder") else "")),
         })
         waived.append(item)
         # One line closes the statement; a second identical line would be a duplicate.

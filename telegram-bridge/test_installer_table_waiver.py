@@ -61,6 +61,22 @@ class WaiverRules(unittest.TestCase):
         self.assertIn('сделка №861 — 100 % по ведомости', waiver.waived_text(s))
 
 
+    def test_line_without_a_deal_takes_the_only_statement_with_that_remainder(self):
+        # 20.11: all 7 table lines of the stuck report had deal_id=None.
+        s = session(('Объект А', None, 18000), ('Объект Б', None, 9000))
+        waived = waiver.waive(s, remaining({'861': STATEMENT}), lambda: {'861': 18000, '900': 50000})
+        self.assertEqual(['861'], [item['deal_id'] for item in waived])
+        self.assertIn('определена по совпадению', waived[0]['reason'])
+        self.assertEqual(1, s['required_tables'])
+        self.assertIsNone(s['exceptions'][1]['deal_id'])
+
+    def test_two_statements_with_the_same_remainder_are_not_guessed(self):
+        s = session(('Объект А', None, 18000))
+        waiver.waive(s, remaining({'861': STATEMENT, '862': dict(STATEMENT, deal_id='862')}),
+                     lambda: {'861': 18000, '862': 18000})
+        self.assertIsNone(s['exceptions'][0]['deal_id'])
+        self.assertEqual(1, s['required_tables'])
+
     def test_generated_rows_pass_the_acceptance_plan_without_review(self):
         import sys
         from pathlib import Path
@@ -77,11 +93,38 @@ class WaiverRules(unittest.TestCase):
         self.assertTrue(legacy_report_plan.plan(s, works)['review'], 'остаток изменился — пересчёт, не двойное начисление')
 
 
+class OwnTableWithoutDeal(unittest.TestCase):
+    def test_own_statement_table_finds_its_line_by_amount_when_the_line_has_no_deal(self):
+        import installer_report_intake as intake
+        import installer_workbook_intake
+        own = {'deal_id': '857', 'rows': [], 'column': 'Выполнено', 'total': 150000.0}
+        targets = [{'type': 'table', 'deal_id': None, 'amount': 31000, 'source': 'по таблице-31000'},
+                   {'type': 'table', 'deal_id': None, 'amount': 150000, 'source': 'по таблице-150000'}]
+        book = type('Book', (), {'close': lambda self: None})()
+        with patch.object(intake, 'load_workbook', return_value=book), \
+             patch.object(installer_workbook_intake, 'read', return_value=own):
+            intake.attach_tables(targets, ['/tmp/857.xlsx'])
+        self.assertEqual('857', targets[1]['deal_id'])
+        self.assertTrue(targets[1]['table_path'])
+        self.assertIsNone(targets[0]['deal_id'])
+
+    def test_unmatched_own_table_explains_itself(self):
+        import installer_report_intake as intake
+        import installer_workbook_intake
+        own = {'deal_id': '857', 'rows': [], 'column': 'Выполнено', 'total': 99.0}
+        book = type('Book', (), {'close': lambda self: None})()
+        with patch.object(intake, 'load_workbook', return_value=book), \
+             patch.object(installer_workbook_intake, 'read', return_value=own):
+            with self.assertRaisesRegex(ValueError, 'Таблица по сделке №857'):
+                intake.attach_tables([{'type': 'table', 'deal_id': None, 'amount': 5}], ['/tmp/857.xlsx'])
+
+
 class BridgeFlow(unittest.TestCase):
     def run_report(self, s, statements):
         sent = []
         with patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': s}), \
              patch.object(bridge, 'installation_remaining', side_effect=remaining(statements)), \
+             patch.object(bridge, 'installation_open_remainders', return_value={}), \
              patch.object(bridge, 'update_deal_ui_state') as update, \
              patch.object(bridge, 'send_message', side_effect=lambda *a, **k: sent.append(a[2])):
             bridge.process_installer_report('t', 'chat', '/tmp/report.pdf')
@@ -107,6 +150,7 @@ class BridgeFlow(unittest.TestCase):
         sent = []
         with patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': copy.deepcopy(waiting)}), \
              patch.object(bridge, 'installation_remaining', side_effect=remaining({'861': STATEMENT})), \
+             patch.object(bridge, 'installation_open_remainders', return_value={}), \
              patch.object(bridge, 'update_deal_ui_state') as update, \
              patch.object(bridge, 'send_message', side_effect=lambda *a, **k: sent.append(a[2])):
             bridge.finish_installer_report_files('t', 'chat', waiting)

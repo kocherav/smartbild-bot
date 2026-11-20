@@ -408,6 +408,22 @@ def remaining_statement(deal_id, db=None):
         if own: db.close()
 
 
+def open_remainders(installer_name=None):
+    """Read-only: open statement remainder of every object handed to installers.
+
+    A «по таблице» line whose object the report parser could not map has no deal id;
+    20.11 all 7 lines of a stuck report were like that. A unique remainder equal to the
+    line's amount identifies the deal."""
+    db=connect()
+    try:
+        out={}
+        for row in list_mine(installer_name):
+            try: out[str(row['deal_id'])]=remaining_statement(row['deal_id'],db)['remaining_total']
+            except InstallationNotPrepared: continue
+        return out
+    finally: db.close()
+
+
 def contact_name(item):
     return clean(' '.join(filter(None,[item.get('lastName'),item.get('firstName'),item.get('middleName')]))) or clean(item.get('name'))
 
@@ -1002,7 +1018,7 @@ def backup_db():
 def main():
     req=json.load(sys.stdin); action=req.get('action')
     import legacy_report_commit
-    funcs={'prepare':lambda:prepare(req['deal_id'],req.get('actor','')),'get':lambda:get_installation(req['deal_id']),'remaining':lambda:remaining_statement(req['deal_id']),
+    funcs={'prepare':lambda:prepare(req['deal_id'],req.get('actor','')),'get':lambda:get_installation(req['deal_id']),'remaining':lambda:remaining_statement(req['deal_id']),'open_remainders':lambda:open_remainders(req.get('installer_name')),
       'preview_legacy_report':lambda:legacy_report_commit.preview(req['session']),
       'accept_legacy_report':lambda:legacy_report_commit.accept(req['session'],req['source_digest'],req['expected_fingerprint'],req.get('actor','')),
       'sync_legacy_ledger':lambda:legacy_report_commit.sync_ledger(req.get('source_digest')),
