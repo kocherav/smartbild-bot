@@ -52,6 +52,7 @@ import math
 from workflow_runtime import Store as WorkflowStore
 from ui_context import StateStore
 import deal_context
+import installer_table_waiver
 from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
@@ -2898,37 +2899,55 @@ def process_installer_report(token, chat_id, path):
             "keyboard": [[{"text": "📦 Всякая всячина"}], [{"text": "❌ Отменить отчёт"}]], "resize_keyboard": True,
         })
         return
+    installer_table_waiver.waive(session, installation_remaining)
+    waived = installer_table_waiver.waived_text(session)
     required = int(session.get("required_tables") or 0)
     if required:
         session["table_paths"] = []
         session["stage"] = "tables"
         update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)
-        requests = "\n".join(
-            f"• {item['object']}: «{item['source']}»" + (f" → сделка №{item['deal_id']}" if item.get("deal_id") else "")
-            for item in session.get("table_requests") or []
-        )
-        send_message(
-            token, chat_id,
-            f"В отчёте найдено строк «По таблице»: {required}.\n\n{requests}\n\n"
-            f"Пришлите {required} соответствующих Excel-файла подряд, затем нажмите «✅ Все файлы загружены».",
-            INSTALLER_REPORT_FILES_KEYBOARD,
-        )
+        send_message(token, chat_id, installer_tables_request_text(session), INSTALLER_REPORT_FILES_KEYBOARD)
         return
     update_deal_ui_state(chat_id, pending="installer_report_objects", installer_report=session)
-    send_message(token, chat_id, installer_objects_text(session), INSTALLER_REPORT_OBJECTS_KEYBOARD)
+    send_message(token, chat_id, (waived + "\n\n" if waived else "") + installer_objects_text(session),
+                 INSTALLER_REPORT_OBJECTS_KEYBOARD)
+
+
+def installation_remaining(deal_id):
+    """Read-only: the open remainder of a deal's installation statement, or None."""
+    result = run_installation_workflow({"action": "remaining", "deal_id": str(deal_id)})
+    return result.get("result") if result.get("ok") else None
+
+
+def installer_tables_request_text(session):
+    required = int(session.get("required_tables") or 0)
+    requests = "\n".join(
+        f"• {item['object']}: «{item['source']}»" + (f" → сделка №{item['deal_id']}" if item.get("deal_id") else "")
+        for item in session.get("table_requests") or []
+    )
+    waived = installer_table_waiver.waived_text(session)
+    return ((waived + "\n\n") if waived else "") + (
+        f"Нужны таблицы по строкам «По таблице» ({required}) — сумма в них не равна остатку ведомости:\n\n"
+        f"{requests}\n\n"
+        f"Пришлите {required} соответствующих Excel-файла подряд, затем нажмите «✅ Все файлы загружены».")
 
 
 def finish_installer_report_files(token, chat_id, session):
     paths = session.get("table_paths") or []
-    required = int(session.get("required_tables") or 0)
-    if len(paths) < required:
-        send_message(token, chat_id, f"Пока получено таблиц: {len(paths)} из {required}. Пришлите недостающие Excel-файлы.", INSTALLER_REPORT_FILES_KEYBOARD)
-        return
     result = run_installer_report_intake(session["source_path"], paths)
     if not result.get("ok"):
         send_message(token, chat_id, f"Не удалось разобрать комплект файлов: {result.get('error')}", INSTALLER_REPORT_FILES_KEYBOARD)
         return
     completed = result["session"]
+    # Lines closing the statement need no file (owner 20.11) — also for a report that was
+    # already waiting for tables when this rule shipped.
+    installer_table_waiver.waive(completed, installation_remaining)
+    if int(completed.get("required_tables") or 0):
+        session.update({key: completed.get(key) for key in ("required_tables", "table_requests", "waived_tables")})
+        update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)
+        send_message(token, chat_id, f"Получено таблиц: {len(paths)}.\n\n" + installer_tables_request_text(session),
+                     INSTALLER_REPORT_FILES_KEYBOARD)
+        return
     completed["table_paths"] = paths
     completed['submitted_by_chat_id']=session.get('submitted_by_chat_id') or str(chat_id)
     update_deal_ui_state(chat_id, pending="installer_report_objects", installer_report=completed)
@@ -2941,6 +2960,8 @@ def finish_installer_report_files(token, chat_id, session):
                 f"({item.get('table_rows_count') or 0} строк, уверенность {confidence}%)"
             )
     prefix = "Таблицы сопоставлены:\n" + "\n".join(associations) + "\n\n" if associations else ""
+    waived = installer_table_waiver.waived_text(completed)
+    prefix += (waived + "\n\n") if waived else ""
     send_message(token, chat_id, prefix + installer_objects_text(completed), INSTALLER_REPORT_OBJECTS_KEYBOARD)
 
 
@@ -3012,6 +3033,7 @@ def run_morning_brief(spec, timeout=600):
 
 
 MORNING_BRIEF_MAX_ITEMS = 10
+MORNING_BRIEF_HISTORY_DAYS = 365
 MORNING_BRIEF_RETRIES = 8
 MORNING_BRIEF_RETRY_SECONDS = 150
 MORNING_BRIEF_TRANSIENT_RE = re.compile(r"(?i)очередь запросов занята|повторите позже|временно не ответил|timed? ?out|таймаут")
@@ -3061,8 +3083,15 @@ def send_morning_brief(token, chat_id, config=None):
                      ".\nПричина: " + crm_error_words(result.get("error"))
                      + "\nПустой список не считаю отсутствием задач.")
         return False
-    overdue = sorted(result.get("overdue") or [], key=lambda item: -int(item.get("days") or 0))
-    stale = sorted(result.get("stale") or [], key=lambda item: -float(item.get("amount") or 0))
+    # Owner 20.11: hide what has not moved for over a year (hundreds of deals never closed in
+    # Megaplan) and say only how many were hidden.
+    history = int(config.get("history_days") or MORNING_BRIEF_HISTORY_DAYS)
+    old_items = {key: [item for item in result.get(key) or [] if int(item.get("days") or 0) > history]
+                 for key in ("overdue", "stale")}
+    overdue = sorted((item for item in result.get("overdue") or [] if int(item.get("days") or 0) <= history),
+                     key=lambda item: -int(item.get("days") or 0))
+    stale = sorted((item for item in result.get("stale") or [] if int(item.get("days") or 0) <= history),
+                   key=lambda item: -float(item.get("amount") or 0))
     limit = int(config.get("max_items") or MORNING_BRIEF_MAX_ITEMS)
     hidden = {"overdue": max(0, len(overdue) - limit), "stale": max(0, len(stale) - limit)}
     # A morning list is read in a minute: the oldest debts and the largest stuck
@@ -3085,6 +3114,10 @@ def send_morning_brief(token, chat_id, config=None):
             lines.append(f"…и ещё {hidden['stale']} сделок без движения.")
     if not overdue and not stale:
         lines.append("\nПросроченных счетов и незавершённых сделок без движения нет.")
+    if old_items["overdue"] or old_items["stale"]:
+        lines.append("\nСтарше года не показаны: " + " и ".join(f"{count} {text}" for count, text in
+                     ((len(old_items["stale"]), "сделок без движения"), (len(old_items["overdue"]), "неоплаченных счетов"))
+                     if count) + " — похоже на незакрытую историю в Мегаплане.")
     deal_ids = list(dict.fromkeys(str(item["deal_id"]) for item in overdue + stale))
     keyboard = ({"keyboard": [[{"text": f"№{deal_id} · открыть сделку"}] for deal_id in deal_ids],
                  "resize_keyboard": True, "one_time_keyboard": True} if deal_ids else None)

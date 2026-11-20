@@ -1,19 +1,40 @@
 """Browser acceptance on loopback with fake auth and isolated write stores."""
-import hashlib,hmac,json,subprocess,sys,tempfile,threading,time,urllib.parse
+import argparse,hashlib,hmac,json,os,subprocess,sys,tempfile,threading,time,urllib.parse,urllib.request
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import server
 import allocation_workspace as allocation
 ROOT=Path(__file__).resolve().parents[2]
+PORTS=(48097,48098)
 
-def main():
+def arguments(argv=None):
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--evidence',type=Path)
+    return parser.parse_args(argv)
+
+def wait_until_ready(origin,timeout=5):
+    deadline=time.monotonic()+timeout
+    error=None
+    while time.monotonic()<deadline:
+        try:
+            with urllib.request.urlopen(origin+'/deal-dashboard/health',timeout=.5) as response:
+                if response.status==200:return
+        except OSError as exc:
+            error=exc;time.sleep(.05)
+    raise RuntimeError(f'fixture server did not become ready at {origin}: {error}')
+
+def main(argv=None):
+    args=arguments(argv)
     results=[]
     # A boundary in age_days must not invalidate before/after business-data assertions.
     from datetime import datetime, timezone
     clock=datetime.now(timezone.utc);original_project=server.model.project
     server.model.project=lambda snapshot,procurement=None,registry=None,now=None:original_project(snapshot,procurement,registry,now or clock)
     with tempfile.TemporaryDirectory(prefix='smartbild-browser-') as d:
-        root=Path(d);server.matching_store.DB=root/'matching.sqlite3';server.shipment_workspace.DB=root/'shipments.sqlite3';server.DB=root/'dashboard.sqlite3';server.credentials=lambda:('fixture-token',{77});server.initialize()
+        root=Path(d);evidence=args.evidence or Path(tempfile.gettempdir())/f'smartbild-browser-{os.getpid()}/browser-audit.json';evidence=evidence.resolve();evidence.parent.mkdir(parents=True,exist_ok=True)
+        artifacts=evidence.parent/'browser-artifacts';artifacts.mkdir(parents=True,exist_ok=True)
+        work=root/'work';(work/'dashboard').mkdir(parents=True);(work/'dashboard/evidence').symlink_to(artifacts,target_is_directory=True)
+        server.matching_store.DB=root/'matching.sqlite3';server.shipment_workspace.DB=root/'shipments.sqlite3';server.DB=root/'dashboard.sqlite3';server.credentials=lambda:('fixture-token',{77});server.initialize()
         def signed(uid):
             data={'auth_date':str(int(time.time())),'user':json.dumps({'id':uid}),'query_id':'offline'}
             key=hmac.new(b'WebAppData',b'fixture-token',hashlib.sha256).digest()
@@ -68,18 +89,21 @@ def main():
         server.shipment_workspace.save_book('894',{'contract_date_iso':'2026-09-01','total':'200.00','positions':[{'id':'fake-1','name':'Проверка <img src=x onerror=alert(1)>','kind':'goods','unit':'шт.','quantity':'2','total':'200.00','unit_price':'100.00','tax_rate':5}]})
         server.shipment_workspace.save_book('861',{'total':'71040.60','positions':[{'id':'7628','name':'Компактный корпус RAM fit с боковыми вырезами 2000х800х250','quantity':2,'unit':'шт.','total':'71040.60','unit_price':'35520.30','tax_rate':-1}]})
         server.shipment_workspace.save_book('853',{'contract_date_iso':'2026-06-10','total':'709686.00','positions':[{'id':'7487','name':'Монтажные работы','kind':'work','unit':'шт.','quantity':'1','total':'709686.00','unit_price':'709686.00','tax_rate':-1}]})
-        for port,scripts in ((8097,['browser.cjs','workspace-browser.cjs']),(8098,['filters-browser.cjs','allocation-browser.cjs','shipments-browser.cjs','work-stage-browser.cjs','shipment-loading-browser.cjs','shipment-procurement-browser.cjs','supplier-document-browser.cjs','matching-browser.cjs','procurement-flow-browser.cjs','procurement-kit-browser.cjs'])):
+        for port,scripts in ((PORTS[0],['browser.cjs','workspace-browser.cjs']),(PORTS[1],['filters-browser.cjs','allocation-browser.cjs','shipments-browser.cjs','work-stage-browser.cjs','shipment-loading-browser.cjs','shipment-procurement-browser.cjs','supplier-document-browser.cjs','matching-browser.cjs','procurement-flow-browser.cjs','procurement-kit-browser.cjs'])):
             server.ORIGIN=f'http://127.0.0.1:{port}'
-            if port==8098:server.session_user=lambda token:77 if token=='fixture' else None
+            if port==PORTS[1]:server.session_user=lambda token:77 if token=='fixture' else None
             http=server.Server(('127.0.0.1',port),server.Handler)
             thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
             try:
+                wait_until_ready(server.ORIGIN)
                 for script in scripts:
-                    run=subprocess.run(['node',str(Path(__file__).parent/script)],cwd=ROOT,capture_output=True,text=True,timeout=150)
+                    environment={**os.environ}
+                    environment.setdefault('NODE_PATH',str(ROOT/'node_modules'))
+                    run=subprocess.run(['node',str(Path(__file__).parent/script)],cwd=work,capture_output=True,text=True,timeout=150,env=environment)
                     results.append({'script':script,'ok':run.returncode==0,'output':run.stdout[-2000:],'error':run.stderr[-2000:]})
                     print(json.dumps(results[-1],ensure_ascii=False),flush=True)
             finally:http.shutdown();http.server_close();thread.join(timeout=5)
         fixture.unlink(missing_ok=True)
-    (ROOT/'dashboard/evidence/browser-audit-20261012.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))
+        evidence.write_text(json.dumps(results,ensure_ascii=False,indent=2))
     return 0 if all(x['ok'] for x in results) else 1
 if __name__=='__main__':raise SystemExit(main())

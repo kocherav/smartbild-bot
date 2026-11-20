@@ -383,6 +383,31 @@ def get_installation(deal_id, db=None):
     if own: db.close()
     return out
 
+def remaining_statement(deal_id, db=None):
+    """Read-only: what is still open in the installation statement, per work item.
+
+    Owner 20.11: a «по таблице» report line whose amount equals what is left in the
+    statement means 100 % done; the installer need not upload an unchanged table."""
+    own=db is None; db=db or connect()
+    try:
+        ins=get_installation(deal_id,db); rows=[]
+        for w in ins['works']:
+            done=db.execute("""SELECT COALESCE(SUM(COALESCE(ri.accepted_qty,
+                     CASE WHEN ri.accepted_amount IS NOT NULL AND w.rate THEN ri.accepted_amount/w.rate END,0)),0)
+                     FROM report_items ri JOIN reports r ON r.id=ri.report_id JOIN work_items w ON w.id=ri.work_item_id
+                     WHERE ri.work_item_id=? AND r.status IN ('approved','partially_approved')""",(w['id'],)).fetchone()[0] or 0
+            planned=float(w['planned_qty'] or 0); rate=float(w['rate'] or 0)
+            left=max(0.0,round(planned-float(done),6))
+            rows.append({'work_item_id':w['id'],'name':w['name'],'unit':w['unit'],'planned_qty':planned,'rate':rate,
+                         'accepted_qty':float(done),'remaining_qty':left,'remaining_amount':round(left*rate,2)})
+        return {'deal_id':str(deal_id),'rows':rows,
+                'plan_total':round(sum(r['planned_qty']*r['rate'] for r in rows),2),
+                'remaining_total':round(sum(r['remaining_amount'] for r in rows),2),
+                'settlements_complete':ins.get('settlements_complete',True)}
+    finally:
+        if own: db.close()
+
+
 def contact_name(item):
     return clean(' '.join(filter(None,[item.get('lastName'),item.get('firstName'),item.get('middleName')]))) or clean(item.get('name'))
 
@@ -977,7 +1002,7 @@ def backup_db():
 def main():
     req=json.load(sys.stdin); action=req.get('action')
     import legacy_report_commit
-    funcs={'prepare':lambda:prepare(req['deal_id'],req.get('actor','')),'get':lambda:get_installation(req['deal_id']),
+    funcs={'prepare':lambda:prepare(req['deal_id'],req.get('actor','')),'get':lambda:get_installation(req['deal_id']),'remaining':lambda:remaining_statement(req['deal_id']),
       'preview_legacy_report':lambda:legacy_report_commit.preview(req['session']),
       'accept_legacy_report':lambda:legacy_report_commit.accept(req['session'],req['source_digest'],req['expected_fingerprint'],req.get('actor','')),
       'sync_legacy_ledger':lambda:legacy_report_commit.sync_ledger(req.get('source_digest')),

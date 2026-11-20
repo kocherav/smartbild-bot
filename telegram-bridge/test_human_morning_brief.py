@@ -113,6 +113,18 @@ class MorningBriefHumanQATests(unittest.TestCase):
             self.assertNotIn(junk, text)
         self.assertEqual(1, self.runs.call_count, 'отказ Мегаплана не лечится ожиданием')
 
+    def test_items_older_than_a_year_are_counted_not_listed(self):
+        # Owner 20.11: hundreds of deals never closed in Megaplan drowned the list.
+        stale = [{'deal_id': '301', 'client': 'Свежий', 'amount': '5000', 'days': 40, 'status': 'Заказ'},
+                 {'deal_id': '302', 'client': 'Старый', 'amount': '9000', 'days': 400, 'status': 'Заказ'}]
+        overdue = [{'deal_id': '303', 'client': 'Должник', 'amount': '100', 'remainder': '100', 'days': 20},
+                   {'deal_id': '304', 'client': 'Давний', 'amount': '100', 'remainder': '100', 'days': 900}]
+        self._send({'ok': True, 'overdue': overdue, 'stale': stale})
+        text = self.telegram.events[-1]['text']
+        self.assertIn('№301', text); self.assertIn('№303', text)
+        self.assertNotIn('№302', text); self.assertNotIn('№304', text)
+        self.assertIn('Старше года не показаны: 1 сделок без движения и 1 неоплаченных счетов', text)
+
     def test_non_transient_error_is_reported_without_retries(self):
         self._send({'ok': False, 'error': 'нет прав на чтение счетов'})
         self.assertEqual(1, self.runs.call_count)

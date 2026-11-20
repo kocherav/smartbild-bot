@@ -106,7 +106,7 @@ class IntakeTests(unittest.TestCase):
                 sheet.append(['Итого',None,None,None,None,None,amount])
                 path=os.path.join(directory,deal+'.xlsx');book.save(path);book.close();paths.append(path)
             def run(path,table_paths=None):return {'ok':True,'session':intake.build_session(path,table_paths)}
-            with patch.object(intake,'pdf_text',return_value=REPORT),patch.object(intake,'FACT_REGISTRY',os.path.join(directory,'facts.json')),patch.object(bridge,'run_installer_report_intake',side_effect=run),patch.object(bridge,'send_message') as send,patch.object(bridge,'update_deal_ui_state') as update,patch.object(bridge,'INSTALLER_CHAT_IDS',set()):
+            with patch.object(intake,'pdf_text',return_value=REPORT),patch.object(intake,'FACT_REGISTRY',os.path.join(directory,'facts.json')),patch.object(bridge,'run_installer_report_intake',side_effect=run),patch.object(bridge,'installation_remaining',return_value=None),patch.object(bridge,'send_message') as send,patch.object(bridge,'update_deal_ui_state') as update,patch.object(bridge,'INSTALLER_CHAT_IDS',set()):
                 bridge.process_installer_report('fake','test','/tmp/Отчет_261012.pdf')
                 state=update.call_args.kwargs
                 self.assertEqual(state['pending'],'installer_report_tables')

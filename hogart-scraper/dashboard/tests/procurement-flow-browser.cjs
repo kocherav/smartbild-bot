@@ -1,7 +1,7 @@
 const {chromium}=require('playwright'),assert=require('assert/strict');
 (async()=>{const browser=await chromium.launch({headless:true});for(const width of [390,1400]){
  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.addInitScript(()=>sessionStorage.setItem('dashboard_session','fixture'));
- const base='http://127.0.0.1:8098/deal-dashboard/';await page.goto(base+'supplier-allocation?deal_id=890&row_id=8031');await page.locator('#context-info').filter({hasText:'890'}).waitFor();
+ const base='http://127.0.0.1:48098/deal-dashboard/';await page.goto(base+'supplier-allocation?deal_id=890&row_id=8031');await page.locator('#context-info').filter({hasText:'890'}).waitFor();
  const api=await(await page.request.get(base+'api/supplier-allocation',{headers:{Authorization:'Bearer fixture'}})).json();
  const invoice=api.documents.find(d=>d.number==='22427744/SA'&&d.intake.state==='ready');assert(invoice,'Actual parsed Santech invoice must be present');assert.equal(invoice.parsed_lines.length,25);
  const unrelated=api.documents.filter(d=>!d.candidate_deal_ids?.includes('890')&&!d.allocations?.some(a=>String(a.deal_id)==='890')&&!d.draft?.allocations?.some(a=>String(a.deal_id)==='890'));assert(unrelated.length>0,'Fixture must contain unrelated invoices');for(const d of unrelated)assert.equal(await page.locator(`[data-document="${d.key}"]`).count(),0,'Unrelated invoice must not replace deal context: '+d.number);
