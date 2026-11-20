@@ -60,6 +60,8 @@ def main():
                 shutil.copy2(source,target/source.name)
                 source_hashes[str(source)]=hashlib.sha256(source.read_bytes()).hexdigest()
                 if source.name.startswith('test_'):names.append(source.stem)
+            # Browser entry scripts are read (never run) by the runner contract test (20.11).
+            for source in project.glob('*.cjs'):shutil.copy2(source,target/source.name)
             paths.append(str(target))
         asset_globs={
             str(HOME/'megaplan-crm'):['tax_policies.json'],
