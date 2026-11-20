@@ -235,6 +235,10 @@ class InstallationWorkflowTests(unittest.TestCase):
         self.assertEqual(55000,after['remaining_total'])
         self.assertEqual([90,1],[row['remaining_qty'] for row in after['rows']])
 
+    def test_open_remainders_cover_objects_handed_to_installers(self):
+        self.assertEqual({'894': 60000}, iw.open_remainders())
+        self.assertEqual({}, iw.open_remainders('Другой Монтажник'))
+
     def test_acceptance_preserves_cost_when_rate_changes_and_cannot_repeat(self):
         with patch.object(iw,'backup_db'), patch.object(iw,'sync_installation'), patch.object(iw,'publish_workbook'), patch.object(iw,'refresh_economics'):
             report=iw.create_report('894','77','Монтаж кабельной линии 10 м')
