@@ -76,6 +76,22 @@ class ExplorerTests(unittest.TestCase):
         self.assertEqual('explore:payer', case['id'])
         self.assertTrue(any('Бот не понял' in o['actual'] for o in case['observations']))
 
+    def test_judge_receives_tail_of_long_bot_message(self):
+        brain = ScriptedBrain([], {'achieved': True, 'defects': [], 'summary': 'ok'})
+        receipt = {
+            'transcript': [
+                {'actor': 'tester', 'kind': 'message', 'text': 'Покажи себестоимость'},
+                {'actor': 'bot', 'kind': 'message',
+                 'text': 'Карточка сделки\n' + ('позиция ' * 60) +
+                         '\nОбщая себестоимость позиций: 72 000,00 ₽.'},
+            ],
+            'crm_writes': [],
+        }
+
+        explorer.judge({'goal': 'узнать себестоимость', 'success': ['72 000 ₽']}, receipt, brain)
+
+        self.assertIn('Общая себестоимость позиций: 72 000,00 ₽.', brain.prompts[-1])
+
     def test_minor_defect_alone_does_not_fail_an_achieved_goal(self):
         _brain, _stand, case = self.run_mission([{'action': 'finish'}], {
             'achieved': True, 'summary': 'ok', 'defects': [{'severity': 'P3', 'title': 'длинный текст'}]})

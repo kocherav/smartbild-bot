@@ -216,7 +216,10 @@ def judge(mission, receipt, brain):
               for w in receipt['crm_writes']]
     prompt = (JUDGE_RULES + '\n\nЦЕЛЬ МЕНЕДЖЕРА:\n' + mission['goal'] +
               '\n\nКРИТЕРИИ УСПЕХА:\n' + '\n'.join('- ' + c for c in mission.get('success') or []) +
-              '\n\nДИАЛОГ:\n' + render_transcript(receipt)[-12000:] +
+              # The compact renderer is intended for assertion diagnostics.
+              # A judge needs complete individual messages: truncating each
+              # one hid the totals at the end of otherwise correct answers.
+              '\n\nДИАЛОГ:\n' + render_transcript(receipt, message_limit=None)[-12000:] +
               '\n\nЗАПИСИ В CRM (факт):\n' + json.dumps(writes, ensure_ascii=False)[:4000] +
               ('\n\nСБОЙ СТЕНДА: ' + receipt['failure'] if receipt.get('failure') else '') +
               '\n\nТвоя оценка (JSON):')
