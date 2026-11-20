@@ -141,7 +141,7 @@ class FakeTelegram:
         exists = bool(path) and os.path.exists(path)
         event = {'actor': 'bot', 'kind': 'document', 'chat': str(chat_id),
                  'text': caption or '', 'filename': filename or (os.path.basename(path) if path else ''),
-                 'size': os.path.getsize(path) if exists else 0, 'exists': exists}
+                 'size': os.path.getsize(path) if exists else 0, 'exists': exists, 'path': path}
         self._bot_event(event)
         return exists
 
