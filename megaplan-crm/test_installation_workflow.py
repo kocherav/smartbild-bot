@@ -224,6 +224,17 @@ class InstallationWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'превышает задолженность'):
             iw.record_payment('894','bank',1,'26.09.2026','bank-1')
 
+    def test_remaining_statement_counts_only_what_is_still_open(self):
+        # Owner 20.11: «по таблице» equal to this remainder needs no table file.
+        before=iw.remaining_statement('894')
+        self.assertEqual(60000,before['remaining_total'])
+        with patch.object(iw,'backup_db'), patch.object(iw,'sync_installation'), patch.object(iw,'publish_workbook'), patch.object(iw,'refresh_economics'):
+            report=iw.create_report('894','77','Монтаж кабельной линии 10 м')
+            iw.parse_report(report['id']); iw.approve_report(report['id'],'manager')
+        after=iw.remaining_statement('894')
+        self.assertEqual(55000,after['remaining_total'])
+        self.assertEqual([90,1],[row['remaining_qty'] for row in after['rows']])
+
     def test_acceptance_preserves_cost_when_rate_changes_and_cannot_repeat(self):
         with patch.object(iw,'backup_db'), patch.object(iw,'sync_installation'), patch.object(iw,'publish_workbook'), patch.object(iw,'refresh_economics'):
             report=iw.create_report('894','77','Монтаж кабельной линии 10 м')
