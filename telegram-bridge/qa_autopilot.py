@@ -5,6 +5,8 @@ records evidence, and may approve only findings that are explicitly technical.
 """
 import datetime as dt
 import json
+import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -21,9 +23,41 @@ PYTHON = '/home/kocher.av/.report-venv/bin/python'
 TIMEOUTS = {'explore': 3 * 3600}
 
 
+def _run_process_group(command, *, timeout, **kwargs):
+    """Run a QA tree with a deadline and never leave grandchildren behind.
+
+    ``subprocess.run(timeout=...)`` kills only its direct child.  QA agent starts
+    offline_tests/quality_gate below that child, so a timed-out agent used to
+    orphan the expensive test process in the bridge service cgroup.
+    """
+    process = subprocess.Popen(command, start_new_session=True, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def run(profile='human', runner=subprocess.run):
-    completed = runner([PYTHON, str(AGENT), 'run', '--profile', profile],
-                       cwd=ROOT, capture_output=True, text=True, timeout=TIMEOUTS.get(profile, 3600))
+    command = [PYTHON, str(AGENT), 'run', '--profile', profile]
+    timeout = TIMEOUTS.get(profile, 3600)
+    if runner is subprocess.run:
+        completed = _run_process_group(command, cwd=ROOT, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True, timeout=timeout)
+    else:
+        completed = runner(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
     if completed.returncode:
         return {'ok': False, 'error': (completed.stderr or completed.stdout)[-2000:]}
     try:
