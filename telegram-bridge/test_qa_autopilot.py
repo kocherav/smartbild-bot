@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,6 +43,16 @@ class AutopilotTest(unittest.TestCase):
         result = qa_autopilot.run(runner=runner)
         self.assertTrue(result['ok'])
         self.assertEqual('R', result['run']['id'])
+
+    def test_production_runner_uses_killable_process_group(self):
+        completed = subprocess.CompletedProcess(['qa'], 0,
+            json.dumps({'run': {'id': 'R'}, 'task': None}), '')
+        with patch.object(qa_autopilot, '_run_process_group', return_value=completed) as run:
+            result = qa_autopilot.run()
+        self.assertTrue(result['ok'])
+        self.assertTrue(run.call_args.kwargs['text'])
+        self.assertEqual(3600, run.call_args.kwargs['timeout'])
+        self.assertEqual(subprocess.PIPE, run.call_args.kwargs['stdout'])
 
     def test_technical_failure_is_approved_without_owner(self):
         task = {'id': 'QA-X', 'status': 'ready', 'failures': [{'id': 'test:deal-create'}]}
