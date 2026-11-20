@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');const fs=require('fs');const assert=require('assert/strict');
 (async()=>{
- const b=await chromium.launch({headless:true});const base='http://127.0.0.1:8097/deal-dashboard/';const fixture=JSON.parse(fs.readFileSync('/tmp/deal-dashboard-test-auth.json','utf8'));
- const admin=await b.newContext();const r=await admin.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:8097'},data:{initData:fixture.valid}});assert.equal(r.status(),200);const auth=await r.json();
+ const b=await chromium.launch({headless:true});const base='http://127.0.0.1:48097/deal-dashboard/';const fixture=JSON.parse(fs.readFileSync('/tmp/deal-dashboard-test-auth.json','utf8'));
+ const admin=await b.newContext();const r=await admin.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:48097'},data:{initData:fixture.valid}});assert.equal(r.status(),200);const auth=await r.json();
  for(const [name,session,initData,expected,authCalls] of [
   ['restore with stale Telegram data',auth.token,'auth_date=1&hash=expired',true,0],
   ['new launch','',fixture.valid,true,1],

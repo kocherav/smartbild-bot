@@ -4,22 +4,25 @@ const assert=require('assert/strict');
 (async()=>{
  const b=await chromium.launch({headless:true});const ctx=await b.newContext({viewport:{width:1536,height:1200}});const page=await ctx.newPage();
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const base='http://127.0.0.1:8097/deal-dashboard/';const fixture=JSON.parse(fs.readFileSync('/tmp/deal-dashboard-test-auth.json','utf8'));
+ const base='http://127.0.0.1:48097/deal-dashboard/';const fixture=JSON.parse(fs.readFileSync('/tmp/deal-dashboard-test-auth.json','utf8'));
  await page.goto(base); await page.waitForSelector('#login');
  let r=await ctx.request.get(base+'api/dashboard');assert.equal(r.status(),401);
  r=await ctx.request.get(base+'../data/crm.json');assert.equal(r.status(),404);
- r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:8097'},data:{initData:fixture.other}});assert.equal(r.status(),403);
+ r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:48097'},data:{initData:fixture.other}});assert.equal(r.status(),403);
  r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:'https://evil.example'},data:{initData:fixture.valid}});assert.equal(r.status(),403);
- r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:8097'},data:{initData:fixture.valid}});assert.equal(r.status(),200);const auth=await r.json();
+ r=await ctx.request.post(base+'api/auth/telegram',{headers:{Origin:'http://127.0.0.1:48097'},data:{initData:fixture.valid}});assert.equal(r.status(),200);const auth=await r.json();
  const snapshotResponse=await ctx.request.get(base+'api/dashboard',{headers:{Authorization:'Bearer '+auth.token}});const baseline=await snapshotResponse.json();const yearly=baseline.deals.filter(d=>!d.is_purchase&&d.created_at.startsWith('2026'));const active=yearly.filter(d=>d.result==='active');
  await page.evaluate(t=>sessionStorage.setItem('dashboard_session',t),auth.token);await page.reload();await page.waitForSelector('#app:not([hidden])');
  await page.screenshot({path:'dashboard/evidence/desktop-all.png',fullPage:false});
  assert.ok(await page.locator('#deals-grid .deal-card').count()>0);
  await page.selectOption('#year','2026');await page.screenshot({path:'dashboard/evidence/desktop-2026.png',fullPage:false});
  const yearCards=await page.locator('#deals-grid .deal-card').count();assert.ok(yearCards>0);
- // Reproduce the reported four-deal view, and verify explicit full-scope recovery.
- await page.click('[data-week="2026-09-21"]');
- assert.equal((await page.locator('.kpi-number').first().innerText()).trim(),String(active.filter(d=>d.payments.some(p=>p.date>='2026-09-21'&&p.date<'2026-09-28')).length));
+ // Select an actual payment week from the current snapshot, then verify explicit
+ // full-scope recovery. The old fixed week disappeared as the read-only snapshot evolved.
+ const week=await page.locator('[data-week]').first().getAttribute('data-week');assert.ok(week);
+ const weekEnd=new Date(week+'T00:00:00Z');weekEnd.setUTCDate(weekEnd.getUTCDate()+7);const weekEndIso=weekEnd.toISOString().slice(0,10);
+ await page.click(`[data-week="${week}"]`);
+ assert.equal((await page.locator('.kpi-number').first().innerText()).trim(),String(active.filter(d=>d.payments.some(p=>p.date>=week&&p.date<weekEndIso)).length));
  assert.match(await page.locator('#scope-summary').innerText(),/ограничен дополнительными фильтрами/);
  assert.equal(await page.locator('[data-clear="week"]').count(),1);
  await page.click('[data-preset="active"]');
@@ -49,7 +52,7 @@ const assert=require('assert/strict');
  assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
  await mobile.screenshot({path:'dashboard/evidence/mobile.png',fullPage:true});
  await mobile.fill('#search','861');await mobile.locator('#deals-grid .deal-card').click();await mobile.click('[data-tab="tasks"]');await mobile.screenshot({path:'dashboard/evidence/mobile-checklist.png'});await mobile.click('#close-dialog');
- r=await ctx.request.post(base+'api/auth/code',{headers:{Origin:'http://127.0.0.1:8097'},data:{code}});assert.equal(r.status(),403);
+ r=await ctx.request.post(base+'api/auth/code',{headers:{Origin:'http://127.0.0.1:48097'},data:{code}});assert.equal(r.status(),403);
  await mobile.click('#logout');await mobile.waitForSelector('#login:not([hidden])');
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({ok:true,checks:['unauthenticated denial','cross-origin denial','wrong user denial','Telegram authentication','year/search/stage/week filters','money and procurement detail','checklist create/update/persistence','XSS escaping','one-time browser code','mobile overflow','logout'],pageErrors:errors}));
