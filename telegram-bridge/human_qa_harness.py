@@ -1258,7 +1258,13 @@ class HumanJourneyCase:
         return stand
 
 
-def render_transcript(receipt):
+def render_transcript(receipt, message_limit=400):
+    """Render a dialogue, optionally keeping complete messages.
+
+    Short output is useful in assertion errors, but consumers that judge the
+    business result must pass ``message_limit=None``.  Otherwise a correct
+    answer can lose its totals at this presentation-only boundary.
+    """
     lines = []
     for event in receipt['transcript']:
         if event['actor'] == 'system':
@@ -1266,5 +1272,6 @@ def render_transcript(receipt):
             continue
         who = 'Человек' if event['actor'] == 'tester' else 'Бот'
         verb = {'button': 'нажал', 'file': 'прислал файл', 'document': 'прислал файл'}.get(event['kind'], 'написал')
-        lines.append(f"{who} {verb}: {event['text'][:400]}")
+        text = event['text'] if message_limit is None else event['text'][:message_limit]
+        lines.append(f"{who} {verb}: {text}")
     return '\n'.join(lines)
