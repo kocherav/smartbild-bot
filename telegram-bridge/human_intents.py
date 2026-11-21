@@ -84,6 +84,10 @@ def _invoice_intent(folded, deal_id):
     folded = re.sub(r"сч[её]т\w*\s+на\s+оплату", "счет", folded)
     if not re.search(r"\bсч[её]т", folded) or re.search(r"поставщик|входящ|учт|учес|разнес|оплат|оплач", folded):
         return None
+    # «КП на 3 кондиционера… юрлицо, нужен счёт с НДС» asks for a proposal; the invoice is a
+    # remark about the client, not a request to issue one now (KP eval 21.11, commercial-vat).
+    if re.search(r"\bкп\b|коммерческ\w*\s+предложени", folded):
+        return None
     missing = () if deal_id else ("deal",)
     if re.search(r"\b(?:выстав|сформир|подготов|сдела|созда|оформ|нуж[ен]\w*)\w*\b", folded):
         return Intent(ISSUE_INVOICE, deal_id, missing=missing)
