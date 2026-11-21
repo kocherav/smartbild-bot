@@ -62,6 +62,8 @@ def main():
                 if source.name.startswith('test_'):names.append(source.stem)
             # Browser entry scripts are read (never run) by the runner contract test (20.11).
             for source in project.glob('*.cjs'):shutil.copy2(source,target/source.name)
+            # Test data read by the KP eval runner's unit tests (20.11).
+            for source in project.glob('KP_REQUEST_CORPUS.json'):shutil.copy2(source,target/source.name)
             paths.append(str(target))
         asset_globs={
             str(HOME/'megaplan-crm'):['tax_policies.json'],
