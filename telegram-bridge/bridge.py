@@ -9979,7 +9979,10 @@ def format_kp_summary(kp_result):
                     f"  + доп. фреоновая магистраль, {it['length_m']} м — "
                     f"{_ru_money(it['unit_price_per_m'])} руб/м"
                 )
-        lines.append(f"Итого: {_ru_money(v['total'])} руб.")
+        for tbd in v.get("install_tbd") or []:
+            lines.append(f"  + {tbd['what']} для {tbd['sku']} — по расчёту после осмотра (тарифа нет)")
+        lines.append(f"Итого: {_ru_money(v['total'])} руб."
+                     + (" (без монтажа/трассы «по расчёту»)" if v.get("install_tbd") else ""))
         if not v["economics"].get("cost_fully_known"):
             any_cost_unknown = True
 
@@ -9990,6 +9993,10 @@ def format_kp_summary(kp_result):
             "⚠️ По части позиций (см. файл) нет закупочной цены у поставщика — "
             "себестоимость и прибыль там занижены."
         )
+    if any(v.get("install_tbd") for v in variants):
+        # Owner 21.11 (option 2): no install tariff for big/cassette/duct units yet.
+        lines.append("⚠️ Для части оборудования нет тарифа монтажа/трассы: в КП стоит «по расчёту после "
+                     "осмотра объекта», в итог не включено. Проверьте перед отправкой клиенту.")
     return "\n".join(lines)
 
 

@@ -27,3 +27,16 @@ class JobTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    def timeout(_):raise subprocess.TimeoutExpired('generator',1)
    self.assertFalse(kp_jobs.run({'client':'Николай'},'owner',tmp,timeout)['ok']);self.assertEqual('Николай',kp_jobs.latest_failed('owner',tmp)['spec']['client'])
+
+
+class KpSummaryEstimateTests(unittest.TestCase):
+    def test_install_by_estimate_is_shown_and_warned(self):
+        # Owner 21.11 (option 2): no install tariff for big/cassette/duct units.
+        import bridge
+        text = bridge.format_kp_summary({'client': 'Евгений', 'variants': [{
+            'label': '', 'total': 100000, 'economics': {'cost_fully_known': True},
+            'items': [{'type': 'equipment', 'sku': 'AD71', 'qty': 1, 'unit_price': 100000, 'availability': 'В наличии'}],
+            'install_tbd': [{'sku': 'AD71', 'capacity_kw': None, 'what': 'монтаж'}]}]})
+        self.assertIn('монтаж для AD71 — по расчёту после осмотра', text)
+        self.assertIn('Проверьте перед отправкой клиенту', text)
+        self.assertIn('без монтажа/трассы «по расчёту»', text)

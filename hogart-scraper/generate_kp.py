@@ -265,6 +265,20 @@ def num_qty(n):
     return str(int(n)) if float(n).is_integer() else num_ru(n)
 
 
+TBD_TEXT = "по расчёту после осмотра объекта"
+
+
+def tbd_row(label, unit, qty):
+    """Owner 21.11 (option 2): no tariff for this equipment yet - the line is shown without a
+    price and not counted in the total; the manager is warned."""
+    return f"""<tr>
+  <td>{html.escape(label)}</td>
+  <td>{unit}</td>
+  <td>{num_qty(qty)}</td>
+  <td class="num" colspan="2">{TBD_TEXT}</td>
+</tr>"""
+
+
 def simple_row(label, unit, qty, unit_price):
     """A price-table row with no availability sub-row - for service/material line items
     (install, freon line) that aren't a stocked Hogart SKU."""
@@ -370,6 +384,7 @@ def render_variant(items_spec, discount_pct, include_install):
     items_spec, prepared_products = prepare_multisplit(items_spec, include_install)
     total = 0.0
     cost_total = 0.0
+    install_tbd = []
     cost_unknown_skus = []
 
     for it in items_spec:
@@ -462,12 +477,16 @@ def render_variant(items_spec, discount_pct, include_install):
 
         install_price = None
         if include_install and it.get("_multi_role") != "outdoor":
-            if capacity_kw is None:
-                die(f"could not determine cooling capacity for {sku!r} - can't price the install line")
             try:
+                if capacity_kw is None:
+                    raise ValueError("мощность не указана у поставщика")
                 install_price = install_price_for_capacity(capacity_kw)
-            except ValueError as exc:
-                raise ValueError(f"Для {sku} (верхняя мощность {capacity_kw} кВт) не задан тариф монтажа. Нужна цена монтажа этой позиции; состав КП сохранён.") from exc
+            except ValueError:
+                # Owner 21.11: build the KP anyway, install «по расчёту» (cassette/duct without
+                # a capacity, units above the last tariff tier).
+                rows_html.append(tbd_row("Монтаж — " + TBD_TEXT, "шт.", qty))
+                install_tbd.append({"sku": display_code, "capacity_kw": capacity_kw, "what": "монтаж"})
+        if install_price is not None:
             install_row, install_total = simple_row(
                 (f"Монтаж подключения внутреннего блока мультисплита, до {num_qty(capacity_kw)} кВт" if it.get("_multi_role")=="indoor" else f"Стандартный монтаж кондиционера, {num_qty(capacity_kw)} кВт"), "шт.", qty, install_price,
             )
@@ -484,9 +503,14 @@ def render_variant(items_spec, discount_pct, include_install):
         line_length_m = float(it.get("line_length_m") or 0)
         freon = None
         if line_length_m > 0:
-            if capacity_kw is None:
-                die(f"could not determine cooling capacity for {sku!r} - can't price the freon line")
-            freon = freon_line_price_per_meter(capacity_kw)
+            try:
+                if capacity_kw is None:
+                    raise ValueError("мощность не указана у поставщика")
+                freon = freon_line_price_per_meter(capacity_kw)
+            except (ValueError, KeyError):
+                rows_html.append(tbd_row("Дополнительная фреоновая магистраль — " + TBD_TEXT, "м.", line_length_m))
+                install_tbd.append({"sku": display_code, "capacity_kw": capacity_kw, "what": "трасса"})
+        if freon is not None:
             freon_row, freon_total = simple_row(
                 "Дополнительная фреоновая магистраль", "м.", line_length_m, freon["sell_price_per_m"],
             )
@@ -561,7 +585,7 @@ def render_variant(items_spec, discount_pct, include_install):
     }
 
     return {
-        "rows_html": rows_html, "gallery_html": gallery_html,
+        "rows_html": rows_html, "gallery_html": gallery_html, "install_tbd": install_tbd,
         "summary_items": summary_items, "total": total, "economics": economics,
         "tax_note": tax_label(total,tax_rate) if tax_rate is not None else "",
     }
@@ -707,7 +731,8 @@ with open({output!r}, 'wb') as f:
     print(json.dumps({
         "ok": True, "path": output, "economics_xlsx_path": xlsx_path, "client": client,
         "variants": [
-            {"label": v["label"], "total": round(v["total"], 2), "items": v["summary_items"], "economics": v["economics"]}
+            {"label": v["label"], "total": round(v["total"], 2), "items": v["summary_items"], "economics": v["economics"],
+             "install_tbd": v.get("install_tbd") or []}
             for v in variant_results
         ],
     }, ensure_ascii=False))

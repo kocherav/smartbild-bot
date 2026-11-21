@@ -19,6 +19,17 @@ class MultisplitTests(unittest.TestCase):
   r=self.render([{'sku':'SPLIT','qty':2,'line_length_m':15}]);self.assertEqual(2,sum(x['qty'] for x in r['summary_items'] if x['type']=='install'));self.assertEqual(15,sum(x['length_m'] for x in r['summary_items'] if x['type']=='freon_line'))
  def test_multiple_outdoor_groups_require_mapping(self):
   with self.assertRaisesRegex(ValueError,'несколько наружных'):self.render([{'sku':'OUT','qty':2},{'sku':'IN25','qty':4}])
- def test_unsupported_large_single_system_is_not_clamped(self):
+ def test_unsupported_large_single_system_gets_install_by_estimate(self):
+  # Owner 21.11 (option 2): no tariff -> «по расчёту после осмотра», not in the total, not clamped.
   with patch.object(g,'install_price_for_capacity',side_effect=ValueError('unsupported')):
-   with self.assertRaisesRegex(ValueError,'не задан тариф'):self.render([{'sku':'SPLIT'}])
+   r=self.render([{'sku':'SPLIT'}])
+  self.assertEqual([],[x for x in r['summary_items'] if x['type']=='install'])
+  self.assertEqual([{'sku':'SPLIT','capacity_kw':3.2,'what':'монтаж'}],r['install_tbd'])
+  self.assertTrue(any('по расчёту после осмотра объекта' in row for row in r['rows_html']))
+  self.assertEqual(sum(x['line_total'] for x in r['summary_items']),r['total'])
+ def test_unknown_capacity_builds_with_install_and_route_by_estimate(self):
+  p=self.products();p['SPLIT']['features']=[]
+  with patch.object(g,'live_lookup',side_effect=lambda sku:p[sku]),patch.object(g,'get_features',side_effect=lambda x:x['features']),patch.object(g,'hogart_image_url',return_value=None),patch.object(g,'download_image',return_value=None):
+   r=g.render_variant([{'sku':'SPLIT','line_length_m':8}],0,True)
+  self.assertEqual(['монтаж','трасса'],[x['what'] for x in r['install_tbd']])
+  self.assertEqual(['equipment'],[x['type'] for x in r['summary_items']])
