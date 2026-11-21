@@ -137,13 +137,27 @@ def attach_tables(exceptions, table_paths):
             registry = json.load(registry_file)
     except (OSError, json.JSONDecodeError):
         registry = {}
+    # 20.11: two old-format tables (108 200 and 30 000) were given by word scoring to the first
+    # report lines (150 000, 20 000). A table whose execution column totals exactly one line's
+    # amount belongs to that line; only the rest is matched by scoring.
+    pairs = []
+    def amounts(profile):
+        return [value for item in profile.get("completion_columns") or []
+                for value in (item.get("footer"), item.get("sum")) if value is not None]
+    for profile in list(profiles):
+        exact = [t for t in targets if t.get("amount") is not None
+                 and any(abs(float(t["amount"]) - float(v)) < 0.01 for v in amounts(profile))]
+        owners = [p for p in profiles if exact and any(abs(float(exact[0]["amount"]) - float(v)) < 0.01 for v in amounts(p))]
+        if len(exact) == 1 and len(owners) == 1:
+            pairs.append((exact[0], profile))
+            targets.remove(exact[0]); profiles.remove(profile)
     best = None
     for permutation in itertools.permutations(range(len(profiles)), min(len(targets), len(profiles))):
         total = sum(table_score(targets[i], profiles[p]) for i, p in enumerate(permutation))
         if best is None or total > best[0]:
             best = (total, permutation)
-    for index, profile_index in enumerate(best[1] if best else ()):
-        target, profile = targets[index], profiles[profile_index]
+    pairs += [(targets[index], profiles[profile_index]) for index, profile_index in enumerate(best[1] if best else ())]
+    for target, profile in pairs:
         raw_score = table_score(target, profile)
         report_amount = float(target.get("amount") or 0)
         candidates = sorted(

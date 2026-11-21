@@ -995,6 +995,8 @@ Casarte идёт последним (и с большей вероятность
      назвал трассу СУММАРНО на объект (например «17 метров суммарно»), это общая длина на
      вариант, а не на каждый блок: раздели её между позициями (если неизвестно как — поровну
      с округлением, и напиши, как разделил), сумма line_length_m в каждом варианте = названной.
+  3. Разные комнаты/блоки с разной трассой — РАЗНЫЕ позиции в "items" (по qty 1 со своей
+     line_length_m), даже если модель одна; qty больше 1 только при одинаковой трассе на каждый.
 Только когда известны оба ответа, выведи в САМОМ КОНЦЕ ответа
 ТОЧНО блок в следующем формате (валидный JSON внутри, без комментариев):
 
@@ -9942,7 +9944,8 @@ def format_kp_summary(kp_result):
     their own heading/total/warning, with NO combined grand total across them (they're
     alternatives the client picks ONE of, never a single combined order)."""
     variants = kp_result["variants"]
-    lines = [f"КП для {kp_result['client']} готово" + (":" if len(variants) == 1 else f" — {len(variants)} вариант(а/ов):")]
+    # «КП для Виталий» read wrong; the name stays in the nominative case (20.11).
+    lines = [f"КП готово, адресат: {kp_result['client']}" + (":" if len(variants) == 1 else f" — вариантов: {len(variants)}.")]
     any_cost_unknown = False
     for v in variants:
         if v.get("label"):
@@ -12158,7 +12161,11 @@ def main():
 
         reply, create_kp_deal_confirmed = extract_create_kp_deal_confirm(reply)
         if create_kp_deal_confirmed is not None:
-            if RUNTIME_ACTIVE:
+            if RUNTIME_ACTIVE and not create_kp_deal_confirmed:
+                # 20.11: «нет, сделку не нужно» was answered with how to create one.
+                _pending_kp_deal = None
+                reply = (reply + "\n\n" if reply.strip() else "") + "Понял, сделку не создаём. КП остаётся у вас."
+            elif RUNTIME_ACTIVE:
                 _pending_kp_deal = None
                 reply = 'Для создания сделки откройте «➕ Создать сделку»: выберите клиента и подтвердите спецификацию. По одному ответу «да» сделка не создаётся.'
             elif _pending_kp_deal is None:

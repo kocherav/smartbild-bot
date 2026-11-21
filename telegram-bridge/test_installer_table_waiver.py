@@ -119,6 +119,30 @@ class OwnTableWithoutDeal(unittest.TestCase):
                 intake.attach_tables([{'type': 'table', 'deal_id': None, 'amount': 5}], ['/tmp/857.xlsx'])
 
 
+class OldFormatTablesByAmount(unittest.TestCase):
+    def test_old_tables_go_to_the_lines_with_their_amounts_not_the_first_lines(self):
+        # 20.11 dry run: files for 108 200 and 30 000 went to the 150 000 and 20 000 lines.
+        import installer_report_intake as intake
+        import installer_workbook_intake
+        def profile(name, total):
+            return {'path': '/tmp/' + name, 'filename': name, 'text': name, 'rows': [], 'calculated_total': total,
+                    'completion_columns': [{'column': 9, 'sum': total, 'footer': total}]}
+        profiles = {'/tmp/конд.xlsx': profile('конд.xlsx', 30000), '/tmp/вент.xlsx': profile('вент.xlsx', 108200)}
+        targets = [{'type': 'table', 'object': o, 'source': f'по таблице-{a}', 'amount': a, 'deal_id': None}
+                   for o, a in (('Отопление', 150000), ('Монтаж компрессора', 20000), ('Вентиляция', 108200),
+                                ('Кондиционирование', 30000))]
+        book = type('Book', (), {'close': lambda self: None})()
+        with patch.object(intake, 'load_workbook', return_value=book), \
+             patch.object(installer_workbook_intake, 'read', return_value=None), \
+             patch.object(intake, 'table_profile', side_effect=lambda path: profiles[path]), \
+             patch.object(intake, 'FACT_REGISTRY', '/nonexistent/facts.json'):
+            intake.attach_tables(targets, list(profiles))
+        got = {t['object']: t.get('table_file') for t in targets}
+        self.assertEqual({'Отопление': None, 'Монтаж компрессора': None,
+                          'Вентиляция': 'вент.xlsx', 'Кондиционирование': 'конд.xlsx'}, got)
+        self.assertTrue(all(t['completion_matches_report'] for t in targets if t.get('table_file')))
+
+
 class BridgeFlow(unittest.TestCase):
     def run_report(self, s, statements):
         sent = []
