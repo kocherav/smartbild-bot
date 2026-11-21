@@ -130,6 +130,13 @@ class PhrasingTests(HumanJourneyCase, unittest.TestCase):
         self.assertEqual([], stand.crm.writes)
         self.assertEqual(0, len(stand.model.prompts))
 
+    def test_proposal_mentioning_an_invoice_is_not_an_invoice_request(self):
+        import human_intents
+        for text in ('Юрлицо, нужен счёт с НДС. КП на 3 кондиционера по 3,5 кВт с монтажом, трасса суммарно 20 м.',
+                     'сделай коммерческое предложение, потом выставим счёт'):
+            self.assertIsNone(human_intents.classify(text), text)
+        self.assertEqual('issue_invoice', human_intents.classify('выстави счёт по сделке 990001').name)
+
     def test_classifier_keeps_unrelated_messages_alone(self):
         for text in ('переведи 5000 монтажнику', 'Привет', 'Оплати счет', 'Какие позиции нужно закупить у Hogart?',
                      'сколько стоит сплит Haier 2,5 кВт'):
