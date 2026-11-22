@@ -147,8 +147,36 @@ def attach_file_tables(targets, paths, reader=None):
 def attach_tables(exceptions, table_paths):
     """Excel tables first (they carry rows), then PDF/photo files. Returns unmatched files."""
     file_paths = [p for p in table_paths if os.path.splitext(p)[1].casefold() in FILE_TABLE_EXTENSIONS]
-    _attach_excel(exceptions, [p for p in table_paths if p not in file_paths])
-    return attach_file_tables([item for item in exceptions if item.get("type") == "table"], file_paths)
+    duplicates = _attach_excel(exceptions, [p for p in table_paths if p not in file_paths]) or []
+    return duplicates + attach_file_tables([item for item in exceptions if item.get("type") == "table"], file_paths)
+
+
+def split_rows(profile, column, targets):
+    """The single way to divide a column's non-zero rows into the targets' amounts, else None."""
+    rows = [r for r in profile.get("rows") or [] if (r.get("extra_values") or {}).get(column)]
+    cents = [round(float(r["extra_values"][column]) * 100) for r in rows]
+    wanted = [round(float(t["amount"]) * 100) for t in targets]
+    if len(rows) > 40 or sum(cents) != sum(wanted):
+        return None
+    solutions = []
+
+    def place(index, left, assignment):
+        if len(solutions) > 1:
+            return
+        if index == len(rows):
+            if all(x == 0 for x in left):
+                solutions.append(list(assignment))
+            return
+        for slot, need in enumerate(left):
+            if cents[index] <= need:
+                left[slot] -= cents[index]; assignment.append(slot)
+                place(index + 1, left, assignment)
+                left[slot] += cents[index]; assignment.pop()
+
+    place(0, list(wanted), [])
+    if len(solutions) != 1:
+        return None
+    return [(target, [rows[i] for i, slot in enumerate(solutions[0]) if slot == n]) for n, target in enumerate(targets)]
 
 
 def _attach_excel(exceptions, table_paths):
@@ -174,7 +202,7 @@ def _attach_excel(exceptions, table_paths):
     targets=[t for t in targets if not t.get('table_path')]
     profiles = [table_profile(path) for path in remaining_paths]
     if not targets or not profiles:
-        return
+        return []
     try:
         with open(FACT_REGISTRY, encoding="utf-8") as registry_file:
             registry = json.load(registry_file)
@@ -183,17 +211,48 @@ def _attach_excel(exceptions, table_paths):
     # 20.11: two old-format tables (108 200 and 30 000) were given by word scoring to the first
     # report lines (150 000, 20 000). A table whose execution column totals exactly one line's
     # amount belongs to that line; only the rest is matched by scoring.
-    pairs = []
+    pairs, duplicates = [], []
     def amounts(profile):
         return [value for item in profile.get("completion_columns") or []
                 for value in (item.get("footer"), item.get("sum")) if value is not None]
     for profile in list(profiles):
+        if profile not in profiles:
+            continue
         exact = [t for t in targets if t.get("amount") is not None
                  and any(abs(float(t["amount"]) - float(v)) < 0.01 for v in amounts(profile))]
-        owners = [p for p in profiles if exact and any(abs(float(exact[0]["amount"]) - float(v)) < 0.01 for v in amounts(p))]
-        if len(exact) == 1 and len(owners) == 1:
-            pairs.append((exact[0], profile))
-            targets.remove(exact[0]); profiles.remove(profile)
+        if len(exact) != 1:
+            continue
+        owners = [p for p in profiles if any(abs(float(exact[0]["amount"]) - float(v)) < 0.01 for v in amounts(p))]
+        # 22.11: Sergey sent the heating table twice; the latest upload wins, the rest are duplicates.
+        keep = owners[-1]
+        for duplicate in owners[:-1]:
+            profiles.remove(duplicate)
+            duplicates.append({"file": duplicate["filename"], "path": duplicate["path"], "duplicate_of": keep["filename"]})
+        pairs.append((exact[0], keep))
+        targets.remove(exact[0]); profiles.remove(keep)
+    # 22.11: one execution column covered two report lines (warm floor 31 000 + cabinets 4 000 =
+    # 35 000). If the column total equals the sum of exactly one combination of open lines and the
+    # rows split into those amounts in exactly one way, each line gets its own rows.
+    for profile in list(profiles):
+        for column in profile.get("completion_columns") or []:
+            total = column.get("footer") if column.get("footer") is not None else column.get("sum")
+            if total is None:
+                continue
+            combos = [c for size in (2, 3) for c in itertools.combinations([t for t in targets if t.get("amount") is not None], size)
+                      if abs(sum(float(t["amount"]) for t in c) - float(total)) < 0.01]
+            if len(combos) != 1:
+                continue
+            split = split_rows(profile, str(column["column"]), combos[0])
+            if not split:
+                continue
+            for target, rows in split:
+                amount = float(target["amount"])
+                pairs.append((target, {**profile, "rows": rows, "calculated_total": sum(r["total"] or 0 for r in rows),
+                                       "completion_columns": [{"column": column["column"], "sum": amount, "footer": amount}],
+                                       "split_from_total": float(total)}))
+                targets.remove(target)
+            profiles.remove(profile)
+            break
     best = None
     for permutation in itertools.permutations(range(len(profiles)), min(len(targets), len(profiles))):
         total = sum(table_score(targets[i], profiles[p]) for i, p in enumerate(permutation))
@@ -235,6 +294,7 @@ def _attach_excel(exceptions, table_paths):
             "table_match_confidence": 0.95 if raw_score >= 4 else 0.8 if raw_score >= 1 else 0.5,
             "reason": "таблица получена; нужно подтвердить выполненные строки или учёт одной суммой",
         })
+    return duplicates
 
 
 def date_from_filename(path):

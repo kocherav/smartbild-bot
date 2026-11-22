@@ -257,3 +257,50 @@ class TablesInAnyFormat(unittest.TestCase):
                            {'table_path': '/tmp/vent.xlsx', 'source': 'x'}],
             'unmatched_files': [{'file': 'a.jpg', 'path': '/tmp/a.jpg'}]})
         self.assertEqual(['/tmp/heat.pdf', '/tmp/a.jpg'], [p for p, _ in files])
+
+
+class SergeyFilesOf22November(unittest.TestCase):
+    """TASK-20261122-18: his files cover all 7 lines; the matcher must see that."""
+
+    def run_attach(self, targets, profiles):
+        import installer_report_intake as intake
+        import installer_workbook_intake
+        book = type('Book', (), {'close': lambda self: None})()
+        with patch.object(intake, 'load_workbook', return_value=book), \
+             patch.object(installer_workbook_intake, 'read', return_value=None), \
+             patch.object(intake, 'table_profile', side_effect=lambda path: profiles[path]), \
+             patch.object(intake, 'FACT_REGISTRY', '/nonexistent/facts.json'):
+            return intake.attach_tables(targets, list(profiles))
+
+    @staticmethod
+    def row(n, name, amount):
+        return {'number': n, 'name': name, 'qty': 1, 'unit': 'шт', 'rate': amount, 'total': amount,
+                'extra_values': {'9': amount}}
+
+    def profile(self, name, rows):
+        total = sum(r['extra_values']['9'] for r in rows)
+        return {'path': '/tmp/' + name, 'filename': name, 'text': name, 'rows': rows, 'calculated_total': total,
+                'completion_columns': [{'column': 9, 'sum': total, 'footer': total}]}
+
+    def test_duplicate_heating_and_one_column_for_two_lines(self):
+        targets = [{'type': 'table', 'object': o, 'source': f'по таблице-{a}', 'amount': a, 'deal_id': None}
+                   for o, a in (('Отопление', 150000), ('Тёплый пол', 31000), ('Шкафы', 4000))]
+        profiles = {
+            '/tmp/отопление.xlsx': self.profile('отопление.xlsx', [self.row(1, 'Радиаторы', 150000)]),
+            '/tmp/22.11.xlsx': self.profile('22.11.xlsx', [self.row(1, 'Шкаф', 4000), self.row(2, 'Мат тёплого пола', 20000),
+                                                            self.row(3, 'Терморегулятор', 6000), self.row(4, 'Укладка', 5000)]),
+            '/tmp/отопление2.xlsx': self.profile('отопление2.xlsx', [self.row(1, 'Радиаторы', 150000)]),
+        }
+        loose = self.run_attach(targets, profiles)
+        got = {t['object']: (t.get('table_file'), t.get('completion_matches_report'), sum(r['current_amount'] for r in t.get('table_rows') or []))
+               for t in targets}
+        self.assertEqual({'Отопление': ('отопление2.xlsx', True, 150000),
+                          'Тёплый пол': ('22.11.xlsx', True, 31000),
+                          'Шкафы': ('22.11.xlsx', True, 4000)}, got)
+        self.assertEqual([('отопление.xlsx', 'отопление2.xlsx')], [(x['file'], x['duplicate_of']) for x in loose])
+
+    def test_ambiguous_split_is_not_guessed(self):
+        import installer_report_intake as intake
+        profile = self.profile('x.xlsx', [self.row(1, 'a', 5000), self.row(2, 'b', 5000)])
+        targets = [{'amount': 5000}, {'amount': 5000}]
+        self.assertIsNone(intake.split_rows(profile, '9', targets), 'два одинаковых способа — не угадываем')
