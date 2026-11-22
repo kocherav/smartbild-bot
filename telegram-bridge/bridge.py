@@ -8699,7 +8699,52 @@ def prepare_economics_deal_request(token, chat_id, caption, path, notify=True):
     return True
 
 
+def deal_creation_price_set(row):
+    try:
+        return float(str(row.get('unit_price')).replace(' ', '').replace(',', '.')) >= 0 and row.get('unit_price') not in (None, '')
+    except (TypeError, ValueError):
+        return False
+
+
+def resolve_missing_prices(items):
+    """Owner 22.11 («подобрать по каталогам»): a project/specification without prices still
+    becomes a deal. Rows without a price are looked up by article in Hogart and Daichi; the
+    rest stay at 0 ₽ and are named to the owner. Read-only lookup, nothing is written."""
+    try:
+        result = subprocess.run([REPORT_VENV_PY, os.path.join(HOGART_DIR, 'price_by_article.py')],
+                                input=json.dumps({'items': items}, ensure_ascii=False),
+                                capture_output=True, text=True, timeout=180, cwd=HOGART_DIR)
+        data = json.loads((result.stdout or '').strip().splitlines()[-1])
+    except Exception as exc:  # noqa: BLE001 — shown to the owner as a plain reason
+        return {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+    return data if isinstance(data, dict) else {'ok': False, 'error': 'пустой ответ подбора цен'}
+
+
+def missing_prices_text(result, total):
+    missing = result.get('missing') or []
+    lines = [f'🔎 Цены по каталогам: нашёл {result.get("found", 0)} из {total} позиций без цены.']
+    if missing:
+        lines.append('Не нашёл — поставил 0 ₽ (поправьте в Мегаплане или пришлите цены):')
+        lines += [f'• {name}' for name in missing[:30]]
+        if len(missing) > 30:
+            lines.append(f'… и ещё {len(missing) - 30}')
+    return '\n'.join(lines)
+
+
 def prepare_deal_creation_review(token, chat_id, spec):
+    unpriced = [row for row in spec.get('items') or [] if not deal_creation_price_set(row)]
+    if unpriced and not spec.get('prices_resolved'):
+        send_message(token, chat_id, '🔎 В спецификации нет цен — ищу их по артикулам в каталогах Hogart и Daichi…')
+        result = resolve_missing_prices(spec.get('items') or [])
+        if result.get('ok'):
+            spec = {**spec, 'items': result['items'], 'prices_resolved': True}
+            send_message(token, chat_id, missing_prices_text(result, len(unpriced)))
+        else:
+            spec = {**spec, 'items': [row if deal_creation_price_set(row) else
+                                      {**row, 'unit_price': 0, 'price_source': 'цена не найдена в каталогах'}
+                                      for row in spec.get('items') or []], 'prices_resolved': True}
+            send_message(token, chat_id, f'Подбор цен по каталогам не сработал ({result.get("error")}). '
+                                         f'Позиции без цены поставлены с ценой 0 ₽ — поправьте их перед отправкой клиенту.')
     if not spec.get('client_id') and not spec.get('allow_new_client') and spec.get('user_request') and spec.get('client_name'):
         found = search_creation_clients(spec['client_name'])
         if found.get('ok'):
