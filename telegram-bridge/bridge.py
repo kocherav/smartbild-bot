@@ -53,6 +53,7 @@ from workflow_runtime import Store as WorkflowStore
 from ui_context import StateStore
 import deal_context
 import installer_table_waiver
+import process_tree
 from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
@@ -10215,8 +10216,7 @@ def _run_developer_codex(session_id, prompt, workdir=None, sandbox_root=None):
         cmd = [CODEX_BIN, "exec", *common, "--sandbox", "workspace-write",
                "--cd", workdir, "-"]
         model_prompt = DEVELOPER_SYSTEM_PROMPT + "\n\nЗАДАЧА ПОЛЬЗОВАТЕЛЯ:\n" + prompt
-    return subprocess.run(cmd, cwd=workdir, input=model_prompt,
-                          capture_output=True, text=True, timeout=DEVELOPER_TIMEOUT_SEC)
+    return process_tree.run(cmd, cwd=workdir, input=model_prompt, timeout=DEVELOPER_TIMEOUT_SEC)
 
 
 def ask_task_developer(task):
