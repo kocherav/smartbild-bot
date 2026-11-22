@@ -110,3 +110,23 @@ def waived_text(session):
     lines = [f"• {item['object']}: «{item['source']}» → сделка №{item['deal_id']} — 100 % по ведомости, файл не нужен"
              for item in session.get("waived_tables") or []]
     return ("Сумма совпала с остатком монтажной ведомости, приняты как 100 %:\n" + "\n".join(lines)) if lines else ""
+
+
+def mark_missing(session):
+    """Owner 22.11: the installer may hand the report over without the missing tables. Such
+    lines go to the manager as questions; nothing is accrued for them until he decides."""
+    missing = [item for item in session.get("exceptions") or []
+               if item.get("type") == "table" and not item.get("table_path") and not item.get("table_waived")]
+    for item in missing:
+        item.update(table_missing=True, resolution="передано руководителю без таблицы",
+                    reason="таблица не приложена — монтажник передал строку руководителю на решение "
+                           "(начисление по ней не делается, пока руководитель не решит)")
+    session["required_tables"] = 0
+    session["table_requests"] = []
+    session["missing_tables"] = [{"object": i["object"], "source": i["source"], "amount": i.get("amount")} for i in missing]
+    return missing
+
+
+def missing_text(session):
+    lines = [f"• {item['object']}: «{item['source']}»" for item in session.get("missing_tables") or []]
+    return ("Без таблиц переданы руководителю на решение:\n" + "\n".join(lines)) if lines else ""
