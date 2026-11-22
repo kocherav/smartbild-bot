@@ -212,8 +212,14 @@ def _attach_excel(exceptions, table_paths):
     # report lines (150 000, 20 000). A table whose execution column totals exactly one line's
     # amount belongs to that line; only the rest is matched by scoring.
     pairs, duplicates = [], []
+    def current(profile):
+        # 22.11: installer tables grow a column per reporting period; only the rightmost one is
+        # this report. An older 30 000 column of «22.11.xlsx» stole the conditioning line.
+        columns = [c for c in profile.get("completion_columns") or [] if c.get("footer") or c.get("sum")]
+        return [max(columns, key=lambda c: int(c["column"]))] if columns else []
+
     def amounts(profile):
-        return [value for item in profile.get("completion_columns") or []
+        return [value for item in current(profile)
                 for value in (item.get("footer"), item.get("sum")) if value is not None]
     for profile in list(profiles):
         if profile not in profiles:
@@ -234,7 +240,7 @@ def _attach_excel(exceptions, table_paths):
     # 35 000). If the column total equals the sum of exactly one combination of open lines and the
     # rows split into those amounts in exactly one way, each line gets its own rows.
     for profile in list(profiles):
-        for column in profile.get("completion_columns") or []:
+        for column in current(profile):
             total = column.get("footer") if column.get("footer") is not None else column.get("sum")
             if total is None:
                 continue
