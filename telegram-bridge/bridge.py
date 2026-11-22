@@ -784,6 +784,29 @@ INSTALLER_REPORT_UPLOAD_KEYBOARD = {
     "resize_keyboard": True,
     "one_time_keyboard": True,
 }
+INSTALLER_TABLE_FILE_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".heic", ".webp")
+
+
+def xls_to_xlsx(path):
+    """Old Excel → .xlsx next to it (values only), or None."""
+    try:
+        import xlrd
+        from openpyxl import Workbook
+        source = xlrd.open_workbook(path)
+        book = Workbook()
+        book.remove(book.active)
+        for sheet in source.sheets():
+            target = book.create_sheet(sheet.name[:31] or "Лист")
+            for row in range(sheet.nrows):
+                target.append([cell.value if cell.ctype not in (0, 6) else None for cell in sheet.row(row)])
+        converted = os.path.splitext(path)[0] + ".converted.xlsx"
+        book.save(converted)
+        return converted
+    except Exception as exc:  # a broken file is the installer's to resend, never a crash
+        print(f"{LOG_PREFIX} xls conversion failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+
+
 # Owner 22.11: the bot must never stop a report for want of a table — the manager decides.
 INSTALLER_SKIP_TABLES = "📤 Передать без недостающих таблиц"
 INSTALLER_REPORT_FILES_KEYBOARD = {
@@ -2957,6 +2980,15 @@ def installation_remaining(deal_id):
     return result.get("result") if result.get("ok") else None
 
 
+def installer_files_for_manager(session):
+    """PDF/photo tables and unmatched files go to the manager with the report (owner 22.11)."""
+    files = [(item["table_path"], f"Таблица (файл) к строке «{item.get('source')}» — сверьте")
+             for item in session.get("exceptions") or [] if item.get("table_kind") == "file" and item.get("table_path")]
+    files += [(item["path"], f"Файл монтажника без явной строки отчёта: {item.get('file')}")
+              for item in session.get("unmatched_files") or [] if item.get("path")]
+    return files
+
+
 def installation_open_remainders():
     """Read-only: open statement remainder per deal handed to installers, or {}."""
     result = run_installation_workflow({"action": "open_remainders"})
@@ -3008,6 +3040,11 @@ def finish_installer_report_files(token, chat_id, session, allow_missing=False):
     prefix = "Таблицы сопоставлены:\n" + "\n".join(associations) + "\n\n" if associations else ""
     waived = installer_table_waiver.waived_text(completed)
     prefix += (waived + "\n\n") if waived else ""
+    by_file = [f"• {i['object']}: «{i['source']}» ← {i['table_file']}" for i in completed.get("exceptions") or []
+               if i.get("table_kind") == "file"]
+    prefix += ("Таблицы файлами (PDF/фото) — уйдут руководителю на сверку:\n" + "\n".join(by_file) + "\n\n") if by_file else ""
+    loose = [f"• {i['file']}" for i in completed.get("unmatched_files") or []]
+    prefix += ("Файлы без явной строки отчёта — тоже уйдут руководителю:\n" + "\n".join(loose) + "\n\n") if loose else ""
     missing = installer_table_waiver.missing_text(completed)
     prefix += (missing + "\n\n") if missing else ""
     send_message(token, chat_id, prefix + installer_objects_text(completed), INSTALLER_REPORT_OBJECTS_KEYBOARD)
@@ -5922,6 +5959,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             + (f"\nСтрок «по таблице» без таблиц: {len(submitted.get('missing_tables') or [])} — "
                "по ним ничего не начислено, решите при проверке." if submitted.get("missing_tables") else "")
         ), INSTALLER_MANAGER_OPEN_KEYBOARD)
+        for path, caption in installer_files_for_manager(submitted):
+            if os.path.exists(path):
+                send_document(token, MANAGER_CHAT_ID, path, caption)
         return True
     if value == "🧰 Отчёт монтажника":
         update_deal_ui_state(chat_id, pending=None)
@@ -10549,6 +10589,8 @@ def run_nightly_qa(token, chat_id):
 def installer_media_allowed(msg, pending):
     if pending == 'installation_report_collect':
         return True
+    if pending == 'installer_report_tables' and 'photo' in msg:
+        return True  # owner 22.11: tables may be photographed
     return ('document' in msg and pending in (None, '', 'installer_report_file', 'installer_report_tables'))
 
 
@@ -11288,6 +11330,14 @@ def main():
                 if caption: run_installation_workflow({"action":"append_report_text","report_id":photo_state.get("installation_report_id"),"text":caption})
                 send_message(token,chat_id,"📷 Фото добавлено в текущий отчёт." if added.get("ok") else f"Фото не добавлено: {added.get('error')}",INSTALLATION_REPORT_COLLECT_KEYBOARD)
                 return
+            if photo_state.get("pending")=="installer_report_tables":
+                # Owner 22.11: a photographed table is a table too; the manager checks it.
+                session=photo_state.get("installer_report") or {}
+                paths=session.setdefault("table_paths",[])
+                if local_path not in paths: paths.append(local_path)
+                update_deal_ui_state(chat_id,pending="installer_report_tables",installer_report=session)
+                send_message(token,chat_id,f"📷 Фото таблицы получено (всего файлов: {len(paths)}). Пришлите остальные или нажмите «✅ Все файлы загружены».",INSTALLER_REPORT_FILES_KEYBOARD)
+                return
             if is_installer and not is_owner:
                 send_message(token, chat_id, "Сначала откройте объект в «Моих монтажах» и нажмите «Новый отчёт».", INSTALLER_USER_KEYBOARD)
                 return
@@ -11499,13 +11549,18 @@ def main():
             if report_pending == "installer_report_tables":
                 original_name = msg["document"].get("file_name") or ""
                 original_ext = os.path.splitext(original_name)[1].casefold()
-                if original_ext not in (".xlsx", ".xls"):
-                    send_message(token, chat_id, "Сейчас ожидаются соответствующие таблицы в формате Excel (.xlsx или .xls).", INSTALLER_REPORT_FILES_KEYBOARD)
+                # Owner 22.11: tables come as Excel, old .xls, PDF or photos — all are accepted.
+                if original_ext not in (".xlsx", ".xls") + INSTALLER_TABLE_FILE_EXTENSIONS:
+                    send_message(token, chat_id, "Таблицу можно прислать в Excel (.xlsx, .xls), PDF или фото.", INSTALLER_REPORT_FILES_KEYBOARD)
                     return
                 original_path = local_path[:-3] if local_path.endswith(".md") else local_path
                 if original_ext == ".xls":
-                    send_message(token, chat_id, "Старый формат .xls пока не разбирается надёжно. Сохраните таблицу как .xlsx и пришлите повторно.", INSTALLER_REPORT_FILES_KEYBOARD)
-                    return
+                    converted = xls_to_xlsx(original_path)
+                    if not converted:
+                        send_message(token, chat_id, "Не смог открыть этот .xls. Пришлите его как .xlsx или PDF — или нажмите "
+                                     f"«{INSTALLER_SKIP_TABLES}».", INSTALLER_REPORT_FILES_KEYBOARD)
+                        return
+                    original_path = converted
                 session = report_state.get("installer_report") or {}
                 paths = session.setdefault("table_paths", [])
                 # 22.11: «required» counted only the still-missing lines while «paths» kept the

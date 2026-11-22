@@ -108,7 +108,50 @@ def table_score(exception, profile):
     return score
 
 
+FILE_TABLE_EXTENSIONS = (".pdf", ".jpg", ".jpeg", ".png", ".heic", ".webp")
+MONEY_IN_TEXT = re.compile(r"(?<![\d,.])(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d{4,})(?:[,.]\d{2})?(?![\d])")
+
+
+def amounts_in_text(text):
+    return {float(re.sub(r"[ \u00a0\u202f]", "", m.group(1))) for m in MONEY_IN_TEXT.finditer(str(text or ""))}
+
+
+def attach_file_tables(targets, paths, reader=None):
+    """Owner 22.11: tables may come as PDF or photos. A file whose text contains exactly one
+    still-open line's amount closes that line for the installer; nothing is accrued from it —
+    the manager receives the file and checks. Files that match nothing are returned."""
+    reader = reader or (lambda path: pdf_text(path))
+    unmatched = []
+    for path in paths:
+        name = os.path.basename(path)
+        found = set()
+        if os.path.splitext(path)[1].casefold() == ".pdf":
+            try:
+                found = amounts_in_text(reader(path))
+            except (ValueError, OSError, subprocess.SubprocessError):
+                found = set()
+        open_targets = [t for t in targets if not t.get("table_path") and t.get("amount") is not None]
+        hits = [t for t in open_targets if any(abs(float(t["amount"]) - value) < 0.01 for value in found)]
+        if len(hits) == 1:
+            hits[0].update(table_file=name, table_path=os.path.realpath(path), table_kind="file",
+                           table_rows=[], table_rows_count=0, table_match_confidence=0.9,
+                           completion_matches_report=True,
+                           resolution="таблица приложена файлом — руководитель сверит",
+                           reason="таблица прислана файлом (PDF/фото); итог строки найден в файле — "
+                                  "руководитель сверит, начисление по строке после его решения")
+        else:
+            unmatched.append({"file": name, "path": os.path.realpath(path)})
+    return unmatched
+
+
 def attach_tables(exceptions, table_paths):
+    """Excel tables first (they carry rows), then PDF/photo files. Returns unmatched files."""
+    file_paths = [p for p in table_paths if os.path.splitext(p)[1].casefold() in FILE_TABLE_EXTENSIONS]
+    _attach_excel(exceptions, [p for p in table_paths if p not in file_paths])
+    return attach_file_tables([item for item in exceptions if item.get("type") == "table"], file_paths)
+
+
+def _attach_excel(exceptions, table_paths):
     targets = [item for item in exceptions if item.get("type") == "table"]
     from installer_workbook_intake import read
     remaining_paths=[]
@@ -374,7 +417,7 @@ def build_session(path, table_paths=None):
             exceptions.append({"id": len(exceptions) + 1, "object": "Контроль отчёта",
                 "source": control["source"], "amount": control["declared"] - control["calculated"],
                 "type": "recognition", "reason": f"промежуточный итог {control['declared']:.2f} не совпадает с суммой строк {control['calculated']:.2f}; требуется сверка"})
-    attach_tables(exceptions, table_paths or [])
+    unmatched_files = attach_tables(exceptions, table_paths or [])
     discrepancy = (declared_total - net_total) if declared_total is not None else 0
     probable = []
     for control in subtotal_controls:
@@ -407,6 +450,7 @@ def build_session(path, table_paths=None):
         "required_tables": len(table_exceptions),
         "attached_tables": len([item for item in table_exceptions if item.get("table_file")]),
         "table_requests": [{"object": item["object"], "source": item["source"], "deal_id": item.get("deal_id")} for item in table_exceptions],
+        "unmatched_files": unmatched_files,
         "net_total": net_total,
         "declared_total": declared_total,
         "discrepancy": discrepancy,

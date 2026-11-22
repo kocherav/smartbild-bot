@@ -213,3 +213,47 @@ class TablesStepNeverBlocks(unittest.TestCase):
         self.assertEqual('передано руководителю без таблицы', heating['resolution'])
         self.assertIn('Без таблиц переданы руководителю', '\n'.join(sent))
         self.assertIn(bridge.INSTALLER_SKIP_TABLES, str(bridge.INSTALLER_REPORT_FILES_KEYBOARD))
+
+
+class TablesInAnyFormat(unittest.TestCase):
+    """Owner 22.11: «научи бота принимать таблицы в PDF» (and photos, old .xls)."""
+
+    def test_money_in_pdf_text_is_read_in_russian_formats(self):
+        import installer_report_intake as intake
+        found = intake.amounts_in_text('Итого: 150 000,00 руб.\nКабель 1 200\nВсего 31000')
+        self.assertTrue({150000.0, 1200.0, 31000.0} <= found)
+
+    def test_pdf_with_a_line_total_closes_that_line_for_the_manager(self):
+        import installer_report_intake as intake
+        targets = [{'type': 'table', 'object': 'Отопление', 'source': 'по таблице-150000', 'amount': 150000},
+                   {'type': 'table', 'object': 'Тёплый пол', 'source': 'по таблице-31000', 'amount': 31000}]
+        texts = {'/tmp/heat.pdf': 'Отопление ... Итого 150 000,00', '/tmp/other.pdf': 'без сумм'}
+        loose = intake.attach_file_tables(targets, list(texts), reader=lambda p: texts[p])
+        self.assertEqual('heat.pdf', targets[0]['table_file'])
+        self.assertEqual('file', targets[0]['table_kind'])
+        self.assertEqual([], targets[0]['table_rows'], 'из файла ничего не начисляется автоматически')
+        self.assertIsNone(targets[1].get('table_path'))
+        self.assertEqual(['other.pdf'], [x['file'] for x in loose])
+
+    def test_photo_is_kept_as_a_loose_file_not_guessed(self):
+        import installer_report_intake as intake
+        targets = [{'type': 'table', 'object': 'Шкафы', 'source': 'по таблице-4000', 'amount': 4000}]
+        loose = intake.attach_file_tables(targets, ['/tmp/table.jpg'], reader=lambda p: '')
+        self.assertEqual(['table.jpg'], [x['file'] for x in loose])
+
+    def test_photos_are_allowed_in_the_tables_step_only(self):
+        self.assertTrue(bridge.installer_media_allowed({'photo': []}, 'installer_report_tables'))
+        self.assertFalse(bridge.installer_media_allowed({'photo': []}, None))
+
+    def test_broken_xls_is_refused_politely_not_crashed(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.xls') as broken:
+            broken.write(b'not an excel file'); broken.flush()
+            self.assertIsNone(bridge.xls_to_xlsx(broken.name))
+
+    def test_manager_gets_file_tables_and_loose_files(self):
+        files = bridge.installer_files_for_manager({
+            'exceptions': [{'table_kind': 'file', 'table_path': '/tmp/heat.pdf', 'source': 'по таблице-150000'},
+                           {'table_path': '/tmp/vent.xlsx', 'source': 'x'}],
+            'unmatched_files': [{'file': 'a.jpg', 'path': '/tmp/a.jpg'}]})
+        self.assertEqual(['/tmp/heat.pdf', '/tmp/a.jpg'], [p for p, _ in files])
