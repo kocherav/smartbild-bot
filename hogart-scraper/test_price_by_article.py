@@ -12,12 +12,19 @@ class PriceByArticleTests(unittest.TestCase):
                 {'name': 'Сплит Daichi ECO07AN/LETTA07AN', 'qty': 1, 'unit_price': ''},
                 {'name': 'Монтаж', 'qty': 1, 'unit_price': 15000},
                 {'name': 'Труба медная 6,35', 'qty': 10}]
-        result = pba.price_rows(rows, hogart=hogart, daichi=daichi)
+        result = pba.price_rows(rows, hogart=hogart, daichi=daichi, kemiks=lambda name: None)
         got = [(r['unit_price'], r.get('price_source')) for r in result['items']]
         self.assertEqual([(95000, 'Hogart AS25S2SF3FA-B'), (41000, 'Daichi ECO07AN/LETTA07AN'),
                           (15000, None), (0, 'цена не найдена в каталогах')], got)
         self.assertEqual(70000, result['items'][0]['cost_material'])
         self.assertEqual((2, ['Труба медная 6,35']), (result['found'], result['missing']))
+
+    def test_pipes_and_insulation_are_priced_by_kemiks_rules(self):
+        rows = [{'name': 'Труба медная 9,52', 'qty': 5}]
+        result = pba.price_rows(rows, hogart=lambda a: None, daichi=lambda a: None,
+                                kemiks=lambda name: (700, 350) if 'Труба' in name else None)
+        self.assertEqual((700, 'КЕМИКС', 350), (result['items'][0]['unit_price'], result['items'][0]['price_source'],
+                                              result['items'][0]['cost_material']))
 
     def test_plain_words_are_not_taken_for_articles(self):
         self.assertEqual([], pba.candidates({'name': 'Монтаж кондиционера настенного'}))

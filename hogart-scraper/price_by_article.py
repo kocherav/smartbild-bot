@@ -35,12 +35,16 @@ def candidates(row):
     return list(dict.fromkeys(found))
 
 
-def price_rows(items, hogart=None, daichi=None):
-    """``hogart(article)`` → (retail, purchase) or None; ``daichi(article)`` → the same."""
+def price_rows(items, hogart=None, daichi=None, kemiks=None):
+    """``hogart(article)`` → (retail, purchase) or None; ``daichi(article)`` → the same;
+    ``kemiks(name)`` — pipes, insulation, cable by the row's description (КЕМИКС rules of
+    price_spec_items.py, the route the investigation TASK-20261122-27 found 5 of 53 with)."""
     if hogart is None or daichi is None:
         import generate_kp as kp
         hogart = hogart or _hogart(kp)
         daichi = daichi or _daichi(kp)
+    if kemiks is None:
+        from price_spec_items import kemiks_lookup as kemiks
     priced, missing, found = [], [], 0
     for row in items:
         row = dict(row)
@@ -63,9 +67,13 @@ def price_rows(items, hogart=None, daichi=None):
                     break
             if hit:
                 break
+        if not hit:
+            result = kemiks(str(row.get("name") or ""))
+            if result and result[0]:
+                hit = ("КЕМИКС", "", result)
         if hit:
             source, article, (retail, purchase) = hit
-            row.update(unit_price=round(float(retail), 2), price_source=f"{source} {article}")
+            row.update(unit_price=round(float(retail), 2), price_source=f"{source} {article}".strip())
             if purchase:
                 row["cost_material"] = round(float(purchase), 2)
             found += 1

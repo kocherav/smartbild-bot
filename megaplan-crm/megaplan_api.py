@@ -367,7 +367,12 @@ class MegaplanAPI:
                         # Both Megaplan search endpoints can return both
                         # contractor types.  The stable entity ID, not the
                         # endpoint, is the deduplication key.
-                        matches_by_id[str(match["id"])] = match
+                        # One entity, several projections (owner 22.11: the company came
+                        # back nameless after a later, shorter projection overwrote it):
+                        # merge them, an empty field never erases a filled one.
+                        known = matches_by_id.get(str(match["id"]), {})
+                        matches_by_id[str(match["id"])] = {
+                            **known, **{k: v for k, v in match.items() if v not in (None, "", [], {})}}
         matches = list(matches_by_id.values())
         comparable_matches = []
         for m in matches:
