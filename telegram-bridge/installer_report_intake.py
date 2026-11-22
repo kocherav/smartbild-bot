@@ -51,12 +51,29 @@ def number(value):
         return None
 
 
-def table_profile(path):
+def table_profiles(path):
+    """One profile per sheet that has work rows (22.11: «22.11.xlsx» carried conditioning on one
+    sheet and electrics/warm floor on another — merged, their columns stole each other's lines)."""
+    book = load_workbook(path, data_only=False, read_only=False)
+    try:
+        names = book.sheetnames
+    finally:
+        book.close()
+    profiles = [table_profile(path, sheet=name) for name in names]
+    profiles = [p for p in profiles if p["rows"]]
+    if len(profiles) <= 1:
+        return profiles or [table_profile(path)]
+    for profile in profiles:
+        profile["filename"] = f"{profile['filename']} / {profile['sheet']}"
+    return profiles
+
+
+def table_profile(path, sheet=None):
     book = load_workbook(path, data_only=False, read_only=False)
     rows = []
     text_parts = [os.path.basename(path)]
     completion_columns = []
-    for sheet in book.worksheets:
+    for sheet in [book[sheet]] if sheet else book.worksheets:
         text_parts.append(sheet.title)
         for row in range(1, sheet.max_row + 1):
             values = [sheet.cell(row, col).value for col in range(1, min(sheet.max_column, 24) + 1)]
@@ -86,7 +103,7 @@ def table_profile(path):
             if values or footer is not None:
                 completion_columns.append({"column": col, "sum": sum(values), "footer": footer})
     return {
-        "path": os.path.realpath(path), "filename": os.path.basename(path),
+        "path": os.path.realpath(path), "filename": os.path.basename(path), "sheet": sheet.title,
         "text": " ".join(text_parts).casefold().replace("ё", "е"), "rows": rows,
         "calculated_total": sum(row["total"] or 0 for row in rows),
         "completion_columns": completion_columns,
@@ -200,7 +217,7 @@ def _attach_excel(exceptions, table_paths):
         target=matches[0];total=own['total']
         target.update(table_file=os.path.basename(path),table_path=os.path.realpath(path),table_rows=own['rows'],table_rows_count=len(own['rows']),table_calculated_total=sum(r['plan_amount'] for r in own['rows']),completion_column=own['column'],completion_sum=total,completion_footer=total,completion_matches_report=abs(total-float(target.get('amount') or 0))<.01,table_match_confidence=1.0,reason='Количество сверено с принятым объёмом; подтвердите выполнение')
     targets=[t for t in targets if not t.get('table_path')]
-    profiles = [table_profile(path) for path in remaining_paths]
+    profiles = [profile for path in remaining_paths for profile in table_profiles(path)]
     if not targets or not profiles:
         return []
     try:

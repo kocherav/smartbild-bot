@@ -134,7 +134,7 @@ class OldFormatTablesByAmount(unittest.TestCase):
         book = type('Book', (), {'close': lambda self: None})()
         with patch.object(intake, 'load_workbook', return_value=book), \
              patch.object(installer_workbook_intake, 'read', return_value=None), \
-             patch.object(intake, 'table_profile', side_effect=lambda path: profiles[path]), \
+             patch.object(intake, 'table_profiles', side_effect=lambda path: [profiles[path]]), \
              patch.object(intake, 'FACT_REGISTRY', '/nonexistent/facts.json'):
             intake.attach_tables(targets, list(profiles))
         got = {t['object']: t.get('table_file') for t in targets}
@@ -146,7 +146,8 @@ class OldFormatTablesByAmount(unittest.TestCase):
 class BridgeFlow(unittest.TestCase):
     def run_report(self, s, statements):
         sent = []
-        with patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': s}), \
+        with patch.object(bridge, 'archive_installer_files'), \
+             patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': s}), \
              patch.object(bridge, 'installation_remaining', side_effect=remaining(statements)), \
              patch.object(bridge, 'installation_open_remainders', return_value={}), \
              patch.object(bridge, 'update_deal_ui_state') as update, \
@@ -268,7 +269,7 @@ class SergeyFilesOf22November(unittest.TestCase):
         book = type('Book', (), {'close': lambda self: None})()
         with patch.object(intake, 'load_workbook', return_value=book), \
              patch.object(installer_workbook_intake, 'read', return_value=None), \
-             patch.object(intake, 'table_profile', side_effect=lambda path: profiles[path]), \
+             patch.object(intake, 'table_profiles', side_effect=lambda path: [profiles[path]]), \
              patch.object(intake, 'FACT_REGISTRY', '/nonexistent/facts.json'):
             return intake.attach_tables(targets, list(profiles))
 
@@ -319,3 +320,55 @@ class SergeyFilesOf22November(unittest.TestCase):
         profile = self.profile('x.xlsx', [self.row(1, 'a', 5000), self.row(2, 'b', 5000)])
         targets = [{'amount': 5000}, {'amount': 5000}]
         self.assertIsNone(intake.split_rows(profile, '9', targets), 'два одинаковых способа — не угадываем')
+
+
+class WorkbookWithSeveralSheets(unittest.TestCase):
+    def test_each_sheet_is_its_own_table(self):
+        import os, tempfile
+        from openpyxl import Workbook
+        import installer_report_intake as intake
+        with tempfile.TemporaryDirectory() as folder:
+            book = Workbook()
+            cond = book.active; cond.title = 'Кондиционирование'
+            cond.append(['№', 'Работа', 'Ед', 'План', 'Цена', 'Всего', 'Период 1', 'Период 2'])
+            cond.append([1, 'Монтаж сплита', 'шт', 1, 30000, 30000, None, 30000])
+            cond.append(['Итого', None, None, None, None, None, None, 30000])
+            el = book.create_sheet('Электрика')
+            el.append(['№', 'Работа', 'Ед', 'План', 'Цена', 'Всего', 'Период 1', 'Период 2'])
+            for n, (name, amount) in enumerate((('Шкаф', 4000), ('Мат тёплого пола', 20000),
+                                                ('Терморегулятор', 6000), ('Укладка', 5000)), 1):
+                el.append([n, name, 'шт', 1, amount, amount, None, amount])
+            el.append(['Итого', None, None, None, None, None, None, 35000])
+            path = os.path.join(folder, '22.11.xlsx'); book.save(path); book.close()
+            targets = [{'type': 'table', 'object': o, 'source': f'по таблице-{a}', 'amount': a, 'deal_id': None}
+                       for o, a in (('Тёплый пол', 31000), ('Шкафы', 4000), ('Кондиционирование', 30000))]
+            with patch.object(intake, 'FACT_REGISTRY', os.path.join(folder, 'facts.json')):
+                loose = intake.attach_tables(targets, [path])
+        got = {t['object']: (t.get('table_file'), round(sum(r['current_amount'] for r in t.get('table_rows') or [])))
+               for t in targets}
+        self.assertEqual({'Тёплый пол': ('22.11.xlsx / Электрика', 31000), 'Шкафы': ('22.11.xlsx / Электрика', 4000),
+                          'Кондиционирование': ('22.11.xlsx / Кондиционирование', 30000)}, got)
+        self.assertEqual([], loose)
+
+
+class InstallerFilesGoToOneDrive(unittest.TestCase):
+    """Owner 22.11: Sergey's files were not in OneDrive — every report file is archived on receipt."""
+
+    def test_files_are_archived_in_background_with_installer_date_and_kind(self):
+        calls = []
+        with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()), \
+             patch.object(bridge, 'run_installation_workflow', side_effect=lambda spec: calls.append(spec) or {'ok': True}):
+            bridge.archive_installer_files('t', 'inst', ['/tmp/отопление.xlsx', None], '20.11.2026', 'Таблицы')
+        self.assertEqual([{'action': 'archive_upload', 'path': '/tmp/отопление.xlsx', 'kind': 'Таблицы',
+                           'installer_name': bridge.INSTALLER_ARCHIVE_NAME, 'report_date': '20.11.2026'}], calls)
+
+    def test_archive_path_in_onedrive(self):
+        import sys, tempfile
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'megaplan-crm'))
+        import installation_workflow as iw
+        with tempfile.NamedTemporaryFile(suffix='.pdf') as f, patch.object(iw, 'rclone_copy') as copy:
+            result = iw.archive_installer_upload(f.name, 'Сергей Деревянко', '20.11.2026', 'Таблицы')
+        self.assertTrue(result['remote'].startswith('onedrive:SmartBild/Монтажи/Отчёты монтажников/'
+                                                     'Сергей Деревянко/20.11.2026/Таблицы/'))
+        copy.assert_called_once()

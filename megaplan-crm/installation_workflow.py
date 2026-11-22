@@ -876,6 +876,21 @@ def rclone_copy(local,remote):
     result=subprocess.run(['rclone','copyto',local,remote,'--retries','3','--low-level-retries','5'],capture_output=True,text=True,timeout=90)
     if result.returncode: raise ValueError('OneDrive: '+(result.stderr or 'ошибка загрузки')[-500:])
 
+INSTALLER_UPLOADS_ROOT = f"{ONEDRIVE_ROOT}/Отчёты монтажников"
+
+
+def archive_installer_upload(path, installer_name='', report_date='', kind='Файлы'):
+    """Owner 22.11: every file an installer sends with a report lands in OneDrive at once —
+    before any approval — so the manager can open it (tables used to stay only on the server).
+    Path: «Отчёты монтажников/<монтажник>/<дата отчёта>/<Отчёт|Таблицы>/<имя>»."""
+    if not path or not os.path.isfile(path):
+        raise ValueError('файл не найден на сервере')
+    folder = '/'.join(safe(x) for x in (installer_name or 'Монтажник', report_date or 'без даты', kind))
+    remote = f"{INSTALLER_UPLOADS_ROOT}/{folder}/{safe(os.path.basename(path))}"
+    rclone_copy(path, remote)
+    return {'remote': remote}
+
+
 def sync_installation(deal_id):
     ins=get_installation(deal_id); path=build_workbook(deal_id); remote=f"{ins['folder_remote']}/01 Монтажная ведомость/{os.path.basename(path)}"; rclone_copy(path,remote); return remote
 def has_active_project(deal_id,db=None):
@@ -1023,6 +1038,7 @@ def main():
       'accept_legacy_report':lambda:legacy_report_commit.accept(req['session'],req['source_digest'],req['expected_fingerprint'],req.get('actor','')),
       'sync_legacy_ledger':lambda:legacy_report_commit.sync_ledger(req.get('source_digest')),
       'retry_publications':lambda:retry_publications(req.get('limit',1)),
+      'archive_upload':lambda:archive_installer_upload(req['path'],req.get('installer_name',''),req.get('report_date',''),req.get('kind','Файлы')),
       'import_workbook':lambda:import_workbook(req['deal_id'],req['path'],req.get('actor','')),
       'sync_executor':lambda:sync_executor(req['deal_id'],req.get('actor','')),
       'import_legacy_workbook':lambda:import_legacy_workbook(req['deal_id'],req['path'],req['report_date'],req['external_id'],req.get('actor','')),
