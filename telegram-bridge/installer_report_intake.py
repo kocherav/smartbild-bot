@@ -177,6 +177,19 @@ def split_rows(profile, column, targets):
         return None
     solutions = []
 
+    def place_all(index, left, assignment, found, limit=200):
+        if len(found) >= limit:
+            return
+        if index == len(rows):
+            if all(x == 0 for x in left):
+                found.append(list(assignment))
+            return
+        for slot, need in enumerate(left):
+            if cents[index] <= need:
+                left[slot] -= cents[index]; assignment.append(slot)
+                place_all(index + 1, left, assignment, found, limit)
+                left[slot] += cents[index]; assignment.pop()
+
     def place(index, left, assignment):
         if len(solutions) > 1:
             return
@@ -190,9 +203,24 @@ def split_rows(profile, column, targets):
                 place(index + 1, left, assignment)
                 left[slot] += cents[index]; assignment.pop()
 
+    def blocks(assignment):
+        """How many runs of adjacent sheet rows the split makes — a work item's rows sit together
+        (22.11: warm-floor mats in rows 78–81, a 4 000 cabinet far above; two 4 000 cells)."""
+        position = lambda i: rows[i].get("sheet_row") or rows[i].get("number") or i
+        order = sorted(range(len(rows)), key=position)
+        return sum(1 for k, i in enumerate(order)
+                   if k == 0 or assignment[i] != assignment[order[k - 1]] or position(i) - position(order[k - 1]) > 2)
+
     place(0, list(wanted), [])
-    if len(solutions) != 1:
+    if not solutions:
         return None
+    if len(solutions) > 1:
+        solutions = []
+        place_all(0, list(wanted), [], solutions)
+        scored = sorted((blocks(a), a) for a in solutions)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return None  # equally plausible — not guessed
+        solutions = [scored[0][1]]
     return [(target, [rows[i] for i, slot in enumerate(solutions[0]) if slot == n]) for n, target in enumerate(targets)]
 
 
@@ -232,7 +260,10 @@ def _attach_excel(exceptions, table_paths):
     def current(profile):
         # 22.11: installer tables grow a column per reporting period; only the rightmost one is
         # this report. An older 30 000 column of «22.11.xlsx» stole the conditioning line.
-        columns = [c for c in profile.get("completion_columns") or [] if c.get("footer") or c.get("sum")]
+        # The total row («ИТОГО ПО АКТУ») marks execution columns; a rate column to the right
+        # (Sergey's «5 000,00 руб.» in column 24) has no total and is not a period.
+        columns = [c for c in profile.get("completion_columns") or [] if c.get("footer")]
+        columns = columns or [c for c in profile.get("completion_columns") or [] if c.get("sum")]
         return [max(columns, key=lambda c: int(c["column"]))] if columns else []
 
     def amounts(profile):

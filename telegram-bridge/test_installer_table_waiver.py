@@ -372,3 +372,38 @@ class InstallerFilesGoToOneDrive(unittest.TestCase):
         self.assertTrue(result['remote'].startswith('onedrive:SmartBild/Монтажи/Отчёты монтажников/'
                                                      'Сергей Деревянко/20.11.2026/Таблицы/'))
         copy.assert_called_once()
+
+
+class SergeysRealSheetLayout(unittest.TestCase):
+    """Owner's screenshot 22.11 of «22.11.xlsx»: one sheet; periods in columns 7, 8 (hidden, 30 000),
+    21, 22, current 23 (total 35 000); column 24 — rates «5 000,00 руб.» without a total.
+    Warm floor = 15 000 + 12 000 + 4 000 in rows 78/80/81; a 4 000 cabinet far above."""
+
+    def test_warm_floor_and_cabinet_are_split_out_of_column_23(self):
+        import os, tempfile
+        from openpyxl import Workbook
+        import installer_report_intake as intake
+        with tempfile.TemporaryDirectory() as folder:
+            book = Workbook(); sheet = book.active; sheet.title = 'Расчетная ведомость'
+            sheet.append(['№', 'Работа', 'Ед', 'Кол', 'Цена', 'Сумма'])
+            def put(row, number, name, rate, values):
+                sheet.cell(row, 1, number); sheet.cell(row, 2, name); sheet.cell(row, 3, 'шт.')
+                sheet.cell(row, 4, 1); sheet.cell(row, 5, rate); sheet.cell(row, 6, rate)
+                for column, value in values.items():
+                    sheet.cell(row, column, value)
+            put(10, 5, 'Сборка электрического шкафа', 4000, {23: 4000, 24: 4000})
+            put(20, 6, 'Кондиционер старый период', 30000, {8: 30000, 24: 30000})
+            put(78, 63, 'Ridan TF-150 мат 10 м²', 5000, {23: 15000, 24: 5000})
+            put(79, 64, 'Ridan TF-150 мат 7 м²', 3500, {24: 5000})
+            put(80, 65, 'Ridan TF-150 мат 8 м²', 4000, {23: 12000, 24: 5000})
+            put(81, 66, 'Ridan TF-150 мат 9 м²', 4500, {23: 4000, 24: 5000})
+            sheet.cell(106, 1, 'ИТОГО ПО АКТУ'); sheet.cell(106, 8, 30000); sheet.cell(106, 23, 35000)
+            path = os.path.join(folder, '22.11.xlsx'); book.save(path); book.close()
+            targets = [{'type': 'table', 'object': o, 'source': f'по таблице-{a}', 'amount': a, 'deal_id': None}
+                       for o, a in (('Тёплый пол', 31000), ('Шкафы', 4000))]
+            with patch.object(intake, 'FACT_REGISTRY', os.path.join(folder, 'facts.json')):
+                intake.attach_tables(targets, [path])
+        got = {t['object']: sorted(r['name'] for r in t.get('table_rows') or [] if r['current_amount']) for t in targets}
+        self.assertEqual(['Ridan TF-150 мат 10 м²', 'Ridan TF-150 мат 8 м²', 'Ridan TF-150 мат 9 м²'], got['Тёплый пол'])
+        self.assertEqual(['Сборка электрического шкафа'], got['Шкафы'])
+        self.assertTrue(all(t['completion_matches_report'] for t in targets))
