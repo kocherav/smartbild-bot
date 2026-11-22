@@ -62,7 +62,8 @@ def review(spec):
         if source_total is not None and abs(number(source_total, f'Строка {index}, итог') - amount) > Decimal('0.01'):
             raise ValueError(f'Строка {index}: количество × итоговая цена не совпадает с суммой строки. Проверьте скидку и цену за единицу.')
         total += amount
-        lines.append(f'{index}. {row["name"]} — {qty_text(qty)} × {rub(price)} = {rub(amount)} ₽')
+        mark = f' ⚠️ {row["price_source"]}' if not price and row.get('price_source') else ''
+        lines.append(f'{index}. {row["name"]} — {qty_text(qty)} × {rub(price)} = {rub(amount)} ₽{mark}')
     client = f'ID {spec["client_id"]}' if spec.get('client_id') else 'НОВАЯ карточка'
     tax = {'none': 'без НДС', '22': 'НДС 22%', '5': 'НДС 5%'}[spec['tax_mode']]
     if spec['tax_mode'] != 'none':

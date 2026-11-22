@@ -57,4 +57,50 @@ class ReviewTest(unittest.TestCase):
             self.assertIsNotNone(bridge.normalize_create_deal_spec(spec)[1])
 
 
+class ProjectWithoutPrices(unittest.TestCase):
+    """Owner 22.11: a project PDF without prices failed with «цена за единицу: требуется число».
+    Now the bot looks the prices up in the catalogs before asking for the client."""
+    def spec(self):
+        return {'client_name': 'Cliwell', 'description': 'Лаврушинский', 'tax_mode': 'none', 'user_request': 'создай сделку',
+                'items': [{'name': 'Кондиционер AS25S2SF3FA-B', 'qty': 2}, {'name': 'Труба 6,35', 'qty': 10}]}
+
+    def priced(self, items):
+        return {'ok': True, 'found': 1, 'missing': ['Труба 6,35'],
+                'items': [{**items[0], 'unit_price': 95000, 'price_source': 'Hogart AS25S2SF3FA-B'},
+                          {**items[1], 'unit_price': 0, 'price_source': 'цена не найдена в каталогах'}]}
+
+    def test_prices_are_looked_up_before_the_client_question_and_zero_rows_pass_review(self):
+        sent = []
+        with patch.object(bridge, 'resolve_missing_prices', side_effect=self.priced) as lookup, \
+             patch.object(bridge, 'search_creation_clients', return_value={'ok': True, 'clients': [{'id': '7', 'name': 'Cliwell', 'kind': 'company'}]}), \
+             patch.object(bridge, 'update_deal_ui_state') as state, \
+             patch.object(bridge, 'send_message', side_effect=lambda t, c, text, *a, **k: sent.append(text)), \
+             patch.object(bridge, 'run_create_megaplan_deal') as create, \
+             patch('document_tax_policy.creation_rate', return_value='none'):
+            bridge.prepare_deal_creation_review('token', 'actor', self.spec())
+        lookup.assert_called_once()
+        create.assert_not_called()
+        self.assertIn('нашёл 1 из 2', sent[1]); self.assertIn('• Труба 6,35', sent[1])
+        self.assertEqual('deal_create_confirm', state.call_args.kwargs['pending'])
+        self.assertIn('190 000,00', sent[-1]); self.assertIn('⚠️ цена не найдена в каталогах', sent[-1])
+        self.assertTrue(state.call_args.kwargs['deal_create_spec']['prices_resolved'])
+
+    def test_lookup_failure_still_lets_the_deal_through_with_zero_prices(self):
+        sent = []
+        with patch.object(bridge, 'resolve_missing_prices', return_value={'ok': False, 'error': 'TimeoutExpired'}), \
+             patch.object(bridge, 'update_deal_ui_state') as state, \
+             patch.object(bridge, 'send_message', side_effect=lambda t, c, text, *a, **k: sent.append(text)):
+            spec = {**self.spec(), 'client_id': '7'}; spec.pop('user_request')
+            with patch('document_tax_policy.creation_rate', return_value='none'):
+                bridge.prepare_deal_creation_review('token', 'actor', spec)
+        self.assertIn('не сработал', sent[1])
+        self.assertEqual('deal_create_confirm', state.call_args.kwargs['pending'])
+
+    def test_priced_specification_is_not_looked_up(self):
+        with patch.object(bridge, 'resolve_missing_prices') as lookup, patch.object(bridge, 'update_deal_ui_state'), \
+             patch.object(bridge, 'send_message'):
+            bridge.prepare_deal_creation_review('token', 'actor', ReviewTest().spec())
+        lookup.assert_not_called()
+
+
 if __name__ == '__main__': unittest.main()
