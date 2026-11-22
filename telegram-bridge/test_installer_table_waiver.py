@@ -299,6 +299,21 @@ class SergeyFilesOf22November(unittest.TestCase):
                           'Шкафы': ('22.11.xlsx', True, 4000)}, got)
         self.assertEqual([('отопление.xlsx', 'отопление2.xlsx')], [(x['file'], x['duplicate_of']) for x in loose])
 
+    def test_older_period_column_does_not_steal_another_line(self):
+        # TASK-20261122-21 dry run: «22.11.xlsx» had an older 30 000 column and was given to
+        # conditioning; warm floor stayed without a table.
+        targets = [{'type': 'table', 'object': o, 'source': f'по таблице-{a}', 'amount': a, 'deal_id': None}
+                   for o, a in (('Тёплый пол', 31000), ('Шкафы', 4000), ('Кондиционирование', 30000))]
+        common = self.profile('22.11.xlsx', [self.row(1, 'Шкаф', 4000), self.row(2, 'Мат', 20000),
+                                              self.row(3, 'Терморегулятор', 6000), self.row(4, 'Укладка', 5000)])
+        common['completion_columns'].insert(0, {'column': 8, 'sum': 30000, 'footer': 30000})
+        cond = self.profile('кондиционирование 20.11.xlsx', [self.row(1, 'Сплит', 30000)])
+        loose = self.run_attach(targets, {'/tmp/кондиционирование 20.11.xlsx': cond, '/tmp/22.11.xlsx': common})
+        got = {t['object']: t.get('table_file') for t in targets}
+        self.assertEqual({'Тёплый пол': '22.11.xlsx', 'Шкафы': '22.11.xlsx',
+                          'Кондиционирование': 'кондиционирование 20.11.xlsx'}, got)
+        self.assertEqual([], loose)
+
     def test_ambiguous_split_is_not_guessed(self):
         import installer_report_intake as intake
         profile = self.profile('x.xlsx', [self.row(1, 'a', 5000), self.row(2, 'b', 5000)])
