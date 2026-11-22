@@ -230,12 +230,42 @@ def save_state(state, path=None):
     os.replace(temporary, path)
 
 
+RESUME_WINDOW = dt.timedelta(hours=6)
+STALE_RUNNING = dt.timedelta(minutes=45)  # the developer call itself is limited to 30 minutes
+
+
+def _age(stamp, now):
+    try:
+        return now - dt.datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+
+
+def orphaned(record, now=None):
+    """Approved but never started (or started and abandoned by a restart) — and recent enough
+    that running it now is still what was asked. Older ones are left for a fresh task."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    status = record.get('status')
+    if status == 'approved':
+        age = _age(record.get('decided_at') or record.get('received_at'), now)
+        return age is not None and age <= RESUME_WINDOW
+    if status == 'running' and record.get('kind') != 'release':
+        age = _age(record.get('started_at'), now)
+        return age is not None and STALE_RUNNING <= age <= RESUME_WINDOW
+    return False
+
+
 def plan(tasks, problems, state, config=DEFAULT_CONFIG):
     """Decide what changed: returns (to_dispatch, to_ask_owner, new_problems) and updates state."""
     dispatch, ask, fresh_problems = [], [], []
     for task in tasks:
         record = state['tasks'].get(task['id'])
         if record and record.get('sha256') == task['sha256']:
+            if orphaned(record):
+                # 22.11: a restart killed the dispatching poll after the first of seven approved
+                # tasks; the rest stayed «approved» and every later poll skipped them.
+                record.update(status='approved', resumed_at=utc_now())
+                dispatch.append(task)
             continue
         if record and record.get('status') in ('running',):
             # An amendment while the developer works: picked up after this run ends.
