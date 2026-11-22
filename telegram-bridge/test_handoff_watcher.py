@@ -91,6 +91,7 @@ class HandoffWatcherTests(unittest.TestCase):
         self.assertEqual(['TASK-20261023-01'], [t['id'] for t in dispatch])
         self.assertEqual(['TASK-20261023-02'], [t['id'] for t in ask])
         self.assertEqual([], problems)
+        hw.start('TASK-20261023-01', self.state)  # the dispatcher claims it
         self.assertEqual(([], [], []), self.cycle(git), 'тот же файл не выполняется повторно')
         allowed = {'fetch', 'rev-parse', 'for-each-ref', 'ls-tree', 'show', 'log', 'cat-file', 'branch'}
         self.assertTrue(all(command[0] in allowed for command in git.commands))
@@ -131,6 +132,28 @@ class HandoffWatcherTests(unittest.TestCase):
         self.assertIsNone(hw.decide('TASK-20261023-05', True, self.state), 'повторное решение не действует')
         self.assertEqual('running', hw.start('TASK-20261023-05', self.state)['status'])
         self.assertIsNone(hw.start('TASK-20261023-05', self.state), 'запуск ровно один раз')
+
+    def test_approved_task_lost_by_a_restart_is_dispatched_again(self):
+        # 22.11: a restart during the poll left six approved tasks that no later poll started.
+        git = FakeGit({'main': {'handoff/inbox/TASK-20261023-06.md': (task_text('TASK-20261023-06'), 1)}})
+        dispatch, _ask, _problems = self.cycle(git)
+        self.assertEqual(['TASK-20261023-06'], [t['id'] for t in dispatch])
+        # the dispatching process died before start(): next poll picks it up
+        dispatch, _ask, _problems = self.cycle(git)
+        self.assertEqual(['TASK-20261023-06'], [t['id'] for t in dispatch])
+        self.assertEqual('running', hw.start('TASK-20261023-06', self.state)['status'])
+        self.assertEqual(([], [], []), self.cycle(git), 'идущая задача не перезапускается')
+
+    def test_orphan_rules_respect_age_and_releases(self):
+        now = hw.dt.datetime(2026, 11, 22, 12, tzinfo=hw.dt.timezone.utc)
+        ago = lambda **kw: (now - hw.dt.timedelta(**kw)).isoformat()
+        self.assertTrue(hw.orphaned({'status': 'approved', 'received_at': ago(hours=4)}, now))
+        self.assertFalse(hw.orphaned({'status': 'approved', 'received_at': ago(hours=7)}, now), 'старое — новой задачей')
+        self.assertFalse(hw.orphaned({'status': 'running', 'kind': 'code', 'started_at': ago(minutes=20)}, now))
+        self.assertTrue(hw.orphaned({'status': 'running', 'kind': 'code', 'started_at': ago(hours=1)}, now))
+        self.assertFalse(hw.orphaned({'status': 'running', 'kind': 'release', 'started_at': ago(hours=1)}, now),
+                         'прерванный выпуск не повторяется сам')
+        self.assertFalse(hw.orphaned({'status': 'done', 'received_at': ago(hours=1)}, now))
 
     def test_owner_reads_the_gist_first(self):
         task = {**hw.parse(task_text(extra='summary: Кнопка «Экономика» перестанет зря перезаписывать файл в сделке.\n')),

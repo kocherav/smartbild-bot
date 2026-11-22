@@ -229,7 +229,7 @@ class AclSpecTest(unittest.TestCase):
 
 class DeveloperSandboxTest(unittest.TestCase):
     def test_task_clone_is_opened_through_its_parent(self):
-        with patch.object(bridge.subprocess, 'run') as run:
+        with patch.object(bridge.process_tree, 'run') as run:
             bridge._run_developer_codex('', 'задача', '/srv/handoff-work/IDEA-1', '/srv/handoff-work')
         command = run.call_args.args[0]
         roots = json.loads(next(arg for arg in command if arg.startswith('sandbox_workspace_write.writable_roots='))

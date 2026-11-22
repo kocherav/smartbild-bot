@@ -184,3 +184,32 @@ class BridgeFlow(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+
+class TablesStepNeverBlocks(unittest.TestCase):
+    """Owner 22.11: Sergey could not upload his tables — the bot answered «лишний файл»."""
+
+    def test_more_tables_are_accepted_after_the_required_count_was_recalculated(self):
+        import inspect
+        source = inspect.getsource(bridge)
+        self.assertNotIn('лишний файл в пакет не добавлен', source)
+
+    def test_skip_button_hands_the_report_over_with_missing_lines_marked(self):
+        waiting = session(('Отопление', '857', 150000), ('Компрессор', '890', 18000))
+        waiting['table_paths'] = []
+        sent = []
+        with patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': copy.deepcopy(waiting)}), \
+             patch.object(bridge, 'installation_remaining', side_effect=remaining({'890': dict(STATEMENT, deal_id='890')})), \
+             patch.object(bridge, 'installation_open_remainders', return_value={}), \
+             patch.object(bridge, 'update_deal_ui_state') as update, \
+             patch.object(bridge, 'send_message', side_effect=lambda *a, **k: sent.append(a[2])):
+            bridge.finish_installer_report_files('t', 'inst', waiting, allow_missing=True)
+        state = update.call_args.kwargs
+        self.assertEqual('installer_report_objects', state['pending'])
+        final = state['installer_report']
+        heating = [e for e in final['exceptions'] if e['object'] == 'Отопление'][0]
+        self.assertTrue(heating['table_missing'])
+        self.assertEqual('передано руководителю без таблицы', heating['resolution'])
+        self.assertIn('Без таблиц переданы руководителю', '\n'.join(sent))
+        self.assertIn(bridge.INSTALLER_SKIP_TABLES, str(bridge.INSTALLER_REPORT_FILES_KEYBOARD))
