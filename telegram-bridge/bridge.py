@@ -783,9 +783,12 @@ INSTALLER_REPORT_UPLOAD_KEYBOARD = {
     "resize_keyboard": True,
     "one_time_keyboard": True,
 }
+# Owner 22.11: the bot must never stop a report for want of a table — the manager decides.
+INSTALLER_SKIP_TABLES = "📤 Передать без недостающих таблиц"
 INSTALLER_REPORT_FILES_KEYBOARD = {
     "keyboard": [
         [{"text": "✅ Все файлы загружены"}],
+        [{"text": INSTALLER_SKIP_TABLES}],
         [{"text": "❌ Отменить отчёт"}],
     ],
     "resize_keyboard": True,
@@ -2972,7 +2975,7 @@ def installer_tables_request_text(session):
         f"Пришлите {required} соответствующих Excel-файла подряд, затем нажмите «✅ Все файлы загружены».")
 
 
-def finish_installer_report_files(token, chat_id, session):
+def finish_installer_report_files(token, chat_id, session, allow_missing=False):
     paths = session.get("table_paths") or []
     result = run_installer_report_intake(session["source_path"], paths)
     if not result.get("ok"):
@@ -2982,6 +2985,8 @@ def finish_installer_report_files(token, chat_id, session):
     # Lines closing the statement need no file (owner 20.11) — also for a report that was
     # already waiting for tables when this rule shipped.
     installer_table_waiver.waive(completed, installation_remaining, installation_open_remainders)
+    if allow_missing:
+        installer_table_waiver.mark_missing(completed)
     if int(completed.get("required_tables") or 0):
         session.update({key: completed.get(key) for key in ("required_tables", "table_requests", "waived_tables")})
         update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)
@@ -3002,6 +3007,8 @@ def finish_installer_report_files(token, chat_id, session):
     prefix = "Таблицы сопоставлены:\n" + "\n".join(associations) + "\n\n" if associations else ""
     waived = installer_table_waiver.waived_text(completed)
     prefix += (waived + "\n\n") if waived else ""
+    missing = installer_table_waiver.missing_text(completed)
+    prefix += (missing + "\n\n") if missing else ""
     send_message(token, chat_id, prefix + installer_objects_text(completed), INSTALLER_REPORT_OBJECTS_KEYBOARD)
 
 
@@ -5911,6 +5918,8 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             f"Распознано строк без уточнений: {submitted.get('automatic_count', 0)} на {money(submitted.get('automatic_sum', 0))}.\n"
             f"Итог к проверке: {money(submitted.get('payable_amount') or submitted.get('net_total') or submitted.get('declared_total'))}.\n"
             f"Нерешённых вопросов: {len(unresolved)}."
+            + (f"\nСтрок «по таблице» без таблиц: {len(submitted.get('missing_tables') or [])} — "
+               "по ним ничего не начислено, решите при проверке." if submitted.get("missing_tables") else "")
         ), INSTALLER_MANAGER_OPEN_KEYBOARD)
         return True
     if value == "🧰 Отчёт монтажника":
@@ -5983,6 +5992,9 @@ def handle_deal_ui(token, chat_id, text, _background=False):
         return True
     if pending == "installer_report_tables" and value == "✅ Все файлы загружены":
         finish_installer_report_files(token, chat_id, installer)
+        return True
+    if pending == "installer_report_tables" and value == INSTALLER_SKIP_TABLES:
+        finish_installer_report_files(token, chat_id, installer, allow_missing=True)
         return True
     if pending == "installer_report_objects" and value == "✅ Объекты верны":
         installer["stage"] = "exceptions"
@@ -10572,7 +10584,7 @@ def handle_installer_ui(token, chat_id, text):
         process_installer_report(token, chat_id, path)
         return True
     if pending.startswith(('installer_report','installer_excel')) and value not in ('🛠 Мои монтажи','⬅️ Мои монтажи','📜 История монтажей','📚 Утверждённые отчёты','📊 Мои взаиморасчёты','❓ Помощь'):
-        allowed={'✅ Объекты верны','✏️ Исправить объект','▶️ Разобрать исключения','📤 Передать руководителю','❌ Отменить отчёт','✅ Все файлы загружены'}
+        allowed={'✅ Объекты верны','✏️ Исправить объект','▶️ Разобрать исключения','📤 Передать руководителю','❌ Отменить отчёт','✅ Все файлы загружены',INSTALLER_SKIP_TABLES}
         if pending=='installer_report_exception':
             allowed.update({'✅ Строки и суммы сверены','💰 Учесть одной суммой','✅ Принять выполнение таблицы','🔢 Выбрать позиции позже','✅ Подтвердить операцию','⏭ Оставить вопросом','➕ Внеплановый расход','🚫 Не учитывать','📦 Всякая всячина','✅ Принять построчный итог','➕ Добавить корректировку','✏️ Исправить строки','🔢 Указать номер сделки'})
         if pending=='installer_excel_report_deal':allowed.add('📦 Всякая всячина')
@@ -11496,22 +11508,17 @@ def main():
                     return
                 session = report_state.get("installer_report") or {}
                 paths = session.setdefault("table_paths", [])
-                required = int(session.get("required_tables") or 0)
-                if required and len(paths) >= required:
-                    send_message(
-                        token, chat_id,
-                        f"Все требуемые таблицы уже получены ({len(paths)} из {required}). "
-                        f"Нажмите «✅ Все файлы загружены»; лишний файл в пакет не добавлен.",
-                        INSTALLER_REPORT_FILES_KEYBOARD,
-                    )
-                    return
+                # 22.11: «required» counted only the still-missing lines while «paths» kept the
+                # tables already matched, so after the first «Все файлы загружены» the bot refused
+                # every further file as «лишний». Every Excel file is accepted; matching decides.
                 if original_path not in paths:
                     paths.append(original_path)
                 update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)
                 send_message(
                     token, chat_id,
-                    f"📊 Таблица получена: {original_name}\nПолучено {len(paths)} из {required}. "
-                    f"Пришлите остальные файлы или нажмите «✅ Все файлы загружены».",
+                    f"📊 Таблица получена: {original_name} (всего файлов: {len(paths)}).\n"
+                    f"Пришлите остальные или нажмите «✅ Все файлы загружены». Если какой-то таблицы нет — "
+                    f"«{INSTALLER_SKIP_TABLES}», руководитель разберётся.",
                     INSTALLER_REPORT_FILES_KEYBOARD,
                 )
                 return
