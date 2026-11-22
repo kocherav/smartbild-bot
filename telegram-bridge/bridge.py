@@ -2939,6 +2939,7 @@ def process_installer_report(token, chat_id, path):
             {"keyboard": [[{"text": "🔄 Повторить разбор"}], [{"text": "❌ Отменить отчёт"}]], "resize_keyboard": True})
         return
     session = result["session"]
+    archive_installer_files(token, chat_id, [path], session.get("report_date") or session.get("report"), "Отчёт")
     update_deal_ui_state(chat_id, installer_report_failure=None)
     session.setdefault("submitted_by_chat_id", str(chat_id))
     session.setdefault("created_at", datetime.now(timezone.utc).isoformat())
@@ -2978,6 +2979,25 @@ def installation_remaining(deal_id):
     """Read-only: the open remainder of a deal's installation statement, or None."""
     result = run_installation_workflow({"action": "remaining", "deal_id": str(deal_id)})
     return result.get("result") if result.get("ok") else None
+
+
+INSTALLER_ARCHIVE_NAME = "Сергей Деревянко"
+
+
+def archive_installer_files(token, chat_id, paths, report_date, kind):
+    """Owner 22.11: copy installer report files to OneDrive at once (in the background)."""
+    paths = [p for p in paths if p]
+
+    def job():
+        for path in paths:
+            result = run_installation_workflow({"action": "archive_upload", "path": path, "kind": kind,
+                                                "installer_name": INSTALLER_ARCHIVE_NAME,
+                                                "report_date": report_date or ""})
+            if not result.get("ok"):
+                print(f"{LOG_PREFIX} OneDrive archive failed for {os.path.basename(path)}: {result.get('error')}",
+                      file=sys.stderr)
+    if paths:
+        run_background_job(job, token, chat_id, operation="installer-archive")
 
 
 def installer_files_for_manager(session):
@@ -11334,7 +11354,9 @@ def main():
                 # Owner 22.11: a photographed table is a table too; the manager checks it.
                 session=photo_state.get("installer_report") or {}
                 paths=session.setdefault("table_paths",[])
-                if local_path not in paths: paths.append(local_path)
+                if local_path not in paths:
+                    paths.append(local_path)
+                    archive_installer_files(token,chat_id,[local_path],session.get("report_date"),"Таблицы")
                 update_deal_ui_state(chat_id,pending="installer_report_tables",installer_report=session)
                 send_message(token,chat_id,f"📷 Фото таблицы получено (всего файлов: {len(paths)}). Пришлите остальные или нажмите «✅ Все файлы загружены».",INSTALLER_REPORT_FILES_KEYBOARD)
                 return
@@ -11568,6 +11590,7 @@ def main():
                 # every further file as «лишний». Every Excel file is accepted; matching decides.
                 if original_path not in paths:
                     paths.append(original_path)
+                    archive_installer_files(token, chat_id, [original_path], session.get("report_date"), "Таблицы")
                 update_deal_ui_state(chat_id, pending="installer_report_tables", installer_report=session)
                 send_message(
                     token, chat_id,

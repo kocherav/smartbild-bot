@@ -146,7 +146,8 @@ class OldFormatTablesByAmount(unittest.TestCase):
 class BridgeFlow(unittest.TestCase):
     def run_report(self, s, statements):
         sent = []
-        with patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': s}), \
+        with patch.object(bridge, 'archive_installer_files'), \
+             patch.object(bridge, 'run_installer_report_intake', return_value={'ok': True, 'session': s}), \
              patch.object(bridge, 'installation_remaining', side_effect=remaining(statements)), \
              patch.object(bridge, 'installation_open_remainders', return_value={}), \
              patch.object(bridge, 'update_deal_ui_state') as update, \
@@ -348,3 +349,26 @@ class WorkbookWithSeveralSheets(unittest.TestCase):
         self.assertEqual({'Тёплый пол': ('22.11.xlsx / Электрика', 31000), 'Шкафы': ('22.11.xlsx / Электрика', 4000),
                           'Кондиционирование': ('22.11.xlsx / Кондиционирование', 30000)}, got)
         self.assertEqual([], loose)
+
+
+class InstallerFilesGoToOneDrive(unittest.TestCase):
+    """Owner 22.11: Sergey's files were not in OneDrive — every report file is archived on receipt."""
+
+    def test_files_are_archived_in_background_with_installer_date_and_kind(self):
+        calls = []
+        with patch.object(bridge, 'run_background_job', side_effect=lambda job, *a, **k: job()), \
+             patch.object(bridge, 'run_installation_workflow', side_effect=lambda spec: calls.append(spec) or {'ok': True}):
+            bridge.archive_installer_files('t', 'inst', ['/tmp/отопление.xlsx', None], '20.11.2026', 'Таблицы')
+        self.assertEqual([{'action': 'archive_upload', 'path': '/tmp/отопление.xlsx', 'kind': 'Таблицы',
+                           'installer_name': bridge.INSTALLER_ARCHIVE_NAME, 'report_date': '20.11.2026'}], calls)
+
+    def test_archive_path_in_onedrive(self):
+        import sys, tempfile
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'megaplan-crm'))
+        import installation_workflow as iw
+        with tempfile.NamedTemporaryFile(suffix='.pdf') as f, patch.object(iw, 'rclone_copy') as copy:
+            result = iw.archive_installer_upload(f.name, 'Сергей Деревянко', '20.11.2026', 'Таблицы')
+        self.assertTrue(result['remote'].startswith('onedrive:SmartBild/Монтажи/Отчёты монтажников/'
+                                                     'Сергей Деревянко/20.11.2026/Таблицы/'))
+        copy.assert_called_once()
