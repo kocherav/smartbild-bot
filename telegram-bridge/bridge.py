@@ -5077,8 +5077,18 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             send_message(token,chat_id,'Не удалось прочитать очередь монтажных отчётов. Это не означает, что отчётов нет.',MAIN_KEYBOARD); return True
         notices=result.get('result') or []
         rows=[[{'text':f'🧰 Проверить монтажный отчёт ID {x["id"]}'}] for x in notices]
+        # Owner 23.11: the installer's collective report waiting for approval belongs here too —
+        # «Новых монтажных отчётов нет» while Sergey's report waited was simply wrong.
+        incoming=current_deal_ui_state(chat_id).get('incoming_installer_report') if str(chat_id)==str(MANAGER_CHAT_ID) else None
+        if incoming:
+            rows.insert(0,[{'text':INSTALLER_OPEN_REPORT}])
         rows.append([{'text':'⬅️ Главное меню'}])
-        send_message(token,chat_id,'Отчёты, ожидающие проверки:' if notices else 'Новых монтажных отчётов нет.',{'keyboard':rows})
+        lines=[]
+        if incoming:
+            lines.append(f"📥 Отчёт монтажника от {incoming.get('report_date') or incoming.get('report') or ''} — ждёт утверждения.")
+        if notices:
+            lines.append('Отчёты по сделкам, ожидающие проверки:')
+        send_message(token,chat_id,'\n'.join(lines) if lines else 'Новых монтажных отчётов нет.',{'keyboard':rows})
         return True
     report_match=re.fullmatch(r'🧰 Проверить монтажный отчёт ID (\d+)',value)
     if report_match:
