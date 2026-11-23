@@ -146,6 +146,18 @@ PROFITABILITY_REQUEST_RE = re.compile(r"^PROFITABILITY_REQUEST:\s*(\d+)\s*$", re
 # bridge killed the CLI and incorrectly reported failure. Leave enough room for large
 # offers while MODEL_TIMEOUT_SEC still bounds the complete interaction.
 CREATE_MEGAPLAN_DEAL_TIMEOUT_SEC = 180
+# Owner 24.11: a 53-line project spec was cut off at 3 minutes — every new catalog position
+# costs ~4 Megaplan calls at the transport's 3 s spacing (~12 s a line). The limit now grows
+# with the spec; the deal itself is written last, so a cut-off never leaves a half deal.
+CREATE_DEAL_SECONDS_PER_ITEM = 25
+
+
+def create_deal_timeout(items):
+    return max(CREATE_MEGAPLAN_DEAL_TIMEOUT_SEC, 120 + CREATE_DEAL_SECONDS_PER_ITEM * len(items or []))
+
+
+def create_deal_eta_minutes(items):
+    return max(1, round(len(items or []) * 12 / 60))
 # Phase 1b (2026-08-23): supplier-invoice-applies-to-an-existing-deal flow. Two small
 # round-trip markers (same shape as HOGART_SEARCH - Claude asks, bridge fetches local
 # data, Claude gets a followup message with it) before the final apply block.
@@ -5724,7 +5736,10 @@ def handle_deal_ui(token, chat_id, text, _background=False):
                          PAYER_UPLOAD_KEYBOARD)
             return True
         spec = validated
-        send_message(token, chat_id, "🔧 Создаю новую сделку в Мегаплане по сохранённым КП и экономике...")
+        count = len(spec.get('items') or [])
+        send_message(token, chat_id, "🔧 Создаю новую сделку в Мегаплане по сохранённым КП и экономике..." + (
+            f"\nПозиций: {count}. Каждую Мегаплан принимает отдельно — это займёт около "
+            f"{create_deal_eta_minutes(spec.get('items'))} мин. Ничего нажимать не нужно, итог придёт сюда." if count > 10 else ""))
         result = run_create_megaplan_deal(spec)
         if result.get("ok"):
             update_deal_ui_state(chat_id, pending=None, deal_create_spec=None,
@@ -8673,11 +8688,16 @@ def client_button_text(client):
     return f'Клиент ID {client["id"]} — {name}'
 
 
+# TASK-20261123-07: «Архитектурное бюро Сергея Ларичева» → 32 queries at 3 s spacing ≈ 100 s;
+# the 45 s limit made every long company name fail.
+CLIENT_SEARCH_TIMEOUT_SEC = 150
+
+
 def search_creation_clients(name):
     try:
         result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, 'megaplan_api.py'), 'search-contractors'],
             cwd=MEGAPLAN_DIR, input=json.dumps({'name': name}, ensure_ascii=False),
-            capture_output=True, text=True, timeout=45)
+            capture_output=True, text=True, timeout=CLIENT_SEARCH_TIMEOUT_SEC)
         return json.loads(result.stdout)
     except Exception as exc:
         print(f'{LOG_PREFIX} client lookup failed: {type(exc).__name__}', file=sys.stderr)
@@ -8860,7 +8880,7 @@ def run_create_megaplan_deal(spec):
         result = subprocess.run(
             [REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "megaplan_api.py"), cli_cmd],
             cwd=MEGAPLAN_DIR, input=json.dumps(spec, ensure_ascii=False),
-            capture_output=True, text=True, timeout=CREATE_MEGAPLAN_DEAL_TIMEOUT_SEC,
+            capture_output=True, text=True, timeout=create_deal_timeout(items),
         )
         output_lines = (result.stdout or "").strip().splitlines()
         if not output_lines:
