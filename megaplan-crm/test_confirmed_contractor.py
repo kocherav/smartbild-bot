@@ -30,3 +30,22 @@ class ConfirmedContractorTest(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class SearchMergesProjections(unittest.TestCase):
+    """Owner 22.11 (TASK-20261122-27): «Архитектурное бюро Сергея Ларичева» came back as a
+    nameless button — a later, shorter projection of the same ID overwrote the full one."""
+    def test_full_phrase_finds_the_company_and_keeps_its_name(self):
+        api = object.__new__(MegaplanAPI)
+        full = {'id': 1003030, 'contentType': 'ContractorCompany', 'name': 'Архитектурное бюро Сергея Ларичева'}
+        short = {'id': 1003030, 'contentType': 'ContractorCompany', 'name': ''}
+        human = {'id': 1003031, 'contentType': 'ContractorHuman', 'firstName': 'Сергей', 'lastName': 'Ларичев'}
+        calls = []
+
+        def call(method, path, params):
+            calls.append(params['q'])
+            return {'data': [full, human] if len(calls) == 1 else [short]}
+        api._call = call
+        found = api.search_contractors('архитектурное бюро Сергея Ларичева')
+        names = {str(m['id']): m.get('name') for m in found}
+        self.assertEqual('Архитектурное бюро Сергея Ларичева', names['1003030'])
