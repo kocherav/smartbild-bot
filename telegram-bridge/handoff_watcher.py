@@ -283,10 +283,12 @@ def plan(tasks, problems, state, config=DEFAULT_CONFIG):
             dispatch.append(task)
         state['tasks'][task['id']] = record
     for problem in problems:
-        key = problem['ref'] + ':' + problem['path']
-        if state['problems'].get(key) != problem['sha256']:
-            state['problems'][key] = problem['sha256']
+        # 24.11: the same rejected file re-announced once per branch after a merge to main.
+        key = problem['path']
+        seen = {v for k, v in state['problems'].items() if k == key or k.endswith(':' + key)}
+        if problem['sha256'] not in seen:
             fresh_problems.append(problem)
+        state['problems'][key] = problem['sha256']
     return dispatch, ask, fresh_problems
 
 
