@@ -5258,7 +5258,7 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             draft['client_name'] = value
             clients = found.get('clients') or []
             update_deal_ui_state(chat_id, deal_create_spec=draft, pending='deal_create_client_select', deal_create_clients=clients)
-            rows = [[{'text': f'Клиент ID {x["id"]} — {x["name"]}'}] for x in clients]
+            rows = [[{'text': client_button_text(x)}] for x in clients]
             if not clients:
                 rows = [[{'text': 'Новый клиент — организация'}], [{'text': 'Новый клиент — физическое лицо'}]]
             rows.append([{'text': '🔍 Другой клиент'}, {'text': '❌ Отмена'}])
@@ -5271,10 +5271,14 @@ def handle_deal_ui(token, chat_id, text, _background=False):
             update_deal_ui_state(chat_id, pending='deal_create_client')
             send_message(token, chat_id, 'Укажите другое название или ФИО.', PAYER_UPLOAD_KEYBOARD)
             return True
+        # Owner 24.11: a card without a name in the search projection gave the button
+        # «Клиент ID 1003030 — » — Telegram drops the trailing space, the exact-text match
+        # never hit and the owner got «Выберите карточку из показанного списка». Match by ID.
+        picked = re.match(r'Клиент ID (\d+)\b', value)
         selected = next((x for x in creation.get('deal_create_clients') or []
-                         if value == f'Клиент ID {x["id"]} — {x["name"]}'), None)
+                         if picked and str(x['id']) == picked.group(1)), None)
         if selected:
-            draft.update(client_id=selected['id'], client_name=selected['name'], client_kind=selected['kind'], allow_new_client=False)
+            draft.update(client_id=selected['id'], client_name=selected.get('name') or draft.get('client_name') or f"Клиент ID {selected['id']}", client_kind=selected['kind'], allow_new_client=False)
         elif not creation.get('deal_create_clients') and value in ('Новый клиент — организация', 'Новый клиент — физическое лицо'):
             draft.update(client_id=None, client_kind='company' if value.endswith('организация') else 'human', allow_new_client=True)
         else:
@@ -8664,6 +8668,11 @@ def deal_title_organization(title):
     return f"{match.group(1)} {match.group(2).strip()}" if match else None
 
 
+def client_button_text(client):
+    name = (client.get('name') or '').strip() or ('организация' if client.get('kind') == 'company' else 'клиент') + ' (название не пришло из поиска)'
+    return f'Клиент ID {client["id"]} — {name}'
+
+
 def search_creation_clients(name):
     try:
         result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, 'megaplan_api.py'), 'search-contractors'],
@@ -8717,7 +8726,7 @@ def prepare_economics_deal_request(token, chat_id, caption, path, notify=True):
                          f'Сохранены все {len(economics["items"])} позиций из Excel. Выберите режим НДС для сделки.', TAX_KEYBOARD)
         return True
     update_deal_ui_state(chat_id, pending='deal_create_client_select', deal_create_clients=clients)
-    rows = [[{'text': f'Клиент ID {x["id"]} — {x["name"]}'}] for x in clients]
+    rows = [[{'text': client_button_text(x)}] for x in clients]
     if not clients:
         rows = [[{'text': 'Новый клиент — организация'}], [{'text': 'Новый клиент — физическое лицо'}]]
     rows.append([{'text': '🔍 Другой клиент'}, {'text': '❌ Отмена'}])
@@ -8782,7 +8791,7 @@ def prepare_deal_creation_review(token, chat_id, spec):
                 spec = {**spec, 'client_id': client['id'], 'client_name': client['name'], 'client_kind': client['kind']}
             else:
                 update_deal_ui_state(chat_id, deal_create_spec=spec, pending='deal_create_client_select', deal_create_clients=clients)
-                rows = [[{'text': f'Клиент ID {x["id"]} — {x["name"]}'}] for x in clients]
+                rows = [[{'text': client_button_text(x)}] for x in clients]
                 rows.append([{'text': '🔍 Другой клиент'}, {'text': '❌ Отмена'}])
                 send_message(token, chat_id, 'Выберите найденную карточку клиента:' if clients else
                              'Клиент по указанному названию не найден. Нажмите «Другой клиент» для поиска по другому названию.', {'keyboard': rows})
