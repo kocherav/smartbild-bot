@@ -14,7 +14,10 @@ for p in sorted(paths):
    try:subprocess.run(['pdftotext','-layout',str(p),str(target)],capture_output=True,timeout=20)
    except subprocess.TimeoutExpired:continue
   if not target.exists():continue
-  text=target.read_text(errors='replace')
- else:text=p.read_text(errors='replace')
+  try:text=target.read_text(errors='replace')
+  except OSError:continue
+ else:
+  try:text=p.read_text(errors='replace')
+  except OSError:continue  # 24.11: one unreadable evidence file stopped the whole index
  index.append({'path':str(p),'text':text})
 (ROOT/'evidence/document_index.json').write_text(json.dumps(index,ensure_ascii=False));print('indexed',len(index))
