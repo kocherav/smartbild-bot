@@ -72,7 +72,7 @@ def numbers(text):
 
     TASK-20261124-05: sheet thickness (0,5 мм) is left out — catalog names rarely carry it;
     «Ø125–Ø125» equals «125» (a tee of one size); digits inside model codes are not sizes."""
-    t = _normalise(_without_models(text))
+    t = _normalise(_without_models(_without_brackets(text)))
     found = set()
     for value, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(мм|см|м\b)?", t):
         v = float(value)
@@ -98,6 +98,11 @@ def series(text):
     return {w for w in re.findall(r"\b[a-z]{3,}\b", str(text or "").lower())}
 
 
+def _without_brackets(text):
+    """«Воздуховод(Пр) - 300x400 - 1250 (оц. ст. 0.50/100 - Шина R20х95О)» → sizes 300, 400, 1250 only."""
+    return re.sub(r"\([^()]*\)", " ", str(text or ""))
+
+
 def _without_models(text):
     return MODEL.sub(" ", str(text or "").lower())
 
@@ -113,6 +118,30 @@ def kind(text):
         if len(w) > 1 and lemma(w) in KINDS:
             return lemma(w)
     return None
+
+
+RECT_PIECE_MM, ROUND_PIECE_MM = 1250, 3000   # owner 24.11: прямоугольные — штуки по 1250 мм, круглые — по 3 м или метрами
+
+
+def rectangular(text):
+    return bool(re.search(r"\d\s*[x×х*]\s*\d", _without_brackets(text))) or "прямоуг" in str(text).lower() or "(пр)" in str(text).lower()
+
+
+def duct_length(query, name, unit=""):
+    """A duct sold as a piece priced against a duct counted in metres: the piece length, else None.
+    The length is read from the name (L=1250, «- 3000»); a piece without it is 1250 mm when
+    rectangular and 3000 mm when round."""
+    if kind(query) != "воздуховод" or kind(name) != "воздуховод":
+        return None
+    if str(unit).lower().startswith("шт") and set(numbers(name)) == set(numbers(query)):
+        return RECT_PIECE_MM if rectangular(name) else ROUND_PIECE_MM
+    extra = set(numbers(name)) - set(numbers(query))
+    long = [n for n in extra if n >= 500]
+    return long[0] if len(extra) == 1 and long and set(numbers(query)) <= set(numbers(name)) else None
+
+
+def _duct_piece(a, b):
+    return duct_length(a, b) is not None
 
 
 # Words that make two same-size items different products.
@@ -133,6 +162,13 @@ def _conflict(sa, sb):
     return False
 
 
+SERVICE = re.compile(r"^\s*то\b|обслуживан|монтаж|демонтаж|пусконалад|диагностик|ремонт|работ[аы]?\b|услуг", re.I)
+
+
+def is_service(text):
+    return bool(SERVICE.search(str(text or "")))
+
+
 def similarity(a, b):
     """0..1 for two names of the same kind and the same sizes, else 0.
 
@@ -142,7 +178,9 @@ def similarity(a, b):
     ka, kb = kind(a), kind(b)
     if not ka or ka != kb:
         return 0.0
-    if numbers(a) != numbers(b):
+    if is_service(a) != is_service(b):      # «ТО внешнего блока VRV» is not a VRV unit
+        return 0.0
+    if numbers(a) != numbers(b) and not _duct_piece(a, b):
         return 0.0
     sa, sb = _stems(a), _stems(b)
     if _conflict(sa, sb):
@@ -162,7 +200,7 @@ def similarity(a, b):
 MIN_SIMILARITY = 0.5   # same kind, same sizes, no conflicting material or shape
 
 
-def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY):
+def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY, document_index=None):
     """[{name, price, cost, source, ref, order}] from the Offer catalog and supplier invoices."""
     rows = []
     try:
@@ -191,7 +229,13 @@ def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY):
             amount = (_num(line.get("amount_cents")) or 0) / 100 or _num(line.get("amount") or line.get("amount_used"))
             if name and qty and amount:
                 rows.append({"name": name, "price": None, "cost": round(amount / qty, 2),
-                             "source": "счёт поставщика", "ref": label, "order": 0})
+                             "source": "счёт поставщика", "ref": label, "order": 0,
+                             "unit": line.get("unit") or line.get("source_unit") or ""})
+    try:  # owner 24.11: the invoices themselves (PDF/XLSX text), not only what finance allocated
+        import invoice_lines
+        rows.extend(invoice_lines.history_rows(document_index or invoice_lines.DOCUMENT_INDEX))
+    except Exception:  # noqa: BLE001 — a bonus source; the catalog still answers without it
+        pass
     return rows
 
 
@@ -209,7 +253,36 @@ def markups(history):
     for r in history:
         if r["price"] and r["cost"] and r["cost"] < r["price"] < r["cost"] * 5:
             by_kind.setdefault(kind(r["name"]), []).append(r["price"] / r["cost"])
-    return {k: round(statistics.median(v), 3) for k, v in by_kind.items() if k and len(v) >= 3}
+    result = {k: round(statistics.median(v), 3) for k, v in by_kind.items() if k and len(v) >= 3}
+    # TASK-20261124-06: отвод/переход/ниппель had purchase prices but no own markup. Fittings
+    # share one markup; anything else falls back to the median over all our sales.
+    for group in GROUPS:
+        values = [r for k, v in by_kind.items() if k in group for r in v]
+        if len(values) >= 3:
+            result.setdefault("группа:" + group[0], round(statistics.median(values), 3))
+    every = [r for v in by_kind.values() for r in v]
+    if len(every) >= 10:
+        result["все"] = round(statistics.median(every), 3)
+    return result
+
+
+GROUPS = [("воздуховод", "отвод", "переход", "тройник", "ниппель", "муфта", "заглушка", "врезка", "колено",
+           "утка", "адаптер", "дроссель", "клапан", "фланец", "шина", "уголок"),
+          ("диффузор", "решетка", "анемостат")]
+
+
+def ratio_for(name, ratios):
+    k = kind(name)
+    if not ratios:
+        return None, ""
+    if k in ratios:
+        return ratios[k], "обычная наценка на этот вид"
+    for group in GROUPS:
+        if k in group and "группа:" + group[0] in ratios:
+            return ratios["группа:" + group[0]], "обычная наценка на вентиляционные изделия"
+    if "все" in ratios:
+        return ratios["все"], "наша средняя наценка"
+    return None, ""
 
 
 def best_match(name, history):
@@ -224,20 +297,68 @@ def best_match(name, history):
     return {**row, "score": score}
 
 
+def section(text):
+    """(a, b) in mm of a rectangular section «400×150», else None."""
+    m = re.search(r"(\d{2,4})\s*[x×х*]\s*(\d{2,4})", _without_brackets(text).lower())
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def rect_duct_estimate(name, history, ratios=None):
+    """A rectangular duct size we never bought: price per metre ∝ perimeter of the section,
+    from our earlier rectangular ducts (sale prices first, else purchase × markup)."""
+    if kind(name) != "воздуховод" or not section(name) or is_service(name):
+        return None
+    a, b = section(name)
+    _, sb = _stems(name), None
+    sell_rates, cost_rates = [], []
+    for r in history:
+        if kind(r["name"]) != "воздуховод" or is_service(r["name"]) or not section(r["name"]):
+            continue
+        if _conflict(_stems(name), _stems(r["name"])):
+            continue
+        ra, rb = section(r["name"])
+        extra = [n for n in numbers(r["name"]) if n >= 500 and n not in (ra, rb)]
+        unit = str(r.get("unit") or "").lower()
+        length = extra[0] if extra else (RECT_PIECE_MM if unit.startswith("шт") or r["source"] == "сделки" else 1000)
+        perimeter = 2 * (ra + rb) / 1000
+        if r["price"]:
+            sell_rates.append(r["price"] * 1000 / length / perimeter)
+        if r["cost"]:
+            cost_rates.append(r["cost"] * 1000 / length / perimeter)
+    perimeter = 2 * (a + b) / 1000
+    if len(sell_rates) >= 3:
+        rate = statistics.median(sell_rates)
+        cost = round(statistics.median(cost_rates) * perimeter, 2) if len(cost_rates) >= 3 else None
+        return (round(rate * perimeter, 2), cost,
+                f"проверить: расчёт за 1 м по периметру сечения из {len(sell_rates)} прошлых продаж прямоугольных воздуховодов")
+    ratio, why = ratio_for(name, ratios)
+    if len(cost_rates) >= 3 and ratio:
+        cost = round(statistics.median(cost_rates) * perimeter, 2)
+        return (round(cost * ratio, 2), cost,
+                f"проверить: расчёт за 1 м по периметру сечения из {len(cost_rates)} прошлых закупок × {why} {ratio:g}")
+    return None
+
+
 def price_from_history(name, history, ratios=None):
     """(sell, cost, mark) or None. A purchase-only match is sold at the kind's usual markup."""
     match = best_match(name, history)
     if not match:
-        return None
+        return rect_duct_estimate(name, history, ratios)
     word = "очень похоже" if match["score"] >= 0.8 else "похоже"
+    length = duct_length(name, match["name"], match.get("unit", ""))
+    if length:
+        per_metre = 1000.0 / length
+        match = {**match, "price": match["price"] and round(match["price"] * per_metre, 2),
+                 "cost": match["cost"] and round(match["cost"] * per_metre, 2),
+                 "ref": f"{match['ref']}, пересчитано за 1 м из штуки L={length:g} мм"}
     if match["price"]:
         return (match["price"], match["cost"],
                 f"проверить: цена из прошлых сделок ({word}: «{match['name']}», {match['ref']})")
-    ratio = (ratios or {}).get(kind(name))
+    ratio, why = ratio_for(name, ratios)
     if not ratio:
         return None
     return (round(match["cost"] * ratio, 2), match["cost"],
-            f"проверить: закупка из {match['ref']} ({word}: «{match['name']}») × обычная наценка {ratio:g}")
+            f"проверить: закупка из {match['ref']} ({word}: «{match['name']}») × {why} {ratio:g}")
 
 
 def main():
