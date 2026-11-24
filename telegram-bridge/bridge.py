@@ -8779,7 +8779,10 @@ def resolve_missing_prices(items):
 
 def missing_prices_text(result, total):
     missing = result.get('missing') or []
-    lines = [f'🔎 Цены по каталогам: нашёл {result.get("found", 0)} из {total} позиций без цены.']
+    lines = [f'🔎 Цены по каталогам и прошлым сделкам: нашёл {result.get("found", 0)} из {total} позиций без цены.']
+    if result.get('from_history'):
+        lines.append(f'Из них {result["from_history"]} — по похожим позициям прошлых сделок и счетам поставщиков, '
+                     'помечены ⚠️ «проверить».')
     if missing:
         lines.append('Не нашёл — поставил 0 ₽ (поправьте в Мегаплане или пришлите цены):')
         lines += [f'• {name}' for name in missing[:30]]

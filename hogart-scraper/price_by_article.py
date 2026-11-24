@@ -10,6 +10,7 @@ stdin: {"items": [{"name": ..., "sku": optional, "qty": ..., "unit_price": optio
 stdout: {"ok": true, "items": [...], "found": n, "missing": [names]}
 """
 import json
+import os
 import re
 import sys
 
@@ -35,7 +36,19 @@ def candidates(row):
     return list(dict.fromkeys(found))
 
 
-def price_rows(items, hogart=None, daichi=None, kemiks=None):
+def _history():
+    """Owner 24.11: our own earlier deals and supplier invoices (megaplan-crm/price_history)."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "megaplan-crm"))
+        import price_history
+        rows = price_history.load_history()
+        ratios = price_history.markups(rows)
+        return lambda name: price_history.price_from_history(name, rows, ratios)
+    except Exception:  # noqa: BLE001 — history is a bonus tier; catalogs still work without it
+        return lambda name: None
+
+
+def price_rows(items, hogart=None, daichi=None, kemiks=None, history=None):
     """``hogart(article)`` → (retail, purchase) or None; ``daichi(article)`` → the same;
     ``kemiks(name)`` — pipes, insulation, cable by the row's description (КЕМИКС rules of
     price_spec_items.py, the route the investigation TASK-20261122-27 found 5 of 53 with)."""
@@ -45,7 +58,9 @@ def price_rows(items, hogart=None, daichi=None, kemiks=None):
         daichi = daichi or _daichi(kp)
     if kemiks is None:
         from price_spec_items import kemiks_lookup as kemiks
-    priced, missing, found = [], [], 0
+    if history is None:
+        history = _history()
+    priced, missing, found, from_history = [], [], 0, 0
     for row in items:
         row = dict(row)
         if has_price(row):
@@ -71,6 +86,17 @@ def price_rows(items, hogart=None, daichi=None, kemiks=None):
             result = kemiks(str(row.get("name") or ""))
             if result and result[0]:
                 hit = ("КЕМИКС", "", result)
+        if not hit:
+            past = history(str(row.get("name") or ""))
+            if past:
+                sell, cost, mark = past
+                row.update(unit_price=round(float(sell), 2), price_source=mark, price_needs_check=True)
+                if cost:
+                    row["cost_material"] = round(float(cost), 2)
+                found += 1
+                from_history += 1
+                priced.append(row)
+                continue
         if hit:
             source, article, (retail, purchase) = hit
             row.update(unit_price=round(float(retail), 2), price_source=f"{source} {article}".strip())
@@ -81,7 +107,7 @@ def price_rows(items, hogart=None, daichi=None, kemiks=None):
             row.update(unit_price=0, price_source="цена не найдена в каталогах")
             missing.append(str(row.get("name") or ""))
         priced.append(row)
-    return {"ok": True, "items": priced, "found": found, "missing": missing}
+    return {"ok": True, "items": priced, "found": found, "from_history": from_history, "missing": missing}
 
 
 def _hogart(kp):

@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Rows of supplier invoices (and our own invoices) read from their text.
+
+Owner 24.11: «смотреть не только в каталоге CRM, но и в счетах поставщиков по предыдущим
+сделкам». The finance pipeline keeps the text of every collected document in
+hogart-scraper/finance/evidence/document_index.json (PDF via pdftotext, XLSX as cells).
+A row is taken only when its own numbers agree — quantity × price = amount (±1 %, ±1 ₽) —
+so headers, totals and wrapped text never become a price. Who sold is read from the
+«Поставщик/Продавец» block: our own companies' INNs mean a sale price, anyone else a
+purchase price.
+"""
+import json
+import os
+import re
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOCUMENT_INDEX = os.path.join(os.path.dirname(BASE_DIR), "hogart-scraper", "finance", "evidence", "document_index.json")
+UNITS = r"(?:шт|шт\.|м|м\.|м2|м²|кв\.?\s?м|п\.?\s?м|пм|кг|компл|компл\.|к-т|упак|уп|пар|л|рул)"
+NUMBER = re.compile(r"(?<![\w.,])\d{1,3}(?:[  ]\d{3})*(?:[.,]\d+)?(?![\w])|(?<![\w.,])\d+(?:[.,]\d+)?(?![\w])")
+INVOICE_WORDS = re.compile(r"сч[её]т\s*(?:на\s+оплату|№|N|-\s*оферта)|товарная накладная|упд|спецификац", re.I)
+
+
+def _value(token):
+    return float(token.replace(" ", "").replace(" ", "").replace(",", "."))
+
+
+def _own_inns():
+    try:
+        import own_companies
+        return {c.get("inn") for c in own_companies.companies() if c.get("inn")}
+    except Exception:  # noqa: BLE001
+        return {"7743151323", "7743926877", "782093991468"}
+
+
+def seller_is_us(text, own=None):
+    """True when the «Поставщик/Продавец/Исполнитель» block carries one of our INNs."""
+    own = own or _own_inns()
+    block = re.search(r"(Поставщик|Продавец|Исполнитель)[^\n]{0,300}", text or "", re.I)
+    if not block:
+        return False
+    return any(inn in block.group(0) for inn in own)
+
+
+def rows(text):
+    """[{name, qty, unit, price, amount}] — only rows whose qty × price equals the amount."""
+    found = []
+    for raw in (text or "").splitlines():
+        line = raw.replace("|", "  ").strip()
+        if len(line) < 12 or re.search(r"итого|всего|в т\.?\s?ч|ндс\s*\(|к оплате|сумма прописью", line, re.I):
+            continue
+        tokens = [(m.start(), m.group(0)) for m in NUMBER.finditer(line)]
+        if len(tokens) < 3:
+            continue
+        hit = _consistent(tokens, line)
+        if not hit:
+            continue
+        start_qty, qty, price, amount, between = hit
+        head = line[:start_qty]
+        head = re.sub(r"^\s*\d{1,3}[.)]?\s+", "", head)               # row number
+        unit = re.search(rf"\b{UNITS}\s*$", head, re.I)
+        if unit:
+            head = head[:unit.start()]
+        unit = unit.group(0).strip() if unit else (re.search(rf"\b{UNITS}", between, re.I) or [""])[0]
+        name = re.sub(r"\s{2,}", " ", head).strip(" .;-")
+        if len(re.findall(r"[А-Яа-яA-Za-z]", name)) < 4:
+            continue
+        found.append({"name": name, "qty": qty, "unit": str(unit).strip(),
+                      "price": round(price, 2), "amount": round(amount, 2)})
+    return found
+
+
+def _consistent(tokens, line=""):
+    """(start of qty, qty, price, amount) for the first qty·price≈amount triple, amount last-ish."""
+    line_of = [line]
+    values = [(pos, _value(tok)) for pos, tok in tokens]
+    n = len(values)
+    for k in range(n - 1, max(n - 3, 1), -1):          # amount: last or second-to-last number
+        amount = values[k][1]
+        if amount <= 0:
+            continue
+        for j in range(k - 1, 0, -1):
+            price = values[j][1]
+            for i in range(j - 1, -1, -1):
+                qty = values[i][1]
+                if 0 < qty <= 100000 and price > 0 and abs(qty * price - amount) <= max(1.0, amount * 0.01):
+                    if qty == amount or price == amount:
+                        continue
+                    between = line_of[0][values[i][0]:values[j][0]] if line_of else ""
+                    return values[i][0], qty, price, amount, between
+    return None
+
+
+def history_rows(index_path=DOCUMENT_INDEX):
+    """History rows for price_history: purchases (cost) and our own invoices (sale price)."""
+    try:
+        with open(index_path, encoding="utf-8") as f:
+            documents = json.load(f)
+    except (OSError, ValueError):
+        return []
+    own = _own_inns()
+    out, seen = [], set()
+    for doc in documents:
+        text = doc.get("text") or ""
+        if not INVOICE_WORDS.search(text):
+            continue
+        ours = seller_is_us(text, own)
+        supplier = re.search(r"(?:Поставщик|Продавец|Исполнитель)\s*[:\-]?\s*([^\n,]{3,80})", text, re.I)
+        label = (supplier.group(1).strip() if supplier else "счёт") + " — " + os.path.basename(doc.get("path") or "")
+        for row in rows(text):
+            key = (row["name"].casefold(), row["price"], ours)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"name": row["name"], "price": row["price"] if ours else None,
+                        "cost": None if ours else row["price"],
+                        "source": "наш счёт" if ours else "счёт поставщика", "ref": label, "order": 0,
+                        "unit": row["unit"]})
+    return out
+
+
+if __name__ == "__main__":
+    found = history_rows()
+    print(json.dumps({"ok": True, "rows": len(found),
+                      "purchases": sum(1 for r in found if r["cost"]),
+                      "sales": sum(1 for r in found if r["price"])}, ensure_ascii=False))
