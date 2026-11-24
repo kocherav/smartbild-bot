@@ -23,9 +23,12 @@ import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OFFER_CACHE = os.path.join(BASE_DIR, "offer_catalog_cache.json")
-REGISTRY = os.path.join(os.path.dirname(BASE_DIR), "hogart-scraper", "finance", "data", "review_registry.json")
+# TASK-20261124-05: supplier invoices live in megaplan-crm/procurement_registry.json (invoices[].lines /
+# allocations[].source_lines); the finance review registry holds tasks, not invoices.
+REGISTRY = os.path.join(BASE_DIR, "procurement_registry.json")
 
-# Kinds of items: the first of these lemmas found in a name is its key noun.
+# Kinds of items: the first word of a name that is one of these lemmas is its key noun
+# (TASK-20261124-05: «Фанкойл … с проводным пультом» is a fan-coil, not a remote).
 KINDS = [
     "диффузор", "решетка", "анемостат", "воздуховод", "тройник", "переход", "отвод", "ниппель",
     "муфта", "заглушка", "врезка", "адаптер", "клапан", "шумоглушитель", "глушитель", "фильтр",
@@ -34,6 +37,7 @@ KINDS = [
     "форсунка", "наконечник", "пульт", "крепление", "насос", "увлажнитель", "регулятор", "датчик",
     "термостат", "лента", "скотч", "герметик", "зонт", "дефлектор", "колено", "утка", "фланец",
     "шина", "уголок", "панель", "сплит", "мультисплит", "дренаж", "помпа",
+    "клей", "трубопровод", "гидрозатвор", "модуль", "штуцер", "фанкойл", "сифон", "заслонка",
 ]
 STOP = {"и", "с", "для", "на", "в", "из", "мм", "м", "шт", "тип", "мод", "модель", "серия", "или", "под"}
 
@@ -64,17 +68,38 @@ def _normalise(text):
 
 
 def numbers(text):
-    """Sizes as a sorted tuple; metres become millimetres when written with «м»."""
-    t = _normalise(text)
-    found = []
+    """Sizes as a sorted tuple of distinct values; metres become millimetres with «м».
+
+    TASK-20261124-05: sheet thickness (0,5 мм) is left out — catalog names rarely carry it;
+    «Ø125–Ø125» equals «125» (a tee of one size); digits inside model codes are not sizes."""
+    t = _normalise(_without_models(text))
+    found = set()
     for value, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(мм|см|м\b)?", t):
         v = float(value)
         if unit == "м" and v < 20:
             v *= 1000
         elif unit == "см":
             v *= 10
-        found.append(round(v, 2))
+        if v >= 2 or (v == 1 and "щел" in t):
+            found.add(round(v, 2))
     return tuple(sorted(found))
+
+
+MODEL = re.compile(r"\b(?=(?:[a-z0-9\-/]*[a-z]){2})(?=[a-z0-9\-/]*\d)[a-z0-9][a-z0-9\-/]{2,}\b")
+
+
+def models(text):
+    """Latin model codes with letters and digits: FXSQ20A, HS4-N, AESTH-40-B-2000-2."""
+    return {m.strip("-/") for m in MODEL.findall(str(text or "").lower())}
+
+
+def series(text):
+    """Latin words without digits (brand, series): invisiline, aesth, smart, daikin."""
+    return {w for w in re.findall(r"\b[a-z]{3,}\b", str(text or "").lower())}
+
+
+def _without_models(text):
+    return MODEL.sub(" ", str(text or "").lower())
 
 
 def words(text):
@@ -83,10 +108,10 @@ def words(text):
 
 
 def kind(text):
-    lemmas = words(text)
-    for k in KINDS:
-        if k in lemmas:
-            return k
+    t = re.sub(r"[^a-zа-я ]", " ", _normalise(text))
+    for w in t.split():
+        if len(w) > 1 and lemma(w) in KINDS:
+            return lemma(w)
     return None
 
 
@@ -122,6 +147,14 @@ def similarity(a, b):
     sa, sb = _stems(a), _stems(b)
     if _conflict(sa, sb):
         return 0.0
+    # Model codes and series decide when both names carry them: FXSQ20A ≠ FXAQ20A, SMART ≠ AESTH.
+    ma, mb = models(a), models(b)
+    if ma and mb and not ma & mb:
+        return 0.0
+    xa, xb = series(a), series(b)
+    if (xa or xb) and not ma & mb and (not (xa and xb) or ((xa - xb) and (xb - xa))):
+        # A branded item (AirGlass, Invisiline) never takes the price of a plain one (ДВК).
+        return 0.0
     overlap = len(sa & sb) / min(len(sa), len(sb)) if sa and sb else 0.0
     return round(0.5 + 0.5 * overlap, 3)
 
@@ -149,14 +182,16 @@ def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY):
         data = {}
     for inv in data.get("invoices") or []:
         label = " ".join(str(x) for x in (inv.get("supplier"), "счёт", inv.get("number"), inv.get("date")) if x)
-        for allocation in inv.get("allocations") or []:
-            for line in allocation.get("source_lines") or []:
-                qty = _num(line.get("source_qty_used") or line.get("qty_used") or line.get("source_qty"))
-                amount = _num(line.get("amount_used") or line.get("amount"))
-                name = line.get("source_name") or line.get("name")
-                if name and qty and amount:
-                    rows.append({"name": name, "price": None, "cost": round(amount / qty, 2),
-                                 "source": "счёт поставщика", "ref": label, "order": 0})
+        lines = list(inv.get("lines") or [])
+        if not lines:
+            lines = [line for a in inv.get("allocations") or [] for line in a.get("source_lines") or []]
+        for line in lines:
+            name = line.get("name") or line.get("source_name")
+            qty = _num(line.get("qty") or line.get("source_qty") or line.get("source_qty_used") or line.get("qty_used"))
+            amount = (_num(line.get("amount_cents")) or 0) / 100 or _num(line.get("amount") or line.get("amount_used"))
+            if name and qty and amount:
+                rows.append({"name": name, "price": None, "cost": round(amount / qty, 2),
+                             "source": "счёт поставщика", "ref": label, "order": 0})
     return rows
 
 
