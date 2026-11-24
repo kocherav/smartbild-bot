@@ -1,0 +1,183 @@
+"""Telegram flow «📎 Цены из КП и счетов» for the open deal (owner 24.11).
+
+States (deal_ui_state):
+  pending 'deal_price_docs'      — collecting files; price_docs = [document, …]
+  pending 'deal_price_kind'      — the last file's type is unclear: счёт or КП?
+  pending 'deal_price_discount'  — our discount for the last КП (0…40 % step 5, or own figure)
+  pending 'deal_price_review'    — proposals shown, waiting for «Применить»
+The bridge passes its helpers in `io` so this module stays testable without Telegram or CRM.
+"""
+import json
+import os
+import re
+import subprocess
+
+BUTTON = "📎 Цены из КП и счетов"
+DONE = "✅ Все файлы загружены"
+CANCEL = "❌ Отмена"
+IS_INVOICE = "📄 Это счёт (наша закупка)"
+IS_KP = "🏷 Это КП (цена продажи)"
+OWN_DISCOUNT = "✍️ Своя скидка"
+APPLY = "✅ Применить"
+FITTINGS_250 = "🔁 Фасонка +250%"
+DISCOUNTS = list(range(0, 45, 5))
+
+COLLECT_KEYBOARD = {"keyboard": [[{"text": DONE}], [{"text": CANCEL}]], "resize_keyboard": True}
+KIND_KEYBOARD = {"keyboard": [[{"text": IS_INVOICE}], [{"text": IS_KP}], [{"text": CANCEL}]], "resize_keyboard": True}
+DISCOUNT_KEYBOARD = {"keyboard": [[{"text": f"Скидка {d}%"} for d in DISCOUNTS[i:i + 3]] for i in range(0, len(DISCOUNTS), 3)]
+                     + [[{"text": OWN_DISCOUNT}], [{"text": CANCEL}]], "resize_keyboard": True}
+REVIEW_KEYBOARD = {"keyboard": [[{"text": APPLY}], [{"text": FITTINGS_250}], [{"text": CANCEL}]], "resize_keyboard": True}
+
+SOURCES = os.path.join(os.path.expanduser("~/megaplan-crm"), "deal_price_sources.py")
+
+
+def run_sources(command, payload, python, timeout=300):
+    try:
+        out = subprocess.run([python, SOURCES, command], input=json.dumps(payload, ensure_ascii=False),
+                             capture_output=True, text=True, timeout=timeout, cwd=os.path.dirname(SOURCES))
+        return json.loads((out.stdout or "").strip().splitlines()[-1])
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def start(io, chat_id, deal_id):
+    if not deal_id:
+        io.send(chat_id, "Сначала откройте сделку, для которой нужны цены.")
+        return
+    io.update(chat_id, pending="deal_price_docs", price_docs=[], price_deal_id=str(deal_id), price_proposals=None)
+    io.send(chat_id, f"📎 Сделка №{deal_id}: пришлите КП и счета поставщиков — PDF, Excel или фото, можно несколько, "
+                     "по этому объекту или по другим с похожими позициями.\n"
+                     "• Счёт → наша закупка.\n• КП → цена продажи; спрошу нашу скидку, закупку посчитаю.\n"
+                     f"Когда всё — «{DONE}». Можно нажать и без файлов: подберу по прайсам Daichi/Hogart "
+                     "и фасонку по площади.", COLLECT_KEYBOARD)
+
+
+def add_file(io, chat_id, state, path, python):
+    read = run_sources("read", {"path": path}, python)
+    if not read.get("ok"):
+        io.send(chat_id, f"Файл не прочитан: {read.get('error')}. Пришлите другой или «{DONE}».", COLLECT_KEYBOARD)
+        return
+    # Files are read in parallel workers: take the list as it is now, not as it was on arrival.
+    state = io.state(chat_id) if hasattr(io, "state") else state
+    docs = list(state.get("price_docs") or [])
+    doc = {"path": path, "file": read.get("file"), "kind": read.get("kind"), "supplier": read.get("supplier"),
+           "rows": read.get("rows") or [], "discount": None}
+    docs.append(doc)
+    if not doc["rows"]:
+        io.update(chat_id, pending="deal_price_docs", price_docs=docs)
+        io.send(chat_id, f"⚠️ {doc['file']}: строк с ценами не нашёл (сумма = кол-во × цена ни в одной строке). "
+                         "Если это скан — пришлите почётче.", COLLECT_KEYBOARD)
+        return
+    rows = len(doc["rows"])
+    if doc["kind"] is None:
+        io.update(chat_id, pending="deal_price_kind", price_docs=docs)
+        io.send(chat_id, f"{doc['file']}: {rows} строк с ценами. Это счёт или КП?", KIND_KEYBOARD)
+    elif doc["kind"] == "kp":
+        io.update(chat_id, pending="deal_price_discount", price_docs=docs)
+        io.send(chat_id, f"🏷 КП {doc['supplier'] or ''} ({doc['file']}): {rows} строк. Какая наша скидка от этого КП?",
+                DISCOUNT_KEYBOARD)
+    else:
+        io.update(chat_id, pending="deal_price_docs", price_docs=docs)
+        io.send(chat_id, f"📄 Счёт {doc['supplier'] or ''} ({doc['file']}): {rows} строк — беру как закупку. "
+                         f"Ещё файлы или «{DONE}».", COLLECT_KEYBOARD)
+
+
+def handle_text(io, chat_id, state, value, ledger_of, python, run_job):
+    """True when the text belonged to this flow."""
+    pending = state.get("pending") or ""
+    if value == BUTTON:
+        start(io, chat_id, state.get("current_deal_id"))
+        return True
+    if not pending.startswith("deal_price_"):
+        return False
+    docs = list(state.get("price_docs") or [])
+    if value == CANCEL:
+        io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
+        io.send(chat_id, "Подбор цен по документам отменён. В сделке ничего не менялось.", io.deal_keyboard)
+        return True
+    if pending == "deal_price_kind" and value in (IS_INVOICE, IS_KP) and docs:
+        docs[-1]["kind"] = "invoice" if value == IS_INVOICE else "kp"
+        if docs[-1]["kind"] == "kp":
+            io.update(chat_id, pending="deal_price_discount", price_docs=docs)
+            io.send(chat_id, "Какая наша скидка от этого КП?", DISCOUNT_KEYBOARD)
+        else:
+            io.update(chat_id, pending="deal_price_docs", price_docs=docs)
+            io.send(chat_id, f"Беру как закупку. Ещё файлы или «{DONE}».", COLLECT_KEYBOARD)
+        return True
+    if pending == "deal_price_discount" and docs:
+        if value == OWN_DISCOUNT:
+            io.send(chat_id, "Напишите скидку числом, например 12 или 17,5.", {"remove_keyboard": True})
+            return True
+        m = re.fullmatch(r"(?:скидка\s*)?(\d{1,2}(?:[.,]\d+)?)\s*%?", value.strip(), re.I)
+        if not m or float(m.group(1).replace(",", ".")) > 90:
+            io.send(chat_id, "Скидку — кнопкой или числом от 0 до 90.", DISCOUNT_KEYBOARD)
+            return True
+        docs[-1]["discount"] = float(m.group(1).replace(",", "."))
+        io.update(chat_id, pending="deal_price_docs", price_docs=docs)
+        io.send(chat_id, f"Скидка {docs[-1]['discount']:g}% записана. Ещё файлы или «{DONE}».", COLLECT_KEYBOARD)
+        return True
+    if value == DONE and pending == "deal_price_docs":
+        if not any(d.get("rows") for d in docs):
+            # Without documents the bot still tries supplier price lists (Daichi/Hogart) and fittings by area.
+            io.send(chat_id, "Документов с ценами нет — подбираю по прайсам Daichi/Hogart и фасонку по площади.")
+        run_job(lambda: build_proposals(io, chat_id, state, docs, ledger_of, python, 3.0))
+        return True
+    if pending == "deal_price_review" and value == FITTINGS_250:
+        run_job(lambda: build_proposals(io, chat_id, state, docs, ledger_of, python, 3.5))
+        return True
+    if pending == "deal_price_review" and value == APPLY:
+        run_job(lambda: apply(io, chat_id, state, python))
+        return True
+    return pending in ("deal_price_kind", "deal_price_discount")
+
+
+def build_proposals(io, chat_id, state, docs, ledger_of, python, fitting_markup):
+    deal_id = state.get("price_deal_id")
+    ledger = ledger_of(deal_id)
+    if ledger is None:
+        io.send(chat_id, "Не удалось прочитать позиции сделки из Мегаплана. Повторите «✅ Все файлы загружены» чуть позже.",
+                COLLECT_KEYBOARD)
+        return
+    result = run_sources("propose", {"ledger": ledger, "documents": docs, "fitting_markup": fitting_markup}, python)
+    if not result.get("ok"):
+        io.send(chat_id, f"Подбор не выполнен: {result.get('error')}", COLLECT_KEYBOARD)
+        return
+    proposals = result.get("proposals") or []
+    io.update(chat_id, pending="deal_price_review", price_docs=docs, price_proposals=proposals,
+              price_fitting_markup=fitting_markup)
+    io.send(chat_id, summary(deal_id, proposals, result.get("skipped") or [], fitting_markup),
+            REVIEW_KEYBOARD if proposals else COLLECT_KEYBOARD)
+    if proposals:
+        io.send_table(chat_id, deal_id, proposals, result.get("skipped") or [])
+
+
+def summary(deal_id, proposals, skipped, fitting_markup):
+    prices = sum(1 for p in proposals if "sell_price" in p)
+    costs = sum(1 for p in proposals if "cost_material" in p)
+    area = sum(1 for p in proposals if "по площади" in p.get("mark", ""))
+    lines = [f"Сделка №{deal_id}: предлагаю цен продажи {prices}, закупок {costs}"
+             + (f" (по площади — {area}, фасонка +{round((fitting_markup - 1) * 100):g}%)" if area else "") + "."]
+    for p in proposals[:25]:
+        parts = ([f"{p['sell_price']:,.2f} ₽".replace(",", " ")] if "sell_price" in p else []) + \
+                ([f"закупка {p['cost_material']:,.2f} ₽".replace(",", " ")] if "cost_material" in p else [])
+        lines.append(f"• {p['name']} — {', '.join(parts)}")
+    if len(proposals) > 25:
+        lines.append(f"… ещё {len(proposals) - 25} — в таблице.")
+    if skipped:
+        lines.append(f"Без предложения: {len(skipped)} (в таблице с причиной).")
+    lines.append(f"В сделку ничего не записано. «{APPLY}» — записать; цены, которые уже стоят, не трогаю.")
+    return "\n".join(lines)
+
+
+def apply(io, chat_id, state, python):
+    proposals = state.get("price_proposals") or []
+    deal_id = state.get("price_deal_id")
+    result = io.apply_rows({"deal_id": deal_id, "rows": proposals})
+    io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
+    if not result.get("ok"):
+        io.send(chat_id, f"Запись не завершена: {result.get('error')}. Проверьте сделку №{deal_id} перед повтором.",
+                io.deal_keyboard)
+        return
+    applied, kept = result.get("applied") or [], result.get("kept") or []
+    io.send(chat_id, f"✅ Сделка №{deal_id}: записано позиций {len(applied)}; не тронуто {len(kept)} "
+                     f"(цена уже стояла или позицию изменили). Источники — в комментарии сделки.", io.deal_keyboard)

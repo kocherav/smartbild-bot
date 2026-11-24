@@ -180,19 +180,23 @@ def similarity(a, b):
         return 0.0
     if is_service(a) != is_service(b):      # «ТО внешнего блока VRV» is not a VRV unit
         return 0.0
-    if numbers(a) != numbers(b) and not _duct_piece(a, b):
+    # Model codes and series decide when both names carry them: FXSQ20A ≠ FXAQ20A, SMART ≠ AESTH.
+    # «SMART-40-B-2000-2» in a КП may be typed «SMART 40 B 2000 2»: compared without separators.
+    ma, mb = models(a), models(b)
+    squash = lambda t: re.sub(r"[^a-z0-9]", "", str(t).lower())
+    shared = ma & mb or {m for m in ma if len(squash(m)) >= 4 and squash(m) in squash(b)} \
+        or {m for m in mb if len(squash(m)) >= 4 and squash(m) in squash(a)}
+    if numbers(a) != numbers(b) and not _duct_piece(a, b) and not shared:
         return 0.0
     sa, sb = _stems(a), _stems(b)
     if _conflict(sa, sb):
         return 0.0
-    # Model codes and series decide when both names carry them: FXSQ20A ≠ FXAQ20A, SMART ≠ AESTH.
-    ma, mb = models(a), models(b)
-    if ma and not ma & mb:
+    if ma and not shared:
         # 24.11 (deal 907): «блок Daikin FXSQ20A» took the price of a whole VRV outdoor set
         # that named no model. A named model is matched only by the same model.
         return 0.0
     xa, xb = series(a), series(b)
-    if (xa or xb) and not ma & mb and (not (xa and xb) or ((xa - xb) and (xb - xa))):
+    if (xa or xb) and not shared and (not (xa and xb) or ((xa - xb) and (xb - xa))):
         # A branded item (AirGlass, Invisiline) never takes the price of a plain one (ДВК).
         return 0.0
     overlap = len(sa & sb) / min(len(sa), len(sb)) if sa and sb else 0.0
@@ -370,11 +374,33 @@ def rect_duct_estimate(name, history, ratios=None):
     return None
 
 
-def price_from_history(name, history, ratios=None):
-    """(sell, cost, mark) or None. A purchase-only match is sold at the kind's usual markup."""
+FITTINGS = {"отвод", "переход", "тройник", "ниппель", "заглушка", "врезка", "муфта", "колено"}
+FITTING_MARKUP = 3.0          # owner 24.11: fittings are sold at +200…250 %; ×3 is +200 %
+_FITTING_RATES = {}
+
+
+def fitting_rates(history):
+    key = id(history)
+    if key not in _FITTING_RATES:
+        import fitting_area
+        _FITTING_RATES.clear()
+        _FITTING_RATES[key] = fitting_area.rates(history)
+    return _FITTING_RATES[key]
+
+
+def fitting_estimate(name, history, markup=FITTING_MARKUP):
+    if kind(name) not in FITTINGS or is_service(name):
+        return None
+    import fitting_area
+    return fitting_area.price(name, fitting_rates(history), markup)
+
+
+def price_from_history(name, history, ratios=None, fitting_markup=FITTING_MARKUP):
+    """(sell, cost, mark) or None. A purchase-only match is sold at the kind's usual markup;
+    galvanised fittings without an exact match are priced by the area of metal."""
     match = best_match(name, history)
     if not match:
-        return rect_duct_estimate(name, history, ratios)
+        return rect_duct_estimate(name, history, ratios) or fitting_estimate(name, history, fitting_markup)
     word = "очень похоже" if match["score"] >= 0.8 else "похоже"
     length = duct_length(name, match["name"], match.get("unit", ""))
     if length:
@@ -392,7 +418,10 @@ def price_from_history(name, history, ratios=None):
     if match["price"]:
         return (match["price"], match["cost"],
                 f"проверить: цена из прошлых сделок ({word}: «{match['name']}», {match['ref']})")
-    ratio, why = ratio_for(name, ratios)
+    if kind(name) in FITTINGS:
+        ratio, why = fitting_markup, f"наценка на фасонку {round((fitting_markup - 1) * 100):g}%"
+    else:
+        ratio, why = ratio_for(name, ratios)
     if not ratio:
         return None
     return (round(match["cost"] * ratio, 2), match["cost"],

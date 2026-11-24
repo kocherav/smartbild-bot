@@ -58,8 +58,10 @@ class HistorySources(unittest.TestCase):
         ratios = ph.markups(self.rows)
         sell, cost, mark = ph.price_from_history('Отвод 90 градусов Ø250 оцинкованный', self.rows, ratios)
         self.assertEqual(500, cost)
-        self.assertAlmostEqual(500 * ratios['отвод'], sell, places=1)
-        self.assertIn('Галвент счёт 77', mark)
+        self.assertEqual(1500, sell)                      # owner 24.11: fittings at +200 %
+        self.assertIn('Галвент счёт 77', mark); self.assertIn('наценка на фасонку 200%', mark)
+        sell, cost, mark = ph.price_from_history('Отвод 90 градусов Ø250 оцинкованный', self.rows, ratios, fitting_markup=3.5)
+        self.assertEqual(1750, sell)
 
     def test_invoice_lines_in_the_canonical_registry_are_read(self):
         dump({'invoices': [{'supplier': 'Галвент', 'number': '81', 'lines': [
@@ -117,14 +119,25 @@ class HistorySources(unittest.TestCase):
     def test_services_never_price_goods(self):
         self.assertEqual(0.0, ph.similarity('Наружный блок mini-VRV Daikin 4MXM68N', 'ТО внешнего блока VRV системы'))
 
-    def test_fittings_without_own_markup_use_the_ventilation_markup(self):
+    def test_other_kinds_without_own_markup_use_the_ventilation_markup(self):
         ratios = {'группа:воздуховод': 1.4}
         dump({'invoices': [{'supplier': 'Галвент', 'number': '9', 'lines': [
-            {'name': 'Ниппель Ф 125', 'qty': 10, 'unit': 'шт', 'amount_cents': 20000}]}]}, self.registry)
+            {'name': 'Дроссель-клапан ф125', 'qty': 10, 'unit': 'шт', 'amount_cents': 200000}]}]}, self.registry)
         rows = ph.load_history(self.offers, self.registry, self.index)
-        sell, cost, mark = ph.price_from_history('Ниппель оцинкованный Ø125 мм, Галвент', rows, ratios)
-        self.assertEqual((28.0, 20.0), (sell, cost))
+        sell, cost, mark = ph.price_from_history('Дроссель-клапан оцинкованный ДК Ø125 мм, Галвент', rows, ratios)
+        self.assertEqual((280.0, 200.0), (sell, cost))
         self.assertIn('вентиляционные изделия', mark)
+
+    def test_missing_fitting_is_priced_by_area_from_ventresheniya(self):
+        import fitting_area
+        lines = [{'name': n, 'qty': 1, 'unit': 'шт', 'amount_cents': round(fitting_area.area(n) * 2000 * 100)}
+                 for n in ('Отвод(Кр) - 90 - 160', 'Отвод(Кр) - 45 - 200', 'Ниппель(Кр) - 200', 'Отвод(Кр) - 90 - 250')]
+        dump({'invoices': [{'supplier': 'ООО Вентрешения', 'number': '31', 'lines': lines}]}, self.registry)
+        rows = ph.load_history(self.offers, self.registry, self.index)
+        sell, cost, mark = ph.price_from_history('Отвод оцинкованный 45°, Ø125 мм, Галвент', rows, {})
+        expected = round(fitting_area.area('Отвод оцинкованный 45°, Ø125 мм') * 2000, 2)
+        self.assertEqual((round(expected * 3, 2), expected), (sell, cost))
+        self.assertIn('расчёт по площади', mark); self.assertIn('Вентрешения', mark)
 
     def test_rectangular_piece_without_length_is_1250_and_round_is_3000(self):
         self.assertEqual(1250, ph.duct_length('Воздуховод 400×150', 'Воздуховод прямоугольный 400х150 оц', 'шт'))
