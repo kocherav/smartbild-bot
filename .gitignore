@@ -77,3 +77,4 @@ telegram-bridge/docs/architecture/audit-20261012/
 telegram-bridge/email_poll_health.json
 telegram-bridge/bank_reconciliation_receipts.json
 hogart-scraper/finance/data/bank_reconciliation_request.json
+megaplan-crm/document_index.json

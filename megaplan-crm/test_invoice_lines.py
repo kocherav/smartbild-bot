@@ -1,4 +1,7 @@
 """Owner 24.11: rows of supplier invoices read from their text, only when qty × price = amount."""
+import os
+import tempfile
+import time
 import unittest
 
 import invoice_lines as il
@@ -27,6 +30,22 @@ class InvoiceRows(unittest.TestCase):
         self.assertFalse(il.seller_is_us(TEXT))
         ours = TEXT.replace('Поставщик: ООО "Галвент", ИНН 7701234567', 'Поставщик: ООО «КЛИВЭЛ», ИНН 7743151323')
         self.assertTrue(il.seller_is_us(ours))
+
+
+class FreshestIndex(unittest.TestCase):
+    def test_the_newer_of_the_two_indexes_is_read(self):
+        folder = tempfile.mkdtemp()
+        old, new = os.path.join(folder, 'old.json'), os.path.join(folder, 'new.json')
+        for path in (old, new):
+            with open(path, 'w') as f:
+                f.write('[]')
+        os.utime(old, (time.time() - 86400 * 50,) * 2)
+        saved = il.INDEX_CANDIDATES
+        try:
+            il.INDEX_CANDIDATES = (old, new)
+            self.assertEqual(new, il.newest_index())
+        finally:
+            il.INDEX_CANDIDATES = saved
 
 
 if __name__ == '__main__':

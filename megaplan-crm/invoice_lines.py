@@ -14,7 +14,17 @@ import os
 import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCUMENT_INDEX = os.path.join(os.path.dirname(BASE_DIR), "hogart-scraper", "finance", "evidence", "document_index.json")
+INDEX_CANDIDATES = (os.path.join(BASE_DIR, "document_index.json"),
+                    os.path.join(os.path.dirname(BASE_DIR), "hogart-scraper", "finance", "evidence", "document_index.json"))
+
+
+def newest_index():
+    """The freshest of the bot-owned and the old evidence index (24.11: the old one was not writable)."""
+    present = [p for p in INDEX_CANDIDATES if os.path.exists(p)]
+    return max(present, key=os.path.getmtime) if present else INDEX_CANDIDATES[0]
+
+
+DOCUMENT_INDEX = None  # resolved per call: newest_index()
 UNITS = r"(?:шт|шт\.|м|м\.|м2|м²|кв\.?\s?м|п\.?\s?м|пм|кг|компл|компл\.|к-т|упак|уп|пар|л|рул)"
 NUMBER = re.compile(r"(?<![\w.,])\d{1,3}(?:[  ]\d{3})*(?:[.,]\d+)?(?![\w])|(?<![\w.,])\d+(?:[.,]\d+)?(?![\w])")
 INVOICE_WORDS = re.compile(r"сч[её]т\s*(?:на\s+оплату|№|N|-\s*оферта)|товарная накладная|упд|спецификац", re.I)
@@ -90,8 +100,9 @@ def _consistent(tokens, line=""):
     return None
 
 
-def history_rows(index_path=DOCUMENT_INDEX):
+def history_rows(index_path=None):
     """History rows for price_history: purchases (cost) and our own invoices (sale price)."""
+    index_path = index_path or newest_index()
     try:
         with open(index_path, encoding="utf-8") as f:
             documents = json.load(f)
