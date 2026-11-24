@@ -36,6 +36,13 @@ class PriceByArticleTests(unittest.TestCase):
         self.assertEqual((5200, 3100, mark, True), (row['unit_price'], row['cost_material'], row['price_source'], row['price_needs_check']))
         self.assertEqual((1, 1, []), (result['found'], result['from_history'], result['missing']))
 
+    def test_daichi_names_carry_a_version_suffix(self):
+        """Owner 24.11: «неужели цены на внутренние блоки Дайкин нельзя найти в API Daichi»."""
+        self.assertTrue(pba.daichi_name_matches('FXSQ20A2VEB', 'FXSQ20A'))
+        self.assertTrue(pba.daichi_name_matches('4MXM68N9', '4MXM68N'))
+        self.assertFalse(pba.daichi_name_matches('FXSQ200A', 'FXSQ20'))
+        self.assertFalse(pba.daichi_name_matches('FXSQ25A2VEB', 'FXSQ20A'))
+
     def test_plain_words_are_not_taken_for_articles(self):
         self.assertEqual([], pba.candidates({'name': 'Монтаж кондиционера настенного'}))
         self.assertEqual(['X1', 'AS25'], pba.candidates({'name': 'AS25', 'sku': 'X1'}))

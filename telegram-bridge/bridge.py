@@ -39,6 +39,7 @@ import human_intents
 import net_prefs
 import statement_document_context
 import periodic_schedule
+import deal_price_flow
 import qa_schedule
 import handoff_watcher
 import voice_intake
@@ -569,6 +570,8 @@ DEAL_ACTIONS_KEYBOARD = {
         [{"text": "👤 Назначить исполнителя"}, {"text": "📊 Сводка"}, {"text": "💰 Экономика"}],
         [{"text": "📋 Основное"}, {"text": "📄 Документы сделки"}],
         [{"text": "📦 Закупка сделки"}, {"text": "🧰 Монтаж сделки"}],
+        # Owner 24.11: prices and costs from supplier КП and invoices.
+        [{"text": "📎 Цены из КП и счетов"}],
         [{"text": "⬅️ К списку сделок"}],
     ],
     "resize_keyboard": True,
@@ -4746,6 +4749,55 @@ def handle_status_query(token,chat_id,text):
     return True
 
 
+def deal_price_io(token):
+    """Bridge helpers for deal_price_flow (owner 24.11: prices from supplier КП and invoices)."""
+    import types
+
+    def send_table(chat_id, deal_id, proposals, skipped):
+        path = build_price_proposals_xlsx(deal_id, proposals, skipped)
+        if path:
+            send_document(token, chat_id, path, f"Предложения цен по сделке №{deal_id} — в сделку не записаны")
+
+    def apply_rows(payload):
+        try:
+            result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "megaplan_api.py"), "apply-price-proposals"],
+                                    cwd=MEGAPLAN_DIR, input=json.dumps(payload, ensure_ascii=False),
+                                    capture_output=True, text=True, timeout=create_deal_timeout(payload.get("rows")))
+            return json.loads((result.stdout or "").strip().splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001 — shown to the owner; the deal is re-read before any retry
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    return types.SimpleNamespace(
+        send=lambda chat_id, text, keyboard=None: send_message(token, chat_id, text, keyboard),
+        update=update_deal_ui_state, deal_keyboard=DEAL_ACTIONS_KEYBOARD, state=current_deal_ui_state,
+        send_table=send_table, apply_rows=apply_rows)
+
+
+def build_price_proposals_xlsx(deal_id, proposals, skipped):
+    try:
+        import openpyxl
+        book = openpyxl.Workbook()
+        sheet = book.active
+        sheet.title = "Предложения"
+        sheet.append(["Позиция", "Ед.", "Кол-во", "Цена сейчас", "Предлагаемая цена", "Закупка сейчас",
+                      "Предлагаемая закупка", "Источник и расчёт"])
+        for p in proposals:
+            sheet.append([p.get("name"), p.get("unit"), p.get("qty"), p.get("old_price"), p.get("sell_price"),
+                          p.get("old_cost"), p.get("cost_material"), p.get("mark")])
+        if skipped:
+            extra = book.create_sheet("Без предложения")
+            extra.append(["Позиция", "Причина"])
+            for row in skipped:
+                extra.append([row.get("name"), row.get("reason")])
+        path = os.path.join(BASE_DIR, "uploads", f"price_proposals_{deal_id}_{int(time.time())}.xlsx")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        book.save(path)
+        return path
+    except Exception as exc:  # noqa: BLE001
+        print(f"{LOG_PREFIX} price proposals xlsx failed: {exc}", file=sys.stderr)
+        return None
+
+
 def handle_global_navigation(token, chat_id, text):
     """Handle top-level navigation before any pending wizard or model queue.
 
@@ -4753,6 +4805,14 @@ def handle_global_navigation(token, chat_id, text):
     data. These actions are local and should make no CRM/model call.
     """
     value = (text or "").strip()
+    price_state = current_deal_ui_state(chat_id)
+    if value == deal_price_flow.BUTTON or str(price_state.get("pending") or "").startswith("deal_price_"):
+        handled = deal_price_flow.handle_text(
+            deal_price_io(token), chat_id, price_state, value,
+            lambda deal_id: fetch_deal_ledger(deal_id, force=True), REPORT_VENV_PY,
+            lambda job: run_background_job(job, token, chat_id, operation="сделка:цены-по-документам", allow_stale=True))
+        if handled:
+            return True
     if (re.match(r"^№\d+\b", value)
             or re.fullmatch(r"🧾 Запросить общий счёт №\d+", value)
             or re.search(r"(?i)\b(?:перейти|открыть|показать)\w*\b.*\bкарточк\w*\b.*\bсделк\w*\b", value)):
@@ -11455,6 +11515,15 @@ def main():
                 if caption: run_installation_workflow({"action":"append_report_text","report_id":photo_state.get("installation_report_id"),"text":caption})
                 send_message(token,chat_id,"📷 Фото добавлено в текущий отчёт." if added.get("ok") else f"Фото не добавлено: {added.get('error')}",INSTALLATION_REPORT_COLLECT_KEYBOARD)
                 return
+            if str(photo_state.get("pending") or "").startswith("deal_price_"):
+                if photo_state.get("pending") != "deal_price_docs":
+                    send_message(token, chat_id, "Сначала ответьте на вопрос по предыдущему файлу (кнопкой выше).")
+                    return
+                send_message(token, chat_id, "📷 Фото получено, распознаю строки с ценами…")
+                run_background_job(lambda: deal_price_flow.add_file(deal_price_io(token), chat_id, photo_state,
+                                                                    local_path, REPORT_VENV_PY),
+                                   token, chat_id, operation="сделка:цены-фото", allow_stale=True)
+                return
             if photo_state.get("pending")=="installer_report_tables":
                 # Owner 22.11: a photographed table is a table too; the manager checks it.
                 session=photo_state.get("installer_report") or {}
@@ -11567,6 +11636,15 @@ def main():
                 update_deal_ui_state(chat_id,pending="installation_draft_review")
                 send_message(token,chat_id,f"✅ Исправленная ведомость принята. Изменений: {len(changes)}. Проверьте итоговый файл перед утверждением.",INSTALLATION_DRAFT_KEYBOARD)
                 send_document(token,chat_id,result["result"]["workbook"],"Актуальный черновик монтажной ведомости",f"Монтажная ведомость - сделка {report_state.get('installation_deal_id')}.xlsx")
+                return
+            if report_pending in ("deal_price_docs", "deal_price_kind", "deal_price_discount"):
+                if report_pending != "deal_price_docs":
+                    send_message(token, chat_id, "Сначала ответьте на вопрос по предыдущему файлу (кнопкой выше).")
+                    return
+                send_message(token, chat_id, f"📥 {original_name or 'Файл'} получен, читаю строки с ценами…")
+                run_background_job(lambda: deal_price_flow.add_file(deal_price_io(token), chat_id, report_state,
+                                                                    source_document_path, REPORT_VENV_PY),
+                                   token, chat_id, operation="сделка:цены-файл", allow_stale=True)
                 return
             if report_pending == "supplier_closing_upload":
                 if original_ext not in (".pdf", ".doc", ".docx", ".xls", ".xlsx"):

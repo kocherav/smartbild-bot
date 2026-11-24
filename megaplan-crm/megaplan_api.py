@@ -1230,6 +1230,53 @@ if __name__ == "__main__":
                 "overage_notices": overage_notices,
                 "ledger": entries,
             }, ensure_ascii=False))
+        elif cmd == "apply-price-proposals":
+            # Owner 24.11: prices from supplier КП/invoices, applied only after the owner's
+            # button. Each row: a fresh read first — a row whose price or cost the owner
+            # already filled meanwhile is left alone (no blind overwrite); then sale price
+            # on the OfferRow, purchase cost on its Offer; one comment with every source;
+            # a final read-back proves exactly these rows changed.
+            spec = json.load(sys.stdin)
+            deal_id = str(spec["deal_id"])
+            before = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
+            applied, kept = [], []
+            for p in spec.get("rows") or []:
+                current = before.get(str(p.get("offer_row_id")))
+                if not current:
+                    kept.append({"name": p.get("name"), "reason": "позиции больше нет в сделке"})
+                    continue
+                changed = {}
+                if p.get("sell_price") is not None:
+                    if (current.get("sell_price") or 0) and not spec.get("overwrite_priced"):
+                        kept.append({"name": p.get("name"), "reason": "цена уже стоит"})
+                    else:
+                        api.update_offer_row_price(p["offer_row_id"], float(p["sell_price"]))
+                        changed["sell_price"] = float(p["sell_price"])
+                if p.get("cost_material") is not None and not (current.get("cost_material") or 0):
+                    api.update_offer_cost(p["offer_id"], cost_material=float(p["cost_material"]))
+                    changed["cost_material"] = float(p["cost_material"])
+                if changed:
+                    applied.append({"offer_row_id": str(p["offer_row_id"]), "name": p.get("name"), **changed,
+                                    "mark": p.get("mark", "")})
+            after = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
+            mismatches = [a["name"] for a in applied
+                          if ("sell_price" in a and abs((after[a["offer_row_id"]].get("list_price") or 0) - a["sell_price"]) > 0.01)
+                          or ("cost_material" in a and abs((after[a["offer_row_id"]].get("cost_material") or 0) - a["cost_material"]) > 0.01)]
+            comment_id = None
+            if applied:
+                lines = [f"• {a['name']}: " + ", ".join(
+                    ([f"цена {a['sell_price']:g} ₽"] if "sell_price" in a else []) +
+                    ([f"закупка {a['cost_material']:g} ₽"] if "cost_material" in a else [])) + f" — {a['mark']}"
+                         for a in applied]
+                comment = api._call("POST", f"/deal/{deal_id}/comments", json_body={
+                    "contentType": "Comment", "subject": {"contentType": "Deal", "id": deal_id},
+                    "content": "Цены по КП и счетам поставщиков (бот, подтверждено владельцем) — ПРОВЕРИТЬ:\n" + "\n".join(lines),
+                }).get("data") or {}
+                comment_id = comment.get("id")
+            print(json.dumps({"ok": not mismatches, "applied": applied, "kept": kept, "mismatches": mismatches,
+                              "comment_id": comment_id,
+                              **({"error": "после записи не совпали: " + ", ".join(mismatches)} if mismatches else {})},
+                             ensure_ascii=False))
         elif cmd == "add-deal-item":
             # Explicit manager-driven addition to an existing deal.  Keep it
             # separate from supplier-invoice application: it has no invoice source,

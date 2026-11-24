@@ -117,13 +117,55 @@ def _hogart(kp):
     return lookup
 
 
+def daichi_name_matches(name, article):
+    """Owner 24.11: Daikin FXSQ20A is in Daichi as «FXSQ20A2VEB» (or «FXSQ20A/BRC…»). The article
+    matches a name part equal to it, or a part that is it plus a short letter/digit suffix of the
+    version (≤ 5 signs) — never a longer model: after a final digit the suffix must start with a
+    letter (FXSQ20 ≠ FXSQ200A); after a final letter any version suffix is fine (FXSQ20A2VEB)."""
+    article = article.casefold()
+    if len(article) < 4:
+        return False
+    for part in re.split(r"[/\s+,;]+", name.casefold()):
+        if part == article:
+            return True
+        if part.startswith(article) and len(part) - len(article) <= 5 and \
+                re.fullmatch(r"[a-z0-9\-]+", part[len(article):]) and \
+                (article[-1].isalpha() or not part[len(article)].isdigit()):
+            return True
+    return False
+
+
 def _daichi(kp):
     def lookup(article):
         wanted = article.casefold()
         catalog = kp.get_daichi_catalog() or {}
+        best = None
         for item in (catalog.values() if isinstance(catalog, dict) else catalog):
-            if str(item.get("name") or "").casefold() == wanted:
-                return (item.get("sell_price"), item.get("cost_price"))
+            if daichi_name_matches(str(item.get("name") or ""), wanted) and item.get("sell_price"):
+                exact = str(item.get("name") or "").casefold() == wanted
+                if best is None or exact:
+                    best = item
+                if exact:
+                    break
+        return (best.get("sell_price"), best.get("cost_price")) if best else None
+    return lookup
+
+
+def catalog_lookup():
+    """name → (sell, cost, mark) from Hogart (exact article) and Daichi (model), else None."""
+    import generate_kp as kp
+    hogart, daichi = _hogart(kp), _daichi(kp)
+
+    def lookup(name):
+        for article in candidates({"name": name}):
+            for source, find in (("Daichi", daichi), ("Hogart", hogart)):
+                try:
+                    hit = find(article)
+                except Exception:  # noqa: BLE001 — one supplier being down must not stop the rest
+                    hit = None
+                if hit and hit[0]:
+                    return (round(float(hit[0]), 2), hit[1] and round(float(hit[1]), 2),
+                            f"проверить: прайс {source}, модель {article} (продажа — розница поставщика, закупка — наша цена)")
         return None
     return lookup
 
