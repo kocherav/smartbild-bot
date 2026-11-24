@@ -67,7 +67,11 @@ def refresh(api):
             offers.append({
                 "id": o["id"], "name": o.get("name") or "",
                 "price": (o.get("price") or {}).get("value"),
+                # 24.11: Liechty and other imports are priced in USD/EUR; a bare value read as roubles
+                # put a dollar price into a rouble deal (deal 907). Keep the currency.
+                "price_currency": (o.get("price") or {}).get("currency") or "RUB",
                 "cost_material": (o.get("Category1000045CustomFieldTsenaZakupki") or {}).get("value"),
+                "cost_currency": (o.get("Category1000045CustomFieldTsenaZakupki") or {}).get("currency") or "RUB",
                 "cost_work": (o.get("Category1000045CustomFieldSebesRabot") or {}).get("value"),
             })
         last_id = data[-1]["id"]

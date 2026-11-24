@@ -131,6 +131,32 @@ class HistorySources(unittest.TestCase):
         self.assertEqual(3000, ph.duct_length('Воздуховод Ø160', 'Воздуховод d160', 'шт'))
         self.assertIsNone(ph.duct_length('Воздуховод Ø160', 'Воздуховод d160', 'м'))
 
+    def test_dollar_catalog_price_is_converted_never_read_as_roubles(self):
+        dump({'offers': [{'id': 5, 'name': 'PNM Наконечник форсунки 85 мкм', 'price': 12, 'price_currency': 'USD',
+                          'cost_material': 8, 'cost_currency': 'USD'}]}, self.offers)
+        rows = ph.load_history(self.offers, self.registry, self.index, rate=lambda code: 82.0 if code == 'USD' else None)
+        sell, cost, mark = ph.price_from_history('Наконечник форсунки Liechty PNM, отверстие 85 мкм', rows, {})
+        self.assertEqual((984.0, 656.0), (sell, cost))
+        self.assertIn('USD пересчитана по курсу ЦБ', mark)
+        rows = ph.load_history(self.offers, self.registry, self.index, rate=lambda code: None)
+        self.assertIsNone(ph.price_from_history('Наконечник форсунки Liechty PNM, отверстие 85 мкм', rows, {}))
+
+    def test_a_named_model_needs_the_same_model(self):
+        """Deal 907: indoor FXSQ20A got the price of an outdoor VRV set that named no model."""
+        self.assertEqual(0.0, ph.similarity('Внутренний канальный блок mini-VRV Daikin FXSQ20A',
+                                            'Внутренний блок VRV Daikin (комплект системы)'))
+        self.assertGreater(ph.similarity('Внутренний канальный блок mini-VRV Daikin FXSQ32A',
+                                         'Внутренний блок канального типа DAIKIN FXSQ32A'), 0.5)
+
+    def test_sale_price_without_cost_takes_the_cost_from_a_purchase(self):
+        dump({'offers': [{'id': 7, 'name': 'Ниппель Ф 160', 'price': 300}]}, self.offers)
+        dump({'invoices': [{'supplier': 'Галвент', 'number': '12', 'lines': [
+            {'name': 'Ниппель оцинк. d160', 'qty': 10, 'unit': 'шт', 'amount_cents': 180000}]}]}, self.registry)
+        rows = ph.load_history(self.offers, self.registry, self.index)
+        sell, cost, mark = ph.price_from_history('Ниппель оцинкованный Ø160 мм, Галвент', rows, {})
+        self.assertEqual((300, 180.0), (sell, cost))
+        self.assertIn('закупка — Галвент счёт 12', mark)
+
     def test_nothing_similar_gives_nothing(self):
         self.assertIsNone(ph.price_from_history('Наконечник форсунки Liechty PNM 85 мкм', self.rows, ph.markups(self.rows)))
 
