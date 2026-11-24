@@ -141,7 +141,7 @@ def _daichi(kp):
         catalog = kp.get_daichi_catalog() or {}
         best = None
         for item in (catalog.values() if isinstance(catalog, dict) else catalog):
-            if daichi_name_matches(str(item.get("name") or ""), wanted) and item.get("sell_price"):
+            if daichi_name_matches(str(item.get("name") or ""), wanted) and (item.get("sell_price") or item.get("cost_price")):
                 exact = str(item.get("name") or "").casefold() == wanted
                 if best is None or exact:
                     best = item
@@ -163,9 +163,12 @@ def catalog_lookup():
                     hit = find(article)
                 except Exception:  # noqa: BLE001 — one supplier being down must not stop the rest
                     hit = None
-                if hit and hit[0]:
-                    return (round(float(hit[0]), 2), hit[1] and round(float(hit[1]), 2),
-                            f"проверить: прайс {source}, модель {article} (продажа — розница поставщика, закупка — наша цена)")
+                if hit and (hit[0] or hit[1]):
+                    # TASK-20261124-14: Daichi has FXSQ20A/32A with our cost but no retail — the cost is
+                    # still the answer; the sale price then comes from our usual markup (deal_price_sources).
+                    return (hit[0] and round(float(hit[0]), 2), hit[1] and round(float(hit[1]), 2),
+                            f"проверить: прайс {source}, модель {article}"
+                            + (" (продажа — розница поставщика, закупка — наша цена)" if hit[0] else " (только наша закупка)"))
         return None
     return lookup
 

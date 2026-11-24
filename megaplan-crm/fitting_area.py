@@ -158,8 +158,15 @@ def shape(name):
     return g[0][0] if g else None
 
 
+NEIGHBOURS = 3
+
+
 def rates(rows, supplier_words=("вентреш",)):
-    """Median ₽/m² per (kind, shape) from purchase rows of the given supplier(s)."""
+    """Known fittings of the supplier: {(kind, shape): [(area, ₽/m², name), …]}.
+
+    TASK-20261124-14: one median ₽/m² per kind under-priced small fittings by 72–80 % — a
+    Ø125 elbow carries the same seams, flanges and handling as a big one. The rate is taken
+    from the fittings of the nearest size instead (see price)."""
     found = {}
     for r in rows:
         ref = str(r.get("ref") or "").lower()
@@ -168,9 +175,20 @@ def rates(rows, supplier_words=("вентреш",)):
         k, a = kind_of(r["name"]), area(r["name"])
         if not k or k == "воздуховод" or not a:
             continue
-        found.setdefault((k, shape(r["name"])), []).append(r["cost"] / a)
-        found.setdefault(("фасонка", shape(r["name"])), []).append(r["cost"] / a)
-    return {key: (round(statistics.median(v), 2), len(v)) for key, v in found.items() if len(v) >= 3}
+        found.setdefault((k, shape(r["name"])), []).append((a, r["cost"] / a, r["name"]))
+    return found
+
+
+def nearest_rate(table, k, sh, a):
+    """Median ₽/m² of the NEIGHBOURS known fittings closest in area: same kind and shape, else same kind
+    any shape, else any fitting of that shape. Returns (rate, basis) or (None, '')."""
+    for key, basis in (((k, sh), ""), ((k, "round" if sh == "rect" else "rect"), "по изделиям другой формы"),
+                       (None, "по фасонке других видов")):
+        pool = table.get(key, []) if key else [x for v in table.values() for x in v]
+        if len(pool) >= NEIGHBOURS:
+            near = sorted(pool, key=lambda x: abs(math.log(x[0] / a)))[:NEIGHBOURS]
+            return statistics.median(r for _, r, _ in near), basis + (": " if basis else "") + ", ".join(n for _, _, n in near)
+    return None, ""
 
 
 def price(name, rate_table, markup=3.0):
@@ -178,11 +196,10 @@ def price(name, rate_table, markup=3.0):
     k, a = kind_of(name), area(name)
     if not k or k == "воздуховод" or not a:
         return None
-    key = (k, shape(name)) if (k, shape(name)) in rate_table else ("фасонка", shape(name))
-    if key not in rate_table:
+    rate, basis = nearest_rate(rate_table, k, shape(name), a)
+    if not rate:
         return None
-    rate, n = rate_table[key]
     cost = round(a * rate, 2)
     return (round(cost * markup, 2), cost,
-            f"проверить: расчёт по площади {a:g} м² × {rate:g} ₽/м² (медиана {n} изделий Вентрешения, "
-            f"{'круглые' if key[1] == 'round' else 'прямоугольные'} {key[0]}) × наценка {round((markup - 1) * 100):g}%")
+            f"проверить: расчёт по площади {a:g} м² × {rate:.0f} ₽/м² (ближайшие по размеру изделия Вентрешения — "
+            f"{basis}) × наценка {round((markup - 1) * 100):g}%")

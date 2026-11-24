@@ -19,6 +19,10 @@ IS_INVOICE = "📄 Это счёт (наша закупка)"
 IS_KP = "🏷 Это КП (цена продажи)"
 OWN_DISCOUNT = "✍️ Своя скидка"
 APPLY = "✅ Применить"
+READ_OK = "✅ Прочитано верно"
+SWAP = "↔️ Кол-во и цена наоборот"
+CURRENCY_BUTTONS = {"💱 RUB": "RUB", "💱 USD": "USD", "💱 EUR": "EUR"}
+SIGN = {"RUB": "₽", "USD": "$", "EUR": "€"}
 FITTINGS_250 = "🔁 Фасонка +250%"
 DISCOUNTS = list(range(0, 45, 5))
 
@@ -26,6 +30,8 @@ COLLECT_KEYBOARD = {"keyboard": [[{"text": DONE}], [{"text": CANCEL}]], "resize_
 KIND_KEYBOARD = {"keyboard": [[{"text": IS_INVOICE}], [{"text": IS_KP}], [{"text": CANCEL}]], "resize_keyboard": True}
 DISCOUNT_KEYBOARD = {"keyboard": [[{"text": f"Скидка {d}%"} for d in DISCOUNTS[i:i + 3]] for i in range(0, len(DISCOUNTS), 3)]
                      + [[{"text": OWN_DISCOUNT}], [{"text": CANCEL}]], "resize_keyboard": True}
+CHECK_KEYBOARD = {"keyboard": [[{"text": READ_OK}], [{"text": b} for b in CURRENCY_BUTTONS], [{"text": SWAP}],
+                                [{"text": IS_INVOICE}, {"text": IS_KP}], [{"text": CANCEL}]], "resize_keyboard": True}
 REVIEW_KEYBOARD = {"keyboard": [[{"text": APPLY}], [{"text": FITTINGS_250}], [{"text": CANCEL}]], "resize_keyboard": True}
 
 SOURCES = os.path.join(os.path.expanduser("~/megaplan-crm"), "deal_price_sources.py")
@@ -61,25 +67,44 @@ def add_file(io, chat_id, state, path, python):
     state = io.state(chat_id) if hasattr(io, "state") else state
     docs = list(state.get("price_docs") or [])
     doc = {"path": path, "file": read.get("file"), "kind": read.get("kind"), "supplier": read.get("supplier"),
-           "rows": read.get("rows") or [], "discount": None}
+           "rows": read.get("rows") or [], "discount": None, "currency": read.get("currency") or "RUB"}
     docs.append(doc)
     if not doc["rows"]:
         io.update(chat_id, pending="deal_price_docs", price_docs=docs)
         io.send(chat_id, f"⚠️ {doc['file']}: строк с ценами не нашёл (сумма = кол-во × цена ни в одной строке). "
                          "Если это скан — пришлите почётче.", COLLECT_KEYBOARD)
         return
-    rows = len(doc["rows"])
+    io.update(chat_id, pending="deal_price_check", price_docs=docs)
+    io.send(chat_id, check_text(doc), CHECK_KEYBOARD)
+
+
+def _money(value, code):
+    return f"{value:,.2f}".replace(",", " ").replace(".", ",") + " " + SIGN.get(code, code)
+
+
+def check_text(doc):
+    """24.11: the owner sees what was read — type, currency, qty × price = sum — before anything is matched."""
+    code = doc.get("currency") or "RUB"
+    kind = {"kp": "КП (цена продажи)", "invoice": "счёт (наша закупка)"}.get(doc.get("kind"), "тип не понял")
+    lines = [f"📄 {doc.get('file')}: {kind}, {doc.get('supplier') or 'поставщик не найден'}, валюта {code}.",
+             f"Прочитано строк: {len(doc['rows'])}. Проверьте первые:"]
+    for r in doc["rows"][:6]:
+        lines.append(f"• {r['name']} — {r['qty']:g} × {_money(r['price'], code)} = {_money(r['amount'], code)}")
+    lines.append(f"Если валюта или колонки не те — кнопки ниже. Всё верно — «{READ_OK}».")
+    return "\n".join(lines)
+
+
+def after_check(io, chat_id, docs):
+    doc = docs[-1]
     if doc["kind"] is None:
         io.update(chat_id, pending="deal_price_kind", price_docs=docs)
-        io.send(chat_id, f"{doc['file']}: {rows} строк с ценами. Это счёт или КП?", KIND_KEYBOARD)
+        io.send(chat_id, "Это счёт или КП?", KIND_KEYBOARD)
     elif doc["kind"] == "kp":
         io.update(chat_id, pending="deal_price_discount", price_docs=docs)
-        io.send(chat_id, f"🏷 КП {doc['supplier'] or ''} ({doc['file']}): {rows} строк. Какая наша скидка от этого КП?",
-                DISCOUNT_KEYBOARD)
+        io.send(chat_id, f"🏷 Какая наша скидка от этого КП ({doc['file']})?", DISCOUNT_KEYBOARD)
     else:
         io.update(chat_id, pending="deal_price_docs", price_docs=docs)
-        io.send(chat_id, f"📄 Счёт {doc['supplier'] or ''} ({doc['file']}): {rows} строк — беру как закупку. "
-                         f"Ещё файлы или «{DONE}».", COLLECT_KEYBOARD)
+        io.send(chat_id, f"📄 Беру как закупку. Ещё файлы или «{DONE}».", COLLECT_KEYBOARD)
 
 
 def handle_text(io, chat_id, state, value, ledger_of, python, run_job):
@@ -94,6 +119,24 @@ def handle_text(io, chat_id, state, value, ledger_of, python, run_job):
     if value == CANCEL:
         io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
         io.send(chat_id, "Подбор цен по документам отменён. В сделке ничего не менялось.", io.deal_keyboard)
+        return True
+    if pending == "deal_price_check" and docs:
+        doc = dict(docs[-1])
+        if value == READ_OK:
+            after_check(io, chat_id, docs)
+            return True
+        if value in CURRENCY_BUTTONS:
+            doc["currency"] = CURRENCY_BUTTONS[value]
+        elif value == SWAP:
+            doc["rows"] = [{**r, "qty": r["price"], "price": r["qty"]} for r in doc["rows"]]
+        elif value in (IS_INVOICE, IS_KP):
+            doc["kind"] = "invoice" if value == IS_INVOICE else "kp"
+        else:
+            io.send(chat_id, "Поправьте кнопками ниже или нажмите «✅ Прочитано верно».", CHECK_KEYBOARD)
+            return True
+        docs[-1] = doc
+        io.update(chat_id, pending="deal_price_check", price_docs=docs)
+        io.send(chat_id, check_text(doc), CHECK_KEYBOARD)
         return True
     if pending == "deal_price_kind" and value in (IS_INVOICE, IS_KP) and docs:
         docs[-1]["kind"] = "invoice" if value == IS_INVOICE else "kp"
@@ -128,7 +171,13 @@ def handle_text(io, chat_id, state, value, ledger_of, python, run_job):
     if pending == "deal_price_review" and value == APPLY:
         run_job(lambda: apply(io, chat_id, state, python))
         return True
-    return pending in ("deal_price_kind", "deal_price_discount")
+    # 24.11: free text inside this flow went to the model, which «порет чушь». Stay here.
+    keyboards = {"deal_price_docs": COLLECT_KEYBOARD, "deal_price_kind": KIND_KEYBOARD,
+                 "deal_price_discount": DISCOUNT_KEYBOARD, "deal_price_review": REVIEW_KEYBOARD}
+    io.send(chat_id, "Сейчас идёт подбор цен по документам — ответьте кнопкой ниже. Если документ прочитан неверно, "
+                     "нажмите «❌ Отмена» и пришлите его заново: после чтения я покажу строки, валюту и колонки для проверки.",
+            keyboards.get(pending, COLLECT_KEYBOARD))
+    return True
 
 
 def build_proposals(io, chat_id, state, docs, ledger_of, python, fitting_markup):

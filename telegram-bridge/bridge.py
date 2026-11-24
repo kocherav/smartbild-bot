@@ -11637,7 +11637,7 @@ def main():
                 send_message(token,chat_id,f"✅ Исправленная ведомость принята. Изменений: {len(changes)}. Проверьте итоговый файл перед утверждением.",INSTALLATION_DRAFT_KEYBOARD)
                 send_document(token,chat_id,result["result"]["workbook"],"Актуальный черновик монтажной ведомости",f"Монтажная ведомость - сделка {report_state.get('installation_deal_id')}.xlsx")
                 return
-            if report_pending in ("deal_price_docs", "deal_price_kind", "deal_price_discount"):
+            if str(report_pending or "").startswith("deal_price_"):
                 if report_pending != "deal_price_docs":
                     send_message(token, chat_id, "Сначала ответьте на вопрос по предыдущему файлу (кнопкой выше).")
                     return

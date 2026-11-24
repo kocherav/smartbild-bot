@@ -66,16 +66,26 @@ def read(path):
     text = text_of(path)
     rows = invoice_lines.rows(text)
     return {"ok": True, "kind": classify(text), "supplier": supplier_of(text), "rows": rows,
-            "file": os.path.basename(path)}
+            "currency": invoice_lines.currency(text), "file": os.path.basename(path)}
 
 
-def history_rows(document):
-    """A document's rows in price-history shape: invoice → cost; КП → sale price and cost by discount."""
+def history_rows(document, rate=None):
+    """A document's rows in price-history shape: invoice → cost; КП → sale price and cost by discount.
+    Prices in USD/EUR are converted by the CBR rate (24.11: a dollar КП was read as roubles)."""
+    code = str(document.get("currency") or "RUB").upper()
+    factor = 1.0
+    if code != "RUB":
+        factor = (rate or price_history.cbr_rate)(code)
+        if not factor:
+            return []
     label = " ".join(x for x in (document.get("supplier"), "КП" if document["kind"] == "kp" else "счёт",
                                  document.get("file")) if x)
+    if code != "RUB":
+        label += f", {code} по курсу ЦБ {factor:.2f}"
     discount = float(document.get("discount") or 0) / 100
     out = []
     for r in document.get("rows") or []:
+        r = {**r, "price": round(float(r["price"]) * factor, 2)}
         if document["kind"] == "kp":
             out.append({"name": r["name"], "price": r["price"], "cost": round(r["price"] * (1 - discount), 2),
                         "source": "КП поставщика", "unit": r.get("unit", ""), "order": 1 if document.get("this_object") else 0,
@@ -93,11 +103,12 @@ def _zero(value):
         return True
 
 
-def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False, fitting_markup=3.0, catalog=None):
+def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False, fitting_markup=3.0, catalog=None,
+            rate=None):
     """Proposals for deal rows: the owner's documents first, then supplier catalogs (Daichi/Hogart,
     by model — owner 24.11 «неужели цены на блоки Дайкин нельзя найти в API Daichi»), then
     fittings by area (rates from history + documents)."""
-    doc_rows = [r for d in documents for r in history_rows(d)]
+    doc_rows = [r for d in documents for r in history_rows(d, rate)]
     history = list(history or [])
     proposals, skipped = [], []
     for row in ledger:
@@ -109,6 +120,10 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
         hit = price_history.price_from_history(name, doc_rows, ratios, fitting_markup) if doc_rows else None
         if not hit and catalog:
             hit = catalog(name)
+            if hit and not hit[0] and hit[1]:
+                ratio, why = price_history.ratio_for(name, ratios)
+                hit = (round(hit[1] * ratio, 2), hit[1], f"{hit[2]}; продажа = закупка × {why} {ratio:g}") if ratio else \
+                    (None, hit[1], hit[2])
         if not hit and price_history.kind(name) in price_history.FITTINGS:
             hit = price_history.fitting_estimate(name, history + doc_rows, fitting_markup)
         if not hit:

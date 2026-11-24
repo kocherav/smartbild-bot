@@ -46,8 +46,13 @@ class Flow(unittest.TestCase):
         io = FakeIO({'current_deal_id': '907'})
         self.assertTrue(self.go(io, flow.BUTTON))
         self.assertEqual('deal_price_docs', io.st['pending'])
-        with patch.object(flow, 'run_sources', return_value=KP):
+        with patch.object(flow, 'run_sources', return_value=dict(KP, currency='USD')):
             flow.add_file(io, 1, io.state(1), '/tmp/kp.pdf', 'py')
+        self.assertEqual('deal_price_check', io.st['pending'])
+        self.assertIn('валюта USD', io.sent[-1][0]); self.assertIn('2 × 40 000,00 $ = 80 000,00 $', io.sent[-1][0])
+        self.go(io, '💱 RUB')
+        self.assertEqual('RUB', io.st['price_docs'][0]['currency'])
+        self.go(io, flow.READ_OK)
         self.assertEqual('deal_price_discount', io.st['pending'])
         self.assertIn('Скидка 40%', [b['text'] for row in io.sent[-1][1]['keyboard'] for b in row])
         self.assertTrue(self.go(io, 'Скидка 15%'))
@@ -71,6 +76,7 @@ class Flow(unittest.TestCase):
         io = FakeIO({'current_deal_id': '907', 'pending': 'deal_price_docs', 'price_docs': []})
         with patch.object(flow, 'run_sources', return_value=UNCLEAR):
             flow.add_file(io, 1, io.state(1), '/tmp/doc.pdf', 'py')
+        self.go(io, flow.READ_OK)
         self.assertEqual('deal_price_kind', io.st['pending'])
         self.go(io, flow.IS_INVOICE)
         self.assertEqual(('invoice', 'deal_price_docs'), (io.st['price_docs'][0]['kind'], io.st['pending']))
@@ -88,6 +94,18 @@ class Flow(unittest.TestCase):
         self.go(io, flow.BUTTON)
         self.assertNotIn('pending', io.st)
         self.assertIn('откройте сделку', io.sent[-1][0])
+
+    def test_swapped_columns_are_fixed_by_a_button(self):
+        io = FakeIO({'pending': 'deal_price_check', 'price_docs': [dict(KP, rows=[
+            {'name': 'Крепление HPH3T', 'qty': 0.65, 'unit': '', 'price': 2.0, 'amount': 1.3}])]})
+        self.go(io, flow.SWAP)
+        row = io.st['price_docs'][0]['rows'][0]
+        self.assertEqual((2.0, 0.65), (row['qty'], row['price']))
+
+    def test_free_text_inside_the_flow_never_reaches_the_model(self):
+        io = FakeIO({'pending': 'deal_price_review', 'price_docs': [KP]})
+        self.assertTrue(self.go(io, 'ты неверно определил цены, сделай правильно'))
+        self.assertIn('ответьте кнопкой', io.sent[-1][0])
 
     def test_cancel_writes_nothing(self):
         io = FakeIO({'pending': 'deal_price_review', 'price_proposals': [{'name': 'x'}]})
