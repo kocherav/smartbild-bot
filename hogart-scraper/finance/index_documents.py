@@ -20,4 +20,10 @@ for p in sorted(paths):
   try:text=p.read_text(errors='replace')
   except OSError:continue  # 24.11: one unreadable evidence file stopped the whole index
  index.append({'path':str(p),'text':text})
-(ROOT/'evidence/document_index.json').write_text(json.dumps(index,ensure_ascii=False));print('indexed',len(index))
+# 24.11 (TASK-20261124-09): the old evidence/document_index.json is not writable for the bot,
+# so the price history read an index from 05.10. The bot-owned copy lives in megaplan-crm.
+payload=json.dumps(index,ensure_ascii=False);written=[]
+for target in (Path('/home/kocher.av/megaplan-crm/document_index.json'),ROOT/'evidence/document_index.json'):
+ try:target.write_text(payload);written.append(str(target))
+ except OSError:pass
+print('indexed',len(index),'written',written)

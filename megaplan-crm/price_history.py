@@ -233,7 +233,7 @@ def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY, document_index=None
                              "unit": line.get("unit") or line.get("source_unit") or ""})
     try:  # owner 24.11: the invoices themselves (PDF/XLSX text), not only what finance allocated
         import invoice_lines
-        rows.extend(invoice_lines.history_rows(document_index or invoice_lines.DOCUMENT_INDEX))
+        rows.extend(invoice_lines.history_rows(document_index))
     except Exception:  # noqa: BLE001 — a bonus source; the catalog still answers without it
         pass
     return rows
