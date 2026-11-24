@@ -187,7 +187,9 @@ def similarity(a, b):
         return 0.0
     # Model codes and series decide when both names carry them: FXSQ20A ≠ FXAQ20A, SMART ≠ AESTH.
     ma, mb = models(a), models(b)
-    if ma and mb and not ma & mb:
+    if ma and not ma & mb:
+        # 24.11 (deal 907): «блок Daikin FXSQ20A» took the price of a whole VRV outdoor set
+        # that named no model. A named model is matched only by the same model.
         return 0.0
     xa, xb = series(a), series(b)
     if (xa or xb) and not ma & mb and (not (xa and xb) or ((xa - xb) and (xb - xa))):
@@ -200,19 +202,48 @@ def similarity(a, b):
 MIN_SIMILARITY = 0.5   # same kind, same sizes, no conflicting material or shape
 
 
-def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY, document_index=None):
+def cbr_rate(code):
+    """Roubles per unit of a currency today (CBR); None when unknown — such rows are skipped."""
+    try:
+        import datetime
+        import currency_planning
+        return float(currency_planning.fetch_cbr_rate(code, datetime.date.today())["rate"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rub(value, currency, rate):
+    """24.11 (deal 907): a USD/EUR catalog price must never be read as roubles."""
+    code = str(currency or "RUB").upper()
+    if value is None or code == "RUB":
+        return value
+    factor = rate(code)
+    return round(value * factor, 2) if factor else None
+
+
+def load_history(offer_cache=OFFER_CACHE, registry=REGISTRY, document_index=None, rate=cbr_rate):
     """[{name, price, cost, source, ref, order}] from the Offer catalog and supplier invoices."""
     rows = []
+    rates, fetch = {}, rate
+
+    def rate_cached(code):
+        if code not in rates:
+            rates[code] = fetch(code)
+        return rates[code]
+    rate = rate_cached
     try:
         with open(offer_cache, encoding="utf-8") as f:
             offers = json.load(f).get("offers") or []
     except (OSError, ValueError):
         offers = []
     for o in offers:
-        price, cost = _num(o.get("price")), _num(o.get("cost_material"))
+        price = _rub(_num(o.get("price")), o.get("price_currency"), rate)
+        cost = _rub(_num(o.get("cost_material")), o.get("cost_currency"), rate)
         if price or cost:
+            note = "" if str(o.get("price_currency") or "RUB").upper() == "RUB" else \
+                f", цена в {o.get('price_currency')} пересчитана по курсу ЦБ"
             rows.append({"name": o.get("name") or "", "price": price, "cost": cost,
-                         "source": "сделки", "ref": f"номенклатура {o.get('id')}", "order": int(o.get("id") or 0)})
+                         "source": "сделки", "ref": f"номенклатура {o.get('id')}{note}", "order": int(o.get("id") or 0)})
     try:
         with open(registry, encoding="utf-8") as f:
             data = json.load(f)
@@ -351,6 +382,13 @@ def price_from_history(name, history, ratios=None):
         match = {**match, "price": match["price"] and round(match["price"] * per_metre, 2),
                  "cost": match["cost"] and round(match["cost"] * per_metre, 2),
                  "ref": f"{match['ref']}, пересчитано за 1 м из штуки L={length:g} мм"}
+    if match["price"] and not match["cost"]:
+        bought = best_match(name, [r for r in history if r["cost"] and not r["price"]])
+        if bought:
+            length = duct_length(name, bought["name"], bought.get("unit", ""))
+            factor = 1000.0 / length if length else 1.0
+            match = {**match, "cost": round(bought["cost"] * factor, 2),
+                     "ref": f"{match['ref']}; закупка — {bought['ref']}"}
     if match["price"]:
         return (match["price"], match["cost"],
                 f"проверить: цена из прошлых сделок ({word}: «{match['name']}», {match['ref']})")
