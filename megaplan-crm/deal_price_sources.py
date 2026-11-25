@@ -84,8 +84,13 @@ def history_rows(document, rate=None):
         label += f", {code} по курсу ЦБ {factor:.2f}"
     discount = float(document.get("discount") or 0) / 100
     out = []
+    # 25.11 (deal 907): «SV Активный бесшумный клапан» in a Liechty КП never names the brand per row, so the
+    # brand rule refused «Активный бесшумный клапан Liechty SV». The document's brand belongs to every row.
+    brands = {w for w in re.findall(r"[A-Za-z]{3,}", f"{document.get('brand') or ''} {document.get('supplier') or ''}")}
     for r in document.get("rows") or []:
-        r = {**r, "price": round(float(r["price"]) * factor, 2)}
+        name = r["name"]
+        missing = [b for b in brands if b.lower() not in name.lower()]
+        r = {**r, "name": (name + " " + " ".join(missing)).strip(), "price": round(float(r["price"]) * factor, 2)}
         if document["kind"] == "kp":
             out.append({"name": r["name"], "price": r["price"], "cost": round(r["price"] * (1 - discount), 2),
                         "source": "КП поставщика", "unit": r.get("unit", ""), "order": 1 if document.get("this_object") else 0,
@@ -124,10 +129,13 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
                 ratio, why = price_history.ratio_for(name, ratios)
                 hit = (round(hit[1] * ratio, 2), hit[1], f"{hit[2]}; продажа = закупка × {why} {ratio:g}") if ratio else \
                     (None, hit[1], hit[2])
+        if not hit and history:
+            # 25.11: Invisiline AESTH was in our past deals but the document route never looked there.
+            hit = price_history.price_from_history(name, history, ratios, fitting_markup)
         if not hit and price_history.kind(name) in price_history.FITTINGS:
             hit = price_history.fitting_estimate(name, history + doc_rows, fitting_markup)
         if not hit:
-            skipped.append({"name": name, "reason": "нет похожей строки в документах, прайсах Daichi/Hogart и не фасонка"})
+            skipped.append({"name": name, "reason": "нет похожей строки в документах, прайсах Daichi/Hogart, прошлых сделках и счетах; не фасонка"})
             continue
         sell, cost, mark = hit
         proposal = {"offer_row_id": row.get("offer_row_id"), "offer_id": row.get("offer_id"), "name": name,
