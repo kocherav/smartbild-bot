@@ -58,8 +58,22 @@ def start(io, chat_id, deal_id):
                      "и фасонку по площади.", COLLECT_KEYBOARD)
 
 
-def add_file(io, chat_id, state, path, python):
+def read_document(io, path, python):
+    """The document model first (TASK-20261124-15: OCR+regex failed on a scanned 16-page КП), checked
+    row by row; the arithmetic parser only when the model gives nothing usable."""
+    if hasattr(io, "read_model"):
+        try:
+            read = io.read_model(path)
+        except Exception as exc:  # noqa: BLE001
+            read = {"ok": False, "error": str(exc)}
+        if read.get("ok"):
+            return {**read, "file": os.path.basename(path), "reader": "модель"}
     read = run_sources("read", {"path": path}, python)
+    return {**read, "reader": "разбор текста"} if read.get("ok") else read
+
+
+def add_file(io, chat_id, state, path, python):
+    read = read_document(io, path, python)
     if not read.get("ok"):
         io.send(chat_id, f"Файл не прочитан: {read.get('error')}. Пришлите другой или «{DONE}».", COLLECT_KEYBOARD)
         return
@@ -67,15 +81,29 @@ def add_file(io, chat_id, state, path, python):
     state = io.state(chat_id) if hasattr(io, "state") else state
     docs = list(state.get("price_docs") or [])
     doc = {"path": path, "file": read.get("file"), "kind": read.get("kind"), "supplier": read.get("supplier"),
-           "rows": read.get("rows") or [], "discount": None, "currency": read.get("currency") or "RUB"}
+           "rows": read.get("rows") or [], "discount": None, "currency": read.get("currency") or "RUB",
+           "variants": read.get("variants") or [], "rejected": read.get("rejected") or []}
     docs.append(doc)
     if not doc["rows"]:
         io.update(chat_id, pending="deal_price_docs", price_docs=docs)
         io.send(chat_id, f"⚠️ {doc['file']}: строк с ценами не нашёл (сумма = кол-во × цена ни в одной строке). "
                          "Если это скан — пришлите почётче.", COLLECT_KEYBOARD)
         return
+    if len(doc["variants"]) > 1:
+        io.update(chat_id, pending="deal_price_variant", price_docs=docs)
+        io.send(chat_id, f"📄 {doc['file']}: в документе {len(doc['variants'])} варианта комплектации. Какой взять?",
+                variant_keyboard(doc["variants"]))
+        return
     io.update(chat_id, pending="deal_price_check", price_docs=docs)
     io.send(chat_id, check_text(doc), CHECK_KEYBOARD)
+
+
+ALL_VARIANTS = "Все варианты"
+
+
+def variant_keyboard(variants):
+    return {"keyboard": [[{"text": f"Вариант: {v}"}] for v in variants] + [[{"text": ALL_VARIANTS}], [{"text": CANCEL}]],
+            "resize_keyboard": True}
 
 
 def _money(value, code):
@@ -90,6 +118,8 @@ def check_text(doc):
              f"Прочитано строк: {len(doc['rows'])}. Проверьте первые:"]
     for r in doc["rows"][:6]:
         lines.append(f"• {r['name']} — {r['qty']:g} × {_money(r['price'], code)} = {_money(r['amount'], code)}")
+    if doc.get("rejected"):
+        lines.append(f"Не взято строк: {len(doc['rejected'])} (кол-во × цена ≠ сумма или нет цены).")
     lines.append(f"Если валюта или колонки не те — кнопки ниже. Всё верно — «{READ_OK}».")
     return "\n".join(lines)
 
@@ -119,6 +149,17 @@ def handle_text(io, chat_id, state, value, ledger_of, python, run_job):
     if value == CANCEL:
         io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
         io.send(chat_id, "Подбор цен по документам отменён. В сделке ничего не менялось.", io.deal_keyboard)
+        return True
+    if pending == "deal_price_variant" and docs:
+        doc = docs[-1]
+        if value == ALL_VARIANTS or value.startswith("Вариант: ") and value[9:] in doc.get("variants", []):
+            if value != ALL_VARIANTS:
+                import supplier_document_model
+                docs[-1] = supplier_document_model.only_variant(doc, value[9:])
+            io.update(chat_id, pending="deal_price_check", price_docs=docs)
+            io.send(chat_id, check_text(docs[-1]), CHECK_KEYBOARD)
+        else:
+            io.send(chat_id, "Выберите вариант кнопкой.", variant_keyboard(doc.get("variants") or []))
         return True
     if pending == "deal_price_check" and docs:
         doc = dict(docs[-1])

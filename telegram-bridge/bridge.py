@@ -4767,7 +4767,13 @@ def deal_price_io(token):
         except Exception as exc:  # noqa: BLE001 — shown to the owner; the deal is re-read before any retry
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    def read_model(path):
+        import supplier_document_model
+        answer = ask_fresh_document_model(supplier_document_model.prompt(path, extract_document_text_for_model(path)))
+        return supplier_document_model.parse_answer(answer)
+
     return types.SimpleNamespace(
+        read_model=read_model,
         send=lambda chat_id, text, keyboard=None: send_message(token, chat_id, text, keyboard),
         update=update_deal_ui_state, deal_keyboard=DEAL_ACTIONS_KEYBOARD, state=current_deal_ui_state,
         send_table=send_table, apply_rows=apply_rows)
