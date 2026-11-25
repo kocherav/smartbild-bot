@@ -4769,7 +4769,9 @@ def deal_price_io(token):
 
     def read_model(path):
         import supplier_document_model
-        answer = ask_fresh_document_model(supplier_document_model.prompt(path, extract_document_text_for_model(path)))
+        # A scanned 16-page КП needs the model to read the pages itself — more than the 2 minutes of a short invoice.
+        answer = ask_fresh_document_model(supplier_document_model.prompt(path, extract_document_text_for_model(path)),
+                                          timeout=420)
         return supplier_document_model.parse_answer(answer)
 
     return types.SimpleNamespace(
@@ -10369,11 +10371,11 @@ def ask_claude(session_id, prompt):
     return out
 
 
-def ask_fresh_document_model(prompt):
+def ask_fresh_document_model(prompt, timeout=120):
     """Transactional documents stay isolated from the general conversation."""
     model_recovery.begin_request(MODEL_FAILURES_FILE, _model_chat_id(), prompt, "document")
     try:
-        result = _run_codex("", prompt, timeout=120)
+        result = _run_codex("", prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         return _model_failure(prompt, "timeout", "document")
     except OSError:
@@ -11647,7 +11649,7 @@ def main():
                 if report_pending != "deal_price_docs":
                     send_message(token, chat_id, "Сначала ответьте на вопрос по предыдущему файлу (кнопкой выше).")
                     return
-                send_message(token, chat_id, f"📥 {original_name or 'Файл'} получен, читаю строки с ценами…")
+                send_message(token, chat_id, f"📥 {original_name or 'Файл'} получен, читаю таблицу (скан на много страниц — до 5–7 минут)…")
                 run_background_job(lambda: deal_price_flow.add_file(deal_price_io(token), chat_id, report_state,
                                                                     source_document_path, REPORT_VENV_PY),
                                    token, chat_id, operation="сделка:цены-файл", allow_stale=True)
