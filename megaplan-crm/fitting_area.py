@@ -105,7 +105,7 @@ def _section_area(g):
 
 def kind_of(name):
     t = str(name).lower().replace("ё", "е")
-    for word, k in (("отвод", "отвод"), ("колено", "отвод"), ("переход", "переход"), ("тройник", "тройник"),
+    for word, k in (("дроссел", "дроссель"), ("отвод", "отвод"), ("колено", "отвод"), ("переход", "переход"), ("тройник", "тройник"),
                     ("ниппель", "ниппель"), ("муфта", "ниппель"), ("заглушк", "заглушка"), ("врезк", "врезка"),
                     ("воздуховод", "воздуховод")):
         if word in t:
@@ -142,6 +142,9 @@ def area(name, length_m=None):
         return round(_perimeter(first) * NIPPLE_M, 4)
     if k == "заглушка":
         return round(_section_area(first) + _perimeter(first) * RIM_M, 4)
+    if k == "дроссель":
+        # 25.11 (deal 907): a damper is a short duct body (0.25 m) plus its blade (the section).
+        return round(_perimeter(first) * 0.25 + _section_area(first), 4)
     if k == "врезка":
         d = _span(first)
         return round(_perimeter(first) * 0.1 + (d + 0.1) ** 2, 4)
@@ -173,7 +176,7 @@ def rates(rows, supplier_words=("вентреш",)):
         if not r.get("cost") or not any(w in ref for w in supplier_words):
             continue
         k, a = kind_of(r["name"]), area(r["name"])
-        if not k or k == "воздуховод" or not a:
+        if not k or not a:
             continue
         found.setdefault((k, shape(r["name"])), []).append((a, r["cost"] / a, r["name"]))
     return found
@@ -184,7 +187,9 @@ def nearest_rate(table, k, sh, a):
     any shape, else any fitting of that shape. Returns (rate, basis) or (None, '')."""
     for key, basis in (((k, sh), ""), ((k, "round" if sh == "rect" else "rect"), "по изделиям другой формы"),
                        (None, "по фасонке других видов")):
-        pool = table.get(key, []) if key else [x for v in table.values() for x in v]
+        # Ducts and fittings are priced differently per m²: the «any fitting» pool never mixes them.
+        pool = table.get(key, []) if key else [x for (kk, _), v in table.items()
+                                                if (kk == "воздуховод") == (k == "воздуховод") for x in v]
         if len(pool) >= NEIGHBOURS:
             near = sorted(pool, key=lambda x: abs(math.log(x[0] / a)))[:NEIGHBOURS]
             return statistics.median(r for _, r, _ in near), basis + (": " if basis else "") + ", ".join(n for _, _, n in near)
@@ -194,12 +199,13 @@ def nearest_rate(table, k, sh, a):
 def price(name, rate_table, markup=3.0):
     """(sell, cost, mark) by area for a fitting, else None. markup 3.0 = +200 %, 3.5 = +250 %."""
     k, a = kind_of(name), area(name)
-    if not k or k == "воздуховод" or not a:
+    if not k or not a:
         return None
     rate, basis = nearest_rate(rate_table, k, shape(name), a)
     if not rate:
         return None
     cost = round(a * rate, 2)
+    per = " за 1 м" if k == "воздуховод" else ""
     return (round(cost * markup, 2), cost,
-            f"проверить: расчёт по площади {a:g} м² × {rate:.0f} ₽/м² (ближайшие по размеру изделия Вентрешения — "
+            f"проверить: расчёт{per} по площади {a:g} м² × {rate:.0f} ₽/м² (ближайшие по размеру изделия Вентрешения — "
             f"{basis}) × наценка {round((markup - 1) * 100):g}%")

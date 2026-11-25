@@ -388,10 +388,18 @@ def fitting_rates(history):
     return _FITTING_RATES[key]
 
 
-def fitting_estimate(name, history, markup=FITTING_MARKUP):
-    if kind(name) not in FITTINGS or is_service(name):
-        return None
+AREA_PRICED = FITTINGS | {"воздуховод", "дроссель"}
+
+
+def fitting_estimate(name, history, markup=FITTING_MARKUP, ratios=None):
+    """Fittings, ducts and dampers by the area of metal (25.11: four rectangular ducts and a damper of deal
+    907 stayed at 0 ₽ — they were not in the area route). Ducts take the usual duct markup, fittings +200 %."""
     import fitting_area
+    if fitting_area.kind_of(name) is None or kind(name) not in AREA_PRICED or is_service(name):
+        return None
+    if kind(name) == "воздуховод":
+        duct_ratio, _ = ratio_for(name, ratios)
+        markup = duct_ratio or markup
     return fitting_area.price(name, fitting_rates(history), markup)
 
 
@@ -400,7 +408,7 @@ def price_from_history(name, history, ratios=None, fitting_markup=FITTING_MARKUP
     galvanised fittings without an exact match are priced by the area of metal."""
     match = best_match(name, history)
     if not match:
-        return rect_duct_estimate(name, history, ratios) or fitting_estimate(name, history, fitting_markup)
+        return rect_duct_estimate(name, history, ratios) or fitting_estimate(name, history, fitting_markup, ratios)
     word = "очень похоже" if match["score"] >= 0.8 else "похоже"
     length = duct_length(name, match["name"], match.get("unit", ""))
     if length:

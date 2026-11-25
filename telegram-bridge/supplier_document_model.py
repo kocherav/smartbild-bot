@@ -12,7 +12,8 @@ import re
 PROMPT = """Ты читаешь документ поставщика (КП или счёт) для подбора цен в сделку. Файл: {path}
 {text_block}
 Верни ТОЛЬКО JSON без пояснений:
-{{"kind": "kp" | "invoice" | null, "supplier": "название поставщика", "currency": "RUB" | "USD" | "EUR",
+{{"kind": "kp" | "invoice" | null, "supplier": "название поставщика", "brand": "марка оборудования латиницей, если одна на весь документ (Liechty, Daikin…), иначе пусто",
+  "currency": "RUB" | "USD" | "EUR",
   "rows": [{{"name": "наименование как в документе", "qty": число, "unit": "шт|м|компл|…", "price": цена за единицу,
             "amount": сумма строки, "variant": "название варианта/комплектации или пусто"}}]}}
 Правила: kind — «kp», если это коммерческое предложение/прайс, «invoice», если счёт на оплату; иначе null.
@@ -62,6 +63,7 @@ def parse_answer(answer):
     kind = data.get("kind") if data.get("kind") in ("kp", "invoice") else None
     variants = sorted({r["variant"] for r in rows if r["variant"]})
     return {"ok": bool(rows), "kind": kind, "supplier": str(data.get("supplier") or ""),
+            "brand": str(data.get("brand") or "").strip(),
             "currency": currency if currency in ("RUB", "USD", "EUR") else "RUB",
             "rows": rows, "rejected": rejected, "variants": variants,
             **({} if rows else {"error": "в ответе модели нет ни одной строки, где кол-во × цена = сумма"})}

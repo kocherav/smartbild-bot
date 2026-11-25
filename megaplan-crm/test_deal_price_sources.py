@@ -60,5 +60,23 @@ class Proposals(unittest.TestCase):
         self.assertIn('обычная наценка на этот вид 1.35', p['mark'])
 
 
+    def test_brand_of_the_document_reaches_rows_without_it(self):
+        """Deal 907: «SV Активный бесшумный клапан» in the Liechty КП stayed at 0 ₽."""
+        doc = {'kind': 'kp', 'discount': 35, 'supplier': 'Хайпресс', 'brand': 'Liechty', 'currency': 'RUB', 'file': 'D4055.pdf',
+               'rows': [{'name': 'SV Активный бесшумный клапан', 'qty': 3, 'unit': 'шт', 'price': 1000, 'amount': 3000}]}
+        ledger = [{'offer_row_id': '51', 'offer_id': '61', 'name': 'Активный бесшумный клапан Liechty SV',
+                   'sell_price': 0, 'cost_material': 0}]
+        p = dps.propose(ledger, [doc], history=[], ratios={})['proposals'][0]
+        self.assertEqual((1000, 650.0), (p['sell_price'], p['cost_material']))
+
+    def test_past_deals_answer_when_documents_and_catalogs_do_not(self):
+        history = [{'name': 'Диффузор щелевой Invisiline AESTH-40-B-2000-2', 'price': 52925, 'cost': 30000,
+                    'source': 'сделки', 'ref': 'номенклатура 15000', 'order': 15000}]
+        ledger = [{'offer_row_id': '8', 'offer_id': '18', 'name': 'Диффузор щелевой Invisiline AESTH-40-B-2000-2',
+                   'sell_price': 0, 'cost_material': 0}]
+        p = dps.propose(ledger, [], history=history, ratios={})['proposals'][0]
+        self.assertEqual((52925, 30000), (p['sell_price'], p['cost_material']))
+
+
 if __name__ == '__main__':
     unittest.main()

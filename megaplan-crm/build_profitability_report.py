@@ -186,9 +186,19 @@ def compute_profitability(entries, procurement=None, installation=None, deal_id=
             # material value from Megaplan.  Do not let it re-enter the report
             # after the component values above have been deliberately zeroed.
             purchase = {}
-        material_basis = purchase.get("planned_material_basis", material["basis"])
-        plan_material_unit=float(purchase.get("planned_unit_cost", material["unit"]))
-        plan_material=float(purchase.get("planned_total", plan_material_unit*qty))
+        # 25.11 (deal 907): the procurement snapshot was taken while 12 rows had no cost; its 0 kept
+        # overriding the live Megaplan cost after it was filled. A snapshot with a real plan still
+        # decides (the agreed plan); an empty snapshot never hides a live cost.
+        snapshot_unit = float(purchase.get("planned_unit_cost") or 0)
+        snapshot_total = float(purchase.get("planned_total") or 0)
+        if (snapshot_unit > 0 or snapshot_total > 0) or not float(material["unit"] or 0) > 0:
+            material_basis = purchase.get("planned_material_basis", material["basis"])
+            plan_material_unit = float(purchase.get("planned_unit_cost", material["unit"]) or 0)
+            plan_material = float(purchase.get("planned_total", plan_material_unit * qty) or 0)
+        else:
+            material_basis = material["basis"]
+            plan_material_unit = float(material["unit"])
+            plan_material = float(material["line_total"])
         plan_work_unit = installation_row.get('rate',purchase.get("planned_unit_work", work["unit"]))
         invoiced_qty = min(float(purchase.get("invoiced_qty") or 0), float(qty or 0))
         invoice_plan_total = float(purchase.get("invoice_plan_total") or 0)

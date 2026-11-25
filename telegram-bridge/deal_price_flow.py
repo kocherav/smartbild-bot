@@ -82,7 +82,8 @@ def add_file(io, chat_id, state, path, python):
     docs = list(state.get("price_docs") or [])
     doc = {"path": path, "file": read.get("file"), "kind": read.get("kind"), "supplier": read.get("supplier"),
            "rows": read.get("rows") or [], "discount": None, "currency": read.get("currency") or "RUB",
-           "variants": read.get("variants") or [], "rejected": read.get("rejected") or []}
+           "variants": read.get("variants") or [], "rejected": read.get("rejected") or [],
+           "brand": read.get("brand") or ""}
     docs.append(doc)
     if not doc["rows"]:
         io.update(chat_id, pending="deal_price_docs", price_docs=docs)
