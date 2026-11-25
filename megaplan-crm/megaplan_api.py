@@ -1259,9 +1259,21 @@ if __name__ == "__main__":
                     applied.append({"offer_row_id": str(p["offer_row_id"]), "name": p.get("name"), **changed,
                                     "mark": p.get("mark", "")})
             after = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
+            # TASK-20261125-03: the deal's embedded Offer lags behind POST /offer for a while. The cost is
+            # confirmed on the Offer itself (a few reads with a pause), never on the stale embedded copy.
+            def offer_cost(offer_id):
+                for attempt in range(4):
+                    data = api._call("GET", f"/offer/{offer_id}")["data"]
+                    from financial_amounts import crm_money_in_main
+                    value = crm_money_in_main(data.get("Category1000045CustomFieldTsenaZakupki")) or 0
+                    if value:
+                        return value
+                    time.sleep(2 * (attempt + 1))
+                return 0
+            ids = {str(p.get("offer_row_id")): str(p.get("offer_id")) for p in spec.get("rows") or []}
             mismatches = [a["name"] for a in applied
                           if ("sell_price" in a and abs((after[a["offer_row_id"]].get("list_price") or 0) - a["sell_price"]) > 0.01)
-                          or ("cost_material" in a and abs((after[a["offer_row_id"]].get("cost_material") or 0) - a["cost_material"]) > 0.01)]
+                          or ("cost_material" in a and abs(offer_cost(ids[a["offer_row_id"]]) - a["cost_material"]) > 0.01)]
             comment_id = None
             if applied:
                 lines = [f"• {a['name']}: " + ", ".join(

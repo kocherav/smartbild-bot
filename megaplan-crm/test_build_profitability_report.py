@@ -90,6 +90,15 @@ class ProfitabilityPlanFactTest(unittest.TestCase):
         self.assertEqual(40000, row["remaining_plan_material"])
         self.assertEqual(145000, cost)
 
+    def test_empty_procurement_snapshot_never_hides_the_live_cost(self):
+        """Deal 907, 25.11: 12 rows had their cost written in Megaplan; the snapshot from before kept 0."""
+        entries = [{"offer_row_id": "8346", "name": "Блок FXSQ20A", "qty": 1,
+                    "sell_price": 268154.61, "cost_material": 174352.80, "cost_work": 0}]
+        procurement = {"8346": {"planned_unit_cost": 0, "planned_total": 0.0, "planned_material_basis": "unit"}}
+        rows, _, cost, _, _ = report.compute_profitability(entries, procurement)
+        self.assertEqual(174352.80, rows[0]["plan_material"])
+        self.assertEqual(174352.80, cost)
+
     def test_line_total_is_never_multiplied_again_when_report_qty_differs(self):
         entries = [{"offer_row_id": "x", "name": "Трасса", "qty": 158,
                     "sell_price": 2800, "cost_material": 135000, "cost_work": 0}]
