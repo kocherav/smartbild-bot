@@ -132,8 +132,8 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
         if not hit and history:
             # 25.11: Invisiline AESTH was in our past deals but the document route never looked there.
             hit = price_history.price_from_history(name, history, ratios, fitting_markup)
-        if not hit and price_history.kind(name) in price_history.FITTINGS:
-            hit = price_history.fitting_estimate(name, history + doc_rows, fitting_markup)
+        if not hit and price_history.kind(name) in price_history.AREA_PRICED:
+            hit = price_history.fitting_estimate(name, history + doc_rows, fitting_markup, ratios)
         if not hit:
             skipped.append({"name": name, "reason": "нет похожей строки в документах, прайсах Daichi/Hogart, прошлых сделках и счетах; не фасонка"})
             continue

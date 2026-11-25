@@ -30,5 +30,20 @@ class Areas(unittest.TestCase):
         self.assertIsNone(fa.price('Отвод 90° Ø125', fa.rates(rows[:2])))
         self.assertEqual({}, fa.rates([{**r, 'ref': 'Галвент'} for r in rows]))
 
+    def test_ducts_and_dampers_are_priced_by_area_too(self):
+        """Deal 907: four rectangular ducts and a damper stayed at 0 ₽ while every fitting got a price."""
+        import price_history as ph
+        names = [f'Воздуховод(Пр) - {a}x{b} - 1250' for a, b in ((300, 400), (300, 500), (400, 600), (250, 200))] + \
+                [f'Отвод(Кр) - 90 - {d}' for d in (100, 125, 160)]
+        rows = [{'name': n, 'cost': 1200 * fa.area(n), 'ref': 'Вентрешения', 'price': None, 'source': 'счёт поставщика',
+                 'order': 0} for n in names]
+        sell, cost, mark = ph.fitting_estimate('Воздуховод оцинкованный 0,5 мм, 400×150 мм, Галвент', rows, 3.0,
+                                               {'группа:воздуховод': 1.5})
+        self.assertAlmostEqual(1.1 * 1200, cost, places=0)            # perimeter 1.1 m² per metre
+        self.assertAlmostEqual(cost * 1.5, sell, places=1)
+        self.assertIn('за 1 м', mark)
+        self.assertIsNotNone(ph.fitting_estimate('Дроссель-клапан оцинкованный ДК Ø125 мм, Галвент', rows, 3.0, {}))
+
+
 if __name__ == '__main__':
     unittest.main()
