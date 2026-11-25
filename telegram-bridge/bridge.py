@@ -4767,7 +4767,15 @@ def deal_price_io(token):
         except Exception as exc:  # noqa: BLE001 — shown to the owner; the deal is re-read before any retry
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    def read_model(path):
+        import supplier_document_model
+        # A scanned 16-page КП needs the model to read the pages itself — more than the 2 minutes of a short invoice.
+        answer = ask_fresh_document_model(supplier_document_model.prompt(path, extract_document_text_for_model(path)),
+                                          timeout=420)
+        return supplier_document_model.parse_answer(answer)
+
     return types.SimpleNamespace(
+        read_model=read_model,
         send=lambda chat_id, text, keyboard=None: send_message(token, chat_id, text, keyboard),
         update=update_deal_ui_state, deal_keyboard=DEAL_ACTIONS_KEYBOARD, state=current_deal_ui_state,
         send_table=send_table, apply_rows=apply_rows)
@@ -10363,11 +10371,11 @@ def ask_claude(session_id, prompt):
     return out
 
 
-def ask_fresh_document_model(prompt):
+def ask_fresh_document_model(prompt, timeout=120):
     """Transactional documents stay isolated from the general conversation."""
     model_recovery.begin_request(MODEL_FAILURES_FILE, _model_chat_id(), prompt, "document")
     try:
-        result = _run_codex("", prompt, timeout=120)
+        result = _run_codex("", prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         return _model_failure(prompt, "timeout", "document")
     except OSError:
@@ -11637,11 +11645,11 @@ def main():
                 send_message(token,chat_id,f"✅ Исправленная ведомость принята. Изменений: {len(changes)}. Проверьте итоговый файл перед утверждением.",INSTALLATION_DRAFT_KEYBOARD)
                 send_document(token,chat_id,result["result"]["workbook"],"Актуальный черновик монтажной ведомости",f"Монтажная ведомость - сделка {report_state.get('installation_deal_id')}.xlsx")
                 return
-            if report_pending in ("deal_price_docs", "deal_price_kind", "deal_price_discount"):
+            if str(report_pending or "").startswith("deal_price_"):
                 if report_pending != "deal_price_docs":
                     send_message(token, chat_id, "Сначала ответьте на вопрос по предыдущему файлу (кнопкой выше).")
                     return
-                send_message(token, chat_id, f"📥 {original_name or 'Файл'} получен, читаю строки с ценами…")
+                send_message(token, chat_id, f"📥 {original_name or 'Файл'} получен, читаю таблицу (скан на много страниц — до 5–7 минут)…")
                 run_background_job(lambda: deal_price_flow.add_file(deal_price_io(token), chat_id, report_state,
                                                                     source_document_path, REPORT_VENV_PY),
                                    token, chat_id, operation="сделка:цены-файл", allow_stale=True)

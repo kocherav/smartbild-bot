@@ -51,9 +51,45 @@ def seller_is_us(text, own=None):
     return any(inn in block.group(0) for inn in own)
 
 
+HEADER_QTY = re.compile(r"кол[-.\s]?во|количеств|\bкол\b|qty", re.I)
+HEADER_PRICE = re.compile(r"цена|стоимость\s+ед|price", re.I)
+
+
+def price_before_qty(text):
+    """True when the table header puts «Цена» left of «Кол-во» (24.11, КП Liechty: the bot read
+    the quantity as the price — qty × price = amount is true both ways)."""
+    for line in (text or "").splitlines()[:200]:
+        q, p = HEADER_QTY.search(line), HEADER_PRICE.search(line)
+        if q and p:
+            return p.start() < q.start()
+    return False
+
+
+CURRENCY_SIGNS = (("USD", re.compile(r"\$|\busd\b|долл|у\.\s?е\.", re.I)),
+                  ("EUR", re.compile(r"€|\beur\b|евро", re.I)))
+
+
+def _whole(value):
+    return abs(value - round(value)) < 1e-9
+
+
+def header_seen(text):
+    return any(HEADER_QTY.search(l) and HEADER_PRICE.search(l) for l in (text or "").splitlines()[:200])
+
+
+def currency(text):
+    """'USD' / 'EUR' when the document says so, else 'RUB' (24.11: a dollar КП was read as roubles)."""
+    for code, sign in CURRENCY_SIGNS:
+        if sign.search(text or ""):
+            return code
+    return "RUB"
+
+
 def rows(text):
-    """[{name, qty, unit, price, amount}] — only rows whose qty × price equals the amount."""
+    """[{name, qty, unit, price, amount}] — only rows whose qty × price equals the amount.
+    Which of the two factors is the price comes from the table header (Цена left of Кол-во or not)."""
     found = []
+    swap = price_before_qty(text)
     for raw in (text or "").splitlines():
         line = raw.replace("|", "  ").strip()
         if len(line) < 12 or re.search(r"итого|всего|в т\.?\s?ч|ндс\s*\(|к оплате|сумма прописью", line, re.I):
@@ -65,6 +101,8 @@ def rows(text):
         if not hit:
             continue
         start_qty, qty, price, amount, between = hit
+        if swap or (not _whole(qty) and _whole(price) and not header_seen(text)):
+            qty, price = price, qty          # without a header: a fractional «quantity» beside a whole «price»
         head = line[:start_qty]
         head = re.sub(r"^\s*\d{1,3}[.)]?\s+", "", head)               # row number
         unit = re.search(rf"\b{UNITS}\s*$", head, re.I)
