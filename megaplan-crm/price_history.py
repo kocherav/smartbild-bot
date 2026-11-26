@@ -397,6 +397,8 @@ def fitting_estimate(name, history, markup=FITTING_MARKUP, ratios=None):
     import fitting_area
     if fitting_area.kind_of(name) is None or kind(name) not in AREA_PRICED or is_service(name):
         return None
+    if re.search(r"гибк|изолир|полипроп|пвх|пластик", str(name).lower()):
+        return None        # 26.11: a flexible insulated duct is not galvanised sheet metal
     if kind(name) == "воздуховод":
         duct_ratio, _ = ratio_for(name, ratios)
         markup = duct_ratio or markup

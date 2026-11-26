@@ -90,5 +90,14 @@ class Proposals(unittest.TestCase):
         self.assertIn('вместо прежней', p['mark'])
 
 
+    def test_an_area_estimate_is_never_shown_as_an_invoice_cost(self):
+        invoice = {'kind': 'invoice', 'supplier': 'ООО Вентрешения', 'file': 'x.xls', 'currency': 'RUB',
+                   'rows': [{'name': f'Отвод(Кр) - 90 - {d}', 'qty': 1, 'unit': 'шт', 'price': p, 'amount': p}
+                            for d, p in ((100, 150), (160, 210), (200, 260))]}
+        ledger = [{'offer_row_id': '1', 'offer_id': '2', 'name': 'Отвод оцинкованный 45°, Ø125 мм', 'sell_price': 330,
+                   'cost_material': 208}]
+        self.assertEqual([], dps.propose(ledger, [invoice], history=[], ratios={})['proposals'])
+
+
 if __name__ == '__main__':
     unittest.main()

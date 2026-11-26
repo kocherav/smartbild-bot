@@ -11458,6 +11458,9 @@ def main():
         )
 
     def process_business_message(msg, chat_id, is_owner, is_installer):
+        # 26.11 (счёт Вентрешения через «📥 Получить счёт»): only the text branch set it, the file branch
+        # read it after the model answered → UnboundLocalError → «техническая ошибка».
+        raw_user_text = (msg.get("caption") or msg.get("text") or "").strip()
         from company_cards import handle_request as handle_company_card_request
         if msg.get("text") and handle_company_card_request(
                 msg["text"], is_owner,

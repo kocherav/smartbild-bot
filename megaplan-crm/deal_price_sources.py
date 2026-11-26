@@ -108,6 +108,19 @@ def _zero(value):
         return True
 
 
+def invoice_cost(name, invoice_rows):
+    """(None, cost, mark) only for a real pair in a supplier invoice — never an area estimate (26.11: an
+    estimate was shown as «закупка по счёту»). Duct pieces are converted per metre."""
+    match = price_history.best_match(name, invoice_rows) if invoice_rows else None
+    if not match or not match.get("cost"):
+        return None
+    cost, ref = match["cost"], match["ref"]
+    length = price_history.duct_length(name, match["name"], match.get("unit", ""))
+    if length:
+        cost, ref = round(cost * 1000.0 / length, 2), f"{ref}, пересчитано за 1 м из штуки L={length:g} мм"
+    return (None, cost, f"проверить: «{match['name']}», {ref}")
+
+
 def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False, fitting_markup=3.0, catalog=None,
             rate=None):
     """Proposals for deal rows: the owner's documents first, then supplier catalogs (Daichi/Hogart,
@@ -123,7 +136,7 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
         needs_cost = _zero(row.get("cost_material"))
         # 26.11 (deal 907, счёт Вентрешения): a real supplier invoice replaces an estimated cost (area,
         # similar deals) — the owner sent it for exactly that. Only the cost; a set sale price stays.
-        invoice_hit = price_history.price_from_history(name, invoice_rows, ratios, fitting_markup) if invoice_rows else None
+        invoice_hit = invoice_cost(name, invoice_rows)
         if not needs_price and not needs_cost and not invoice_hit:
             continue
         if invoice_hit and not needs_price and not needs_cost:
