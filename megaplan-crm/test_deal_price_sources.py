@@ -78,5 +78,17 @@ class Proposals(unittest.TestCase):
         self.assertEqual((52925, 30000), (p['sell_price'], p['cost_material']))
 
 
+    def test_supplier_invoice_replaces_an_estimated_cost_but_not_the_sale_price(self):
+        """26.11, deal 907: the Вентрешения invoice offered only one row — every fitting already had an estimate."""
+        invoice = {'kind': 'invoice', 'supplier': 'ООО Вентрешения', 'file': 'Счет_ПКБ_00005189.xls', 'currency': 'RUB',
+                   'rows': [{'name': 'Отвод(Кр) - 90 - 125', 'qty': 11, 'unit': 'шт', 'price': 260, 'amount': 2860}]}
+        ledger = [{'offer_row_id': '20', 'offer_id': '30', 'name': 'Отвод оцинкованный 90°, Ø125 мм, Галвент',
+                   'sell_price': 462.98, 'cost_material': 291.55}]
+        p = dps.propose(ledger, [invoice], history=[], ratios={})['proposals'][0]
+        self.assertEqual((260, True), (p['cost_material'], p['replace_cost']))
+        self.assertNotIn('sell_price', p)
+        self.assertIn('вместо прежней', p['mark'])
+
+
 if __name__ == '__main__':
     unittest.main()

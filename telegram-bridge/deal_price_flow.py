@@ -250,13 +250,18 @@ def summary(deal_id, proposals, skipped, fitting_markup):
              + (f" (по площади — {area}, фасонка +{round((fitting_markup - 1) * 100):g}%)" if area else "") + "."]
     for p in proposals[:25]:
         parts = ([f"{p['sell_price']:,.2f} ₽".replace(",", " ")] if "sell_price" in p else []) + \
-                ([f"закупка {p['cost_material']:,.2f} ₽".replace(",", " ")] if "cost_material" in p else [])
+                ([f"закупка {p['cost_material']:,.2f} ₽".replace(",", " ")
+                  + (f" (была {float(p.get('old_cost') or 0):,.2f})".replace(",", " ") if p.get("replace_cost") else "")]
+                 if "cost_material" in p else [])
         lines.append(f"• {p['name']} — {', '.join(parts)}")
     if len(proposals) > 25:
         lines.append(f"… ещё {len(proposals) - 25} — в таблице.")
     if skipped:
         lines.append(f"Без предложения: {len(skipped)} (в таблице с причиной).")
-    lines.append(f"В сделку ничего не записано. «{APPLY}» — записать; цены, которые уже стоят, не трогаю.")
+    replaced = sum(1 for p in proposals if p.get("replace_cost"))
+    if replaced:
+        lines.append(f"Закупка по счёту поставщика заменит прежнюю (расчётную) в {replaced} строках.")
+    lines.append(f"В сделку ничего не записано. «{APPLY}» — записать; уже стоящие цены продажи не трогаю.")
     return "\n".join(lines)
 
 

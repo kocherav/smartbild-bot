@@ -1252,7 +1252,8 @@ if __name__ == "__main__":
                     else:
                         api.update_offer_row_price(p["offer_row_id"], float(p["sell_price"]))
                         changed["sell_price"] = float(p["sell_price"])
-                if p.get("cost_material") is not None and not (current.get("cost_material") or 0):
+                if p.get("cost_material") is not None and (p.get("replace_cost") or not (current.get("cost_material") or 0)):
+                    # 26.11: a supplier invoice's cost replaces an estimate — only when the owner applied it.
                     api.update_offer_cost(p["offer_id"], cost_material=float(p["cost_material"]))
                     changed["cost_material"] = float(p["cost_material"])
                 if changed:
