@@ -56,6 +56,18 @@ class ProcurementPaymentTest(unittest.TestCase):
         self.assertEqual(10, status["source_usage"]["1:sku"]["qty"])
         self.assertFalse(pw.prepare_invoice_allocation(spec)["ok"])
 
+    def test_deal_unit_differs_from_invoice_unit(self):
+        """26.11, deal 907: «ИзоМЕ 127 х 10» 2 шт in the invoice = 20 м in the deal — refused as «больше количества»."""
+        doc = {"supplier_inn": "7743795913", "buyer_inn": "7743926877", "number": "ПКБ-00005189",
+               "date": "26.11.2026", "total": 2380}
+        self.write(self.registry, {"deals": {}, "invoices": [], "unallocated_stock": []})
+        spec = {"invoice": doc, "updates": [{
+            "source_line_key": "1", "source_name": "Воздуховод гибкий изолированный ИзоМЕ 127 х 10",
+            "source_qty": 2, "source_total": 2380, "qty_used": 20, "material_cost_used": 2380}]}
+        self.assertTrue(pw.prepare_invoice_allocation(spec)["ok"])
+        over = {"invoice": doc, "updates": [{**spec["updates"][0], "material_cost_used": 2500}]}
+        self.assertFalse(pw.prepare_invoice_allocation(over)["ok"])
+
     @mock.patch.object(pw, "snapshot")
     def test_exact_expense_matches_supplier_invoice(self, snapshot):
         self.write(self.registry, {"deals": {}, "invoices": [{
