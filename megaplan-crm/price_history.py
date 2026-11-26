@@ -353,13 +353,22 @@ def rect_duct_estimate(name, history, ratios=None):
             continue
         ra, rb = section(r["name"])
         extra = [n for n in numbers(r["name"]) if n >= 500 and n not in (ra, rb)]
-        unit = str(r.get("unit") or "").lower()
-        length = extra[0] if extra else (RECT_PIECE_MM if unit.startswith("шт") or r["source"] == "сделки" else 1000)
+        unit = str(r.get("unit") or "").lower().replace(" ", "")
+        # TASK-20261126-03 (счёт Вентрешения): rectangular ducts came out 3–4× too dear — past deal rows carry no
+        # unit, and a price per m² was read as a price per 1.25 m piece. Only rows with a known unit count.
+        if not unit:
+            continue
         perimeter = 2 * (ra + rb) / 1000
+        if unit.startswith(("м2", "м²", "кв")):
+            per_m2 = 1.0                      # already ₽ per m² of surface
+            factor = lambda v: v
+        else:
+            length = extra[0] if extra else (RECT_PIECE_MM if unit.startswith("шт") else 1000)
+            factor = lambda v, L=length, P=perimeter: v * 1000 / L / P
         if r["price"]:
-            sell_rates.append(r["price"] * 1000 / length / perimeter)
+            sell_rates.append(factor(r["price"]))
         if r["cost"]:
-            cost_rates.append(r["cost"] * 1000 / length / perimeter)
+            cost_rates.append(factor(r["cost"]))
     perimeter = 2 * (a + b) / 1000
     if len(sell_rates) >= 3:
         rate = statistics.median(sell_rates)

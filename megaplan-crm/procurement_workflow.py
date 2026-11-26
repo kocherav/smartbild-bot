@@ -354,6 +354,7 @@ def allocation_source_lines(spec):
                       "offer_id": row.get("offer_id"), "source_sku": row.get("source_sku") or "",
                       "source_name": row.get("source_name") or "", "source_qty": float(row.get("source_qty") or 0),
                       "source_total": float(row.get("source_total") or 0), "qty_used": float(row.get("qty_used") or 0),
+                      "source_qty_used": float(row.get("source_qty_used") or 0),
                       "amount_used": float(row.get("material_cost_used") or 0) + float(row.get("work_cost_used") or 0),
                       "foreign_source_total": row.get("foreign_source_total"),
                       "foreign_amount_used": (float(row.get("foreign_material_cost_used") or 0) +
@@ -397,7 +398,7 @@ def invoice_source_usage(data, document_key):
             continue
         for allocation in invoice.get("allocations") or []:
             for line in allocation.get("source_lines") or []:
-                add(line.get("key"), line.get("qty_used"), line.get("amount_used"))
+                add(line.get("key"), line.get("source_qty_used") or line.get("qty_used"), line.get("amount_used"))
     for stock in data.get("unallocated_stock") or []:
         if stock.get("document_key") != document_key:
             continue
@@ -434,7 +435,12 @@ def prepare_invoice_allocation(spec):
         if line["key"] in legacy_keys:
             return {"ok": False, "error": f"строка счёта уже распределена: {line['key']}"}
         used = old_usage.get(line["key"], {"qty": 0, "amount": 0})
-        if line["source_qty"] and used["qty"] + line["qty_used"] > line["source_qty"] + 1e-9:
+        # 26.11 (счёт Вентрешения, сделка 907): «ИзоМЕ 127 х 10» — 2 шт по 10 м в счёте, 20 м в сделке. qty_used is
+        # in the deal's unit; the invoice side is compared in its own unit — given, or by the share of the sum.
+        invoice_qty_used = line.get("source_qty_used") or (
+            line["amount_used"] * line["source_qty"] / line["source_total"]
+            if line["source_qty"] and line["source_total"] and line["amount_used"] else line["qty_used"])
+        if line["source_qty"] and used["qty"] + invoice_qty_used > line["source_qty"] + 1e-6:
             return {"ok": False, "error": f"по строке {line['key']} распределяется больше количества, чем в счёте"}
         if line["source_total"] and used["amount"] + line["amount_used"] > line["source_total"] + 0.01:
             return {"ok": False, "error": f"по строке {line['key']} распределяется сумма больше суммы строки"}

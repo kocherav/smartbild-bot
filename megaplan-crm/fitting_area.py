@@ -21,15 +21,24 @@ import math
 import re
 import statistics
 
-DEFAULT_TRANSITION_M = 0.3
-NIPPLE_M = 0.1
+# Calibrated 26.11 on the Вентрешения invoice ПКБ-00005189, which states each item's m² (area within 7 %):
+DEFAULT_TRANSITION_M = 0.3        # rectangular ones; round-to-round are shorter:
+ROUND_TRANSITION_M = 0.22
+TRANSITION_COLLAR = 0.065         # flanges/collars: × the larger perimeter (rectangular transitions)
+NIPPLE_M = 0.08
 RIM_M = 0.03
+ELBOW_ROUND_R = 1.8               # × D — centre-line radius of round elbows
+ELBOW_RECT_R = 0.15               # + A/2 — rectangular elbows («р.ш.150»)
+ELBOW_ENDS_ROUND = 0.05           # straight ends, m (both together)
+ELBOW_ENDS_RECT = 0.10
 
 
 def _sizes(name):
     """('rect', a, b) / ('round', d) groups in order of appearance, in metres."""
     text = re.sub(r"\([^()]*\)", " ", str(name or "").lower().replace("ё", "е"))
     text = re.sub(r"(?<=\d),(?=\d)", ".", text)
+    # «L=1250» is a length, «р.ш.150» a bend parameter, «исп.5» a version — none of them is a section.
+    text = re.sub(r"\bl\s*=\s*\d+|р\.?\s*ш\.?\s*\d+|исп\.?\s*\d+", " ", text)
     groups = []
     for m in re.finditer(r"(\d{2,4})\s*[x×х*]\s*(\d{2,4})|(?:[øфd⌀]\s*)?(\d{2,4})(?!\s*[x×х*°])", text):
         if m.group(1):
@@ -113,8 +122,14 @@ def kind_of(name):
     return None
 
 
+def _length(name):
+    m = re.search(r"\bl\s*=\s*(\d{2,5})", str(name or "").lower())
+    return int(m.group(1)) / 1000 if m else None
+
+
 def area(name, length_m=None):
     """m² of metal for a fitting named like «Отвод 90° Ø125», «Переход 400×150–300×150»; None if unknown."""
+    length_m = length_m or _length(name)
     vr = parse_vr(name)
     if vr:
         k, g, angle = vr["kind"], vr["groups"], vr["angle"]
@@ -129,11 +144,18 @@ def area(name, length_m=None):
     if k == "воздуховод":
         return round(_perimeter(first) * (length_m or 1.0), 4)
     if k == "отвод":
-        radius = first[1] if first[0] == "round" else first[1] / 2 + 0.1
-        return round(_perimeter(first) * radius * math.radians(angle), 4)
+        if first[0] == "round":
+            radius, ends = first[1] * ELBOW_ROUND_R, ELBOW_ENDS_ROUND
+        else:
+            radius, ends = first[1] / 2 + ELBOW_RECT_R, ELBOW_ENDS_RECT
+        return round(_perimeter(first) * (radius * math.radians(angle) + ends), 4)
     if k == "переход":
         second = g[1] if len(g) > 1 else first
-        return round((_perimeter(first) + _perimeter(second)) / 2 * (length_m or DEFAULT_TRANSITION_M), 4)
+        mean = (_perimeter(first) + _perimeter(second)) / 2
+        if first[0] == "round" and second[0] == "round":
+            return round(mean * (length_m or ROUND_TRANSITION_M), 4)
+        return round(mean * (length_m or DEFAULT_TRANSITION_M)
+                     + max(_perimeter(first), _perimeter(second)) * TRANSITION_COLLAR, 4)
     if k == "тройник":
         branch = g[1] if len(g) > 1 else first
         main_d, branch_d = _span(first), _span(branch)
@@ -178,7 +200,9 @@ def rates(rows, supplier_words=("вентреш",)):
         k, a = kind_of(r["name"]), area(r["name"])
         if not k or not a:
             continue
-        found.setdefault((k, shape(r["name"])), []).append((a, r["cost"] / a, r["name"]))
+        unit = str(r.get("unit") or "").lower().replace(" ", "")
+        rate = r["cost"] if unit.startswith(("м2", "м²", "кв")) else r["cost"] / a   # a price per m² is the rate
+        found.setdefault((k, shape(r["name"])), []).append((a, rate, r["name"]))
     return found
 
 

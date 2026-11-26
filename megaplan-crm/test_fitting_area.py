@@ -6,12 +6,20 @@ import fitting_area as fa
 
 
 class Areas(unittest.TestCase):
-    def test_development_formulas(self):
-        self.assertAlmostEqual(math.pi * 0.125 * 0.125 * math.pi / 2, fa.area('Отвод 90° Ø125'), places=3)
-        self.assertAlmostEqual(2 * 0.55 * 0.3 * math.pi / 4, fa.area('Отвод 45°, 400×150 мм'), places=3)
-        self.assertAlmostEqual((2 * 0.55 + 2 * 0.45) / 2 * 0.3, fa.area('Переход 400×150–300×150 мм'), places=3)
-        self.assertAlmostEqual(math.pi * 0.16 * 0.1, fa.area('Ниппель Ø160'), places=3)
-        self.assertAlmostEqual(0.3 * 0.15 + 0.9 * 0.03, fa.area('Заглушка 300×150'), places=3)
+    def test_areas_match_the_suppliers_own_m2(self):
+        """26.11: the Вентрешения invoice ПКБ-00005189 states each item's m² — every formula within 8 %."""
+        supplier = [('Воздуховод Ф 125', 0.393, 1.0), ('Воздуховод 200 х 100 L=1250', 0.75, None),
+                    ('Воздуховод 400 х 150 L=1250', 1.375, None), ('Дроссель-клапан Ф 125', 0.103, None),
+                    ('Заглушка 300 х 150', 0.0725, None), ('Отвод круглый 45 Ф 125', 0.09, None),
+                    ('Отвод круглый 90 Ф 125', 0.16, None), ('Отвод круглый 45 Ф 160', 0.14, None),
+                    ('Отвод круглый 90 Ф 160', 0.25, None), ('Отвод 45 400 х 150 р.ш.150', 0.4117, None),
+                    ('Отвод 90 400 х 150 р.ш.150', 0.71, None), ('Переход круглый Ф 160 /Ф 125', 0.1, None),
+                    ('Переход Ф 125 / 200 х 100 L=300', 0.195, None), ('Переход Ф 125 / 300 х 100 L=300', 0.235, None),
+                    ('Переход 400х150/300х150 L=300', 0.36, None), ('Тройник круглый Ф 125 /Ф 125', 0.205, None),
+                    ('Тройник круглый Ф 160 /Ф 160', 0.28, None), ('Ниппель Ф 125', 0.03, None), ('Ниппель Ф 160', 0.04, None)]
+        for name, m2, length in supplier:
+            with self.subTest(name=name):
+                self.assertLess(abs(fa.area(name, length) / m2 - 1), 0.08)
 
     def test_ventresheniya_names(self):
         self.assertEqual(fa.area('Отвод 90° Ø125'), fa.area('Отвод(Кр) - 90 - 125 (оц. ст. 0.50)'))
