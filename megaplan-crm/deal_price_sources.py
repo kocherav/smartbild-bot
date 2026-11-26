@@ -108,19 +108,44 @@ def _zero(value):
         return True
 
 
+def invoice_cost(name, invoice_rows):
+    """(None, cost, mark) only for a real pair in a supplier invoice — never an area estimate (26.11: an
+    estimate was shown as «закупка по счёту»). Duct pieces are converted per metre."""
+    match = price_history.best_match(name, invoice_rows) if invoice_rows else None
+    if not match or not match.get("cost"):
+        return None
+    cost, ref = match["cost"], match["ref"]
+    length = price_history.duct_length(name, match["name"], match.get("unit", ""))
+    if length:
+        cost, ref = round(cost * 1000.0 / length, 2), f"{ref}, пересчитано за 1 м из штуки L={length:g} мм"
+    return (None, cost, f"проверить: «{match['name']}», {ref}")
+
+
 def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False, fitting_markup=3.0, catalog=None,
             rate=None):
     """Proposals for deal rows: the owner's documents first, then supplier catalogs (Daichi/Hogart,
     by model — owner 24.11 «неужели цены на блоки Дайкин нельзя найти в API Daichi»), then
     fittings by area (rates from history + documents)."""
     doc_rows = [r for d in documents for r in history_rows(d, rate)]
+    invoice_rows = [r for d in documents if d.get("kind") == "invoice" for r in history_rows(d, rate)]
     history = list(history or [])
     proposals, skipped = [], []
     for row in ledger:
         name = row.get("name") or ""
         needs_price = _zero(row.get("sell_price")) or overwrite_priced
         needs_cost = _zero(row.get("cost_material"))
-        if not needs_price and not needs_cost:
+        # 26.11 (deal 907, счёт Вентрешения): a real supplier invoice replaces an estimated cost (area,
+        # similar deals) — the owner sent it for exactly that. Only the cost; a set sale price stays.
+        invoice_hit = invoice_cost(name, invoice_rows)
+        if not needs_price and not needs_cost and not invoice_hit:
+            continue
+        if invoice_hit and not needs_price and not needs_cost:
+            cost = invoice_hit[1]
+            if cost and abs(cost - float(row.get("cost_material") or 0)) > max(1.0, cost * 0.01):
+                proposals.append({"offer_row_id": row.get("offer_row_id"), "offer_id": row.get("offer_id"), "name": name,
+                                  "unit": row.get("unit"), "qty": row.get("qty"), "old_price": row.get("sell_price"),
+                                  "old_cost": row.get("cost_material"), "cost_material": cost, "replace_cost": True,
+                                  "mark": "закупка по счёту поставщика вместо прежней: " + invoice_hit[2]})
             continue
         hit = price_history.price_from_history(name, doc_rows, ratios, fitting_markup) if doc_rows else None
         if not hit and catalog:
@@ -145,6 +170,8 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
             proposal["sell_price"] = sell
         if needs_cost and cost:
             proposal["cost_material"] = cost
+        elif invoice_hit and invoice_hit[1]:
+            proposal["cost_material"], proposal["replace_cost"] = invoice_hit[1], True
         if "sell_price" in proposal or "cost_material" in proposal:
             proposals.append(proposal)
         else:

@@ -104,7 +104,7 @@ def rows(text):
         if swap or (not _whole(qty) and _whole(price) and not header_seen(text)):
             qty, price = price, qty          # without a header: a fractional «quantity» beside a whole «price»
         head = line[:start_qty]
-        head = re.sub(r"^\s*\d{1,3}[.)]?\s+", "", head)               # row number
+        head = re.sub(r"^\s*\d{1,3}(?:[.,]0)?[.)]?\s+", "", head)    # row number; Excel gives «1.0» (26.11)
         unit = re.search(rf"\b{UNITS}\s*$", head, re.I)
         if unit:
             head = head[:unit.start()]
@@ -131,7 +131,9 @@ def _consistent(tokens, line=""):
             for i in range(j - 1, -1, -1):
                 qty = values[i][1]
                 if 0 < qty <= 100000 and price > 0 and abs(qty * price - amount) <= max(1.0, amount * 0.01):
-                    if qty == amount or price == amount:
+                    # 26.11: «1 шт × 1100 = 1100» is a normal row; only a factor of 1 beside an equal
+                    # amount is ambiguous when both factors equal the amount.
+                    if qty == amount and price == amount:
                         continue
                     between = line_of[0][values[i][0]:values[j][0]] if line_of else ""
                     return values[i][0], qty, price, amount, between

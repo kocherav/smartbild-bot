@@ -32,6 +32,16 @@ class InvoiceRows(unittest.TestCase):
         self.assertTrue(il.seller_is_us(ours))
 
 
+    def test_excel_row_numbers_and_single_pieces(self):
+        """26.11, счёт Вентрешения (.xls): «1.0» stuck to names and rows of 1 шт were dropped (22 of 27 read)."""
+        text = """Счет на оплату № ПКБ-00005189
+№ | Товары | Кол-во | Ед. | Цена | Сумма
+2.0 | Воздуховод Ф 125 | 30.0 | м | 390.0 | 11700.0
+4.0 | Воздуховод 300 х 150 L=1250 | 1.0 | шт | 1100.0 | 1100.0"""
+        self.assertEqual([('Воздуховод Ф 125', 30.0, 390.0), ('Воздуховод 300 х 150 L=1250', 1.0, 1100.0)],
+                         [(r['name'], r['qty'], r['price']) for r in il.rows(text)])
+
+
 class FreshestIndex(unittest.TestCase):
     def test_the_newer_of_the_two_indexes_is_read(self):
         folder = tempfile.mkdtemp()
