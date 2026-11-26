@@ -33,7 +33,8 @@ DISCOUNTS = list(range(0, 45, 5))     # owner 24.11: 0…40 % step 5, or his own
 
 def classify(text):
     """'invoice' / 'kp' / None (the owner decides)."""
-    head = (text or "")[:3000]
+    # TASK-20261126-02: in the Вентрешения .xls «Счет № …» comes after 3000 characters of bank details.
+    head = (text or "")[:15000]
     invoice, kp = bool(INVOICE_WORDS.search(head)), bool(KP_WORDS.search(head))
     if invoice and not kp:
         return "invoice"
