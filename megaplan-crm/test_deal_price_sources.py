@@ -99,5 +99,15 @@ class Proposals(unittest.TestCase):
         self.assertEqual([], dps.propose(ledger, [invoice], history=[], ratios={})['proposals'])
 
 
+    def test_documents_are_remembered_once_for_later_deals(self):
+        import os
+        import tempfile
+        store = os.path.join(tempfile.mkdtemp(), 'docs.json')
+        dps.remember([INVOICE, INVOICE, {**KP, 'rows': []}], store)
+        rows = dps.remembered_rows(store, rate=lambda c: None)
+        self.assertEqual(['Ниппель(Кр) - 125'], [r['name'] for r in rows])
+        self.assertEqual('счёт поставщика', rows[0]['source'])
+
+
 if __name__ == '__main__':
     unittest.main()

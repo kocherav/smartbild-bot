@@ -179,6 +179,36 @@ def propose(ledger, documents, history=None, ratios=None, overwrite_priced=False
     return {"ok": True, "proposals": proposals, "skipped": skipped}
 
 
+STORE = os.path.join(BASE_DIR, "price_documents.json")
+
+
+def remember(documents, store=STORE):
+    """Keep the owner's supplier documents for later deals (26.11: the Вентрешения invoice had the
+    rectangular fittings the area method lacked). Same file + supplier is kept once."""
+    try:
+        with open(store, encoding="utf-8") as f:
+            kept = json.load(f)
+    except (OSError, ValueError):
+        kept = []
+    seen = {(d.get("file"), d.get("supplier")) for d in kept}
+    for d in documents:
+        if d.get("rows") and d.get("kind") in ("kp", "invoice") and (d.get("file"), d.get("supplier")) not in seen:
+            kept.append({k: d.get(k) for k in ("file", "supplier", "brand", "kind", "currency", "discount", "rows")})
+            seen.add((d.get("file"), d.get("supplier")))
+    tmp = store + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(kept, f, ensure_ascii=False)
+    os.replace(tmp, store)
+
+
+def remembered_rows(store=STORE, rate=None):
+    try:
+        with open(store, encoding="utf-8") as f:
+            return [r for d in json.load(f) for r in history_rows(d, rate)]
+    except (OSError, ValueError):
+        return []
+
+
 def _catalog():
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(BASE_DIR), "hogart-scraper"))
@@ -195,7 +225,8 @@ def main():
         if command == "read":
             result = read(spec["path"])
         elif command == "propose":
-            history = price_history.load_history()
+            remember(spec.get("documents") or [])
+            history = price_history.load_history() + remembered_rows()
             result = propose(spec.get("ledger") or [], spec.get("documents") or [], history,
                              price_history.markups(history), bool(spec.get("overwrite_priced")),
                              float(spec.get("fitting_markup") or 3.0), _catalog())

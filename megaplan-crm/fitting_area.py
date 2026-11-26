@@ -178,7 +178,9 @@ def rates(rows, supplier_words=("вентреш",)):
         k, a = kind_of(r["name"]), area(r["name"])
         if not k or not a:
             continue
-        found.setdefault((k, shape(r["name"])), []).append((a, r["cost"] / a, r["name"]))
+        unit = str(r.get("unit") or "").lower().replace(" ", "")
+        rate = r["cost"] if unit.startswith(("м2", "м²", "кв")) else r["cost"] / a   # a price per m² is the rate
+        found.setdefault((k, shape(r["name"])), []).append((a, rate, r["name"]))
     return found
 
 

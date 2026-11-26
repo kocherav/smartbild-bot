@@ -104,17 +104,25 @@ class HistorySources(unittest.TestCase):
         self.assertEqual(310.5, cost)
 
     def test_rectangular_duct_size_never_bought_is_estimated_by_perimeter(self):
-        offers = {'offers': [
-            {'id': 1, 'name': 'Воздуховод(Пр) - 300x400 - 1250 (оц. ст. 0.50/100 - Шина R20х95О)', 'price': 2800},
-            {'id': 2, 'name': 'Воздуховод(Пр) - 300x500 - 1250 (оц. ст. 0.70/100 - Шина R20х95О)', 'price': 3200},
-            {'id': 3, 'name': 'Воздуховод(Пр) - 400x600 - 1250 (оц. ст. 0.80/100)', 'price': 4000},
-        ]}
-        dump(offers, self.offers)
+        dump({'invoices': [{'supplier': 'Вентрешения', 'number': '40', 'lines': [
+            {'name': 'Воздуховод(Пр) - 300x400 - 1250', 'qty': 1, 'unit': 'шт', 'amount_cents': 175000},
+            {'name': 'Воздуховод(Пр) - 300x500 - 1250', 'qty': 1, 'unit': 'шт', 'amount_cents': 200000},
+            {'name': 'Воздуховод 400x600', 'qty': 1, 'unit': 'м2', 'amount_cents': 100000},
+        ]}]}, self.registry)
         rows = ph.load_history(self.offers, self.registry, self.index)
-        sell, cost, mark = ph.price_from_history('Воздуховод оцинкованный 0,5 мм, 400×150 мм, Галвент', rows, {})
-        # per metre per metre of perimeter: 2800/1.25/1.4=1600, 3200/1.25/1.6=1600, 4000/1.25/2.0=1600
-        self.assertEqual(round(1600 * 1.1, 2), sell)
+        sell, cost, mark = ph.price_from_history('Воздуховод оцинкованный 0,5 мм, 400×150 мм, Галвент', rows,
+                                                 {'группа:воздуховод': 1.5})
+        # ₽ per m² of surface: 1750/1.25/1.4 = 1000, 2000/1.25/1.6 = 1000, 1000 per м² → 1000 × 1.1 m²/m
+        self.assertEqual(1100.0, cost)
+        self.assertEqual(1650.0, sell)
         self.assertIn('по периметру сечения из 3', mark)
+
+    def test_past_deal_rows_without_a_unit_do_not_price_rectangular_ducts(self):
+        """TASK-20261126-03: unit-less past-deal prices (often per m²) gave rectangular ducts at 3–4× the invoice."""
+        dump({'offers': [{'id': i, 'name': f'Воздуховод(Пр) - {a}x{b} - 1250', 'price': 9000}
+                         for i, (a, b) in enumerate(((300, 400), (300, 500), (400, 600)), 1)]}, self.offers)
+        rows = ph.load_history(self.offers, self.registry, self.index)
+        self.assertIsNone(ph.rect_duct_estimate('Воздуховод оцинкованный 0,5 мм, 400×150 мм', rows, {'группа:воздуховод': 1.5}))
 
     def test_services_never_price_goods(self):
         self.assertEqual(0.0, ph.similarity('Наружный блок mini-VRV Daikin 4MXM68N', 'ТО внешнего блока VRV системы'))
