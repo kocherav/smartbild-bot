@@ -59,7 +59,8 @@ def _normalise(text):
     for word, digit in (("одно", "1"), ("двух", "2"), ("трех", "3"), ("четырех", "4"), ("пяти", "5")):
         t = re.sub(rf"\b{word}\s*-?\s*(?=щел)", digit + " ", t)   # двухщелевой → 2 щелевой
     t = re.sub(r"(?<=\d)[,](?=\d)", ".", t)                   # 6,35 → 6.35
-    t = re.sub(r"(?<=\d)\s+(?=\d{3}\b)", "", t)               # 1 000 → 1000
+    # 1 000 → 1000, but never «Отвод 45 400 х 150» → 45400 (an angle before a section).
+    t = re.sub(r"(?<=\b\d)\s+(?=\d{3}\b(?!\s*[x×х*]))", "", t)
     t = re.sub(r"(?<=\d)\s*[x×х*]\s*(?=\d)", " x ", t)        # 400×150, 400 х 150
     t = re.sub(r"[øф⌀]\s*(?=\d)", " ", t)                      # Ø125, ф125
     t = re.sub(r"\b[dl]\s*=?\s*(?=\d)", " ", t)                # L=1000, d125
@@ -72,7 +73,12 @@ def numbers(text):
 
     TASK-20261124-05: sheet thickness (0,5 мм) is left out — catalog names rarely carry it;
     «Ø125–Ø125» equals «125» (a tee of one size); digits inside model codes are not sizes."""
-    t = _normalise(_without_models(_without_brackets(text)))
+    raw = _without_brackets(text)
+    if kind(raw) in AREA_PRICED:
+        # Duct work: «L=1250» is a piece length, «р.ш.150» a bend parameter, «исп.5» a version — not sizes
+        # (27.11, счёт Вентрешения). For a diffuser «L=1000» stays a size.
+        raw = re.sub(r"\b[lL]\s*=\s*\d+|р\.?\s*ш\.?\s*\d+|исп\.?\s*\d+", " ", raw)
+    t = _normalise(_without_models(raw))
     found = set()
     for value, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(мм|см|м\b)?", t):
         v = float(value)
@@ -133,6 +139,9 @@ def duct_length(query, name, unit=""):
     rectangular and 3000 mm when round."""
     if kind(query) != "воздуховод" or kind(name) != "воздуховод":
         return None
+    explicit = re.search(r"\bl\s*=\s*(\d{3,5})", str(name).lower())
+    if explicit and set(numbers(name)) == set(numbers(query)):
+        return float(explicit.group(1))
     if str(unit).lower().startswith("шт") and set(numbers(name)) == set(numbers(query)):
         return RECT_PIECE_MM if rectangular(name) else ROUND_PIECE_MM
     extra = set(numbers(name)) - set(numbers(query))
