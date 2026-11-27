@@ -21,6 +21,19 @@ class LooseButSafeMatching(unittest.TestCase):
             with self.subTest(a=a):
                 self.assertGreaterEqual(ph.similarity(a, b), ph.MIN_SIMILARITY)
 
+    def test_ventresheniya_rectangular_fittings_pair_with_the_deal(self):
+        """27.11, TASK-20261126-05: «45 400 х 150» read as 45400; «L=300», «исп.5», «р.ш.150» read as sizes."""
+        for a, b in [('Отвод оцинкованный 45°, 400×150 мм, Галвент', 'Отвод 45 400 х 150 р.ш.150'),
+                     ('Отвод оцинкованный 90°, 400×150 мм, Галвент', 'Отвод 90 400 х 150 р.ш.150 (оц. 0,5)'),
+                     ('Переход оцинкованный 200×100–Ø125 мм, односторонний, Галвент', 'Переход Ф 125 / 200 х 100 L=300 исп.5'),
+                     ('Переход оцинкованный 400×150–300×150 мм, Галвент', 'Переход 400х150/300х150 L=300 исп.5')]:
+            with self.subTest(a=a):
+                self.assertGreaterEqual(ph.similarity(a, b), ph.MIN_SIMILARITY)
+        # The deal says Ø160, the supplier Ø125 — a real difference, never matched.
+        self.assertEqual(0.0, ph.similarity('Переход оцинкованный 300×100–Ø160 мм, односторонний',
+                                            'Переход Ф 125 / 300 х 100 L=300 исп.5'))
+        self.assertEqual(1250.0, ph.duct_length('Воздуховод оцинкованный 0,5 мм, 300×150 мм', 'Воздуховод 300 х 150 L=1250', 'шт'))
+
     def test_other_size_material_shape_or_kind_never_matches(self):
         for a, b in [("Диффузор щелевой 2 щели L=1000 щель 15мм", "Диффузор щелевой 3 щели 1000 мм 15 мм"),
                      ("Ниппель оцинкованный Ø125 мм", "Ниппель 160"),
