@@ -45,6 +45,20 @@ DEFAULT_PROGRAM_ID = "16"
 DEFAULT_STATE_ID = "129"
 
 
+def wait_for_protection_pause(call, *, max_wait=240, sleep=time.sleep):
+    """Retry a CRM call while the shared transport queue is temporarily busy."""
+    waited = 0.0
+    while True:
+        try:
+            return call()
+        except megaplan_transport.ProtectionPause as pause:
+            delay = min(max(float(getattr(pause, "retry_after", 0) or 0), 3.0), 30.0)
+            if getattr(pause, "retryable", True) is False or waited + delay > max_wait:
+                raise
+            sleep(delay)
+            waited += delay
+
+
 def comparable_contractor_name(value):
     """Normalize Cyrillic phonetic spelling and Latin brand spelling for matching.
 
@@ -1240,20 +1254,14 @@ if __name__ == "__main__":
             deal_id = str(spec["deal_id"])
             # 28.11: «Мегаплан: очередь запросов занята» (another bot job) killed the whole apply with an empty
             # answer — the owner saw «IndexError». Every call now waits for the queue (up to 4 min in total).
-            import megaplan_transport
-            waited = [0.0]
+            api_call = api._call
 
             def call(method, path, **kwargs):
-                while True:
-                    try:
-                        return api._call(method, path, **kwargs)
-                    except megaplan_transport.ProtectionPause as pause:
-                        delay = min(max(float(getattr(pause, "retry_after", 0) or 0), 3.0), 30.0)
-                        if getattr(pause, "retryable", True) is False or waited[0] + delay > 240:
-                            raise
-                        time.sleep(delay)
-                        waited[0] += delay
-            api_call, api._call = api._call, call
+                # Keep the original bound method: calling api._call here would recurse
+                # after the assignment below instead of retrying the transport request.
+                return wait_for_protection_pause(lambda: api_call(method, path, **kwargs))
+
+            api._call = call
             before = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
             applied, kept = [], []
             failure = None
