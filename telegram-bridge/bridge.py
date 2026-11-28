@@ -4762,8 +4762,13 @@ def deal_price_io(token):
         try:
             result = subprocess.run([REPORT_VENV_PY, os.path.join(MEGAPLAN_DIR, "megaplan_api.py"), "apply-price-proposals"],
                                     cwd=MEGAPLAN_DIR, input=json.dumps(payload, ensure_ascii=False),
-                                    capture_output=True, text=True, timeout=create_deal_timeout(payload.get("rows")))
-            return json.loads((result.stdout or "").strip().splitlines()[-1])
+                                    capture_output=True, text=True, timeout=create_deal_timeout(payload.get("rows")) + 300)
+            lines = (result.stdout or "").strip().splitlines()
+            if not lines:
+                # 28.11: an empty answer surfaced to the owner as «IndexError: list index out of range».
+                tail = (result.stderr or "").strip().splitlines()
+                return {"ok": False, "error": tail[-1] if tail else f"процесс записи завершился с кодом {result.returncode}"}
+            return json.loads(lines[-1])
         except Exception as exc:  # noqa: BLE001 — shown to the owner; the deal is re-read before any retry
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

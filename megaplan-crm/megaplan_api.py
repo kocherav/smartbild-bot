@@ -45,6 +45,20 @@ DEFAULT_PROGRAM_ID = "16"
 DEFAULT_STATE_ID = "129"
 
 
+def wait_for_protection_pause(call, *, max_wait=240, sleep=time.sleep):
+    """Retry a CRM call while the shared transport queue is temporarily busy."""
+    waited = 0.0
+    while True:
+        try:
+            return call()
+        except megaplan_transport.ProtectionPause as pause:
+            delay = min(max(float(getattr(pause, "retry_after", 0) or 0), 3.0), 30.0)
+            if getattr(pause, "retryable", True) is False or waited + delay > max_wait:
+                raise
+            sleep(delay)
+            waited += delay
+
+
 def comparable_contractor_name(value):
     """Normalize Cyrillic phonetic spelling and Latin brand spelling for matching.
 
@@ -1238,27 +1252,48 @@ if __name__ == "__main__":
             # a final read-back proves exactly these rows changed.
             spec = json.load(sys.stdin)
             deal_id = str(spec["deal_id"])
+            # 28.11: «Мегаплан: очередь запросов занята» (another bot job) killed the whole apply with an empty
+            # answer — the owner saw «IndexError». Every call now waits for the queue (up to 4 min in total).
+            api_call = api._call
+
+            def call(method, path, **kwargs):
+                # Keep the original bound method: calling api._call here would recurse
+                # after the assignment below instead of retrying the transport request.
+                return wait_for_protection_pause(lambda: api_call(method, path, **kwargs))
+
+            api._call = call
             before = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
             applied, kept = [], []
+            failure = None
             for p in spec.get("rows") or []:
-                current = before.get(str(p.get("offer_row_id")))
-                if not current:
-                    kept.append({"name": p.get("name"), "reason": "позиции больше нет в сделке"})
-                    continue
-                changed = {}
-                if p.get("sell_price") is not None:
-                    if (current.get("sell_price") or 0) and not spec.get("overwrite_priced"):
-                        kept.append({"name": p.get("name"), "reason": "цена уже стоит"})
-                    else:
-                        api.update_offer_row_price(p["offer_row_id"], float(p["sell_price"]))
-                        changed["sell_price"] = float(p["sell_price"])
-                if p.get("cost_material") is not None and (p.get("replace_cost") or not (current.get("cost_material") or 0)):
-                    # 26.11: a supplier invoice's cost replaces an estimate — only when the owner applied it.
-                    api.update_offer_cost(p["offer_id"], cost_material=float(p["cost_material"]))
-                    changed["cost_material"] = float(p["cost_material"])
-                if changed:
-                    applied.append({"offer_row_id": str(p["offer_row_id"]), "name": p.get("name"), **changed,
-                                    "mark": p.get("mark", "")})
+                try:
+                    current = before.get(str(p.get("offer_row_id")))
+                    if not current:
+                        kept.append({"name": p.get("name"), "reason": "позиции больше нет в сделке"})
+                        continue
+                    changed = {}
+                    if p.get("sell_price") is not None:
+                        if (current.get("sell_price") or 0) and not spec.get("overwrite_priced"):
+                            kept.append({"name": p.get("name"), "reason": "цена уже стоит"})
+                        else:
+                            api.update_offer_row_price(p["offer_row_id"], float(p["sell_price"]))
+                            changed["sell_price"] = float(p["sell_price"])
+                    if p.get("cost_material") is not None and (p.get("replace_cost") or not (current.get("cost_material") or 0)):
+                        # 26.11: a supplier invoice's cost replaces an estimate — only when the owner applied it.
+                        api.update_offer_cost(p["offer_id"], cost_material=float(p["cost_material"]))
+                        changed["cost_material"] = float(p["cost_material"])
+                    if changed:
+                        applied.append({"offer_row_id": str(p["offer_row_id"]), "name": p.get("name"), **changed,
+                                        "mark": p.get("mark", "")})
+                except Exception as exc:  # noqa: BLE001 — report what was written before the failure
+                    failure = f"{type(exc).__name__}: {exc}"
+                    break
+            if failure:
+                print(json.dumps({"ok": False, "partial": True, "applied": applied, "kept": kept,
+                                  "error": f"записано {len(applied)} из {len(spec.get('rows') or [])}, дальше: {failure}. "
+                                           "Нажмите «✅ Применить» ещё раз — записанное не повторится."},
+                                 ensure_ascii=False))
+                sys.exit(1)
             after = {str(r["offer_row_id"]): r for r in api.ledger_from_deal(api._call("GET", f"/deal/{deal_id}")["data"])}
             # TASK-20261125-03: the deal's embedded Offer lags behind POST /offer for a while. The cost is
             # confirmed on the Offer itself (a few reads with a pause), never on the stale embedded copy.

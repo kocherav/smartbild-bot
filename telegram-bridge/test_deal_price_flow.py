@@ -107,6 +107,15 @@ class Flow(unittest.TestCase):
         self.assertTrue(self.go(io, 'ты неверно определил цены, сделай правильно'))
         self.assertIn('ответьте кнопкой', io.sent[-1][0])
 
+    def test_failed_apply_keeps_the_proposals_for_another_press(self):
+        """28.11: «IndexError» after «Применить», and the table was gone."""
+        proposal = {'offer_row_id': '1', 'offer_id': '2', 'name': 'Отвод', 'cost_material': 220, 'replace_cost': True}
+        io = FakeIO({'pending': 'deal_price_review', 'price_proposals': [proposal], 'price_deal_id': '907'})
+        io.apply_rows = lambda payload: {'ok': False, 'error': 'записано 3 из 15, дальше: ProtectionPause: очередь занята.'}
+        self.go(io, flow.APPLY)
+        self.assertEqual(('deal_price_review', [proposal]), (io.st['pending'], io.st['price_proposals']))
+        self.assertIn('нажмите «✅ Применить» ещё раз', io.sent[-1][0])
+
     def test_cancel_writes_nothing(self):
         io = FakeIO({'pending': 'deal_price_review', 'price_proposals': [{'name': 'x'}]})
         self.go(io, flow.CANCEL)
