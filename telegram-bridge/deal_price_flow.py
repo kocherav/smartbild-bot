@@ -269,11 +269,13 @@ def apply(io, chat_id, state, python):
     proposals = state.get("price_proposals") or []
     deal_id = state.get("price_deal_id")
     result = io.apply_rows({"deal_id": deal_id, "rows": proposals})
-    io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
     if not result.get("ok"):
-        io.send(chat_id, f"Запись не завершена: {result.get('error')}. Проверьте сделку №{deal_id} перед повтором.",
-                io.deal_keyboard)
+        # 28.11: the proposals stay — «✅ Применить» again finishes the rest; written rows are not repeated.
+        io.update(chat_id, pending="deal_price_review", price_proposals=proposals)
+        io.send(chat_id, f"Запись не завершена: {result.get('error')}\nПредложения сохранены — нажмите «{APPLY}» ещё раз, "
+                         "уже записанное повторно не запишется.", REVIEW_KEYBOARD)
         return
+    io.update(chat_id, pending=None, price_docs=None, price_proposals=None)
     applied, kept = result.get("applied") or [], result.get("kept") or []
     io.send(chat_id, f"✅ Сделка №{deal_id}: записано позиций {len(applied)}; не тронуто {len(kept)} "
                      f"(цена уже стояла или позицию изменили). Источники — в комментарии сделки.", io.deal_keyboard)
