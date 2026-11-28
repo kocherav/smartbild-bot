@@ -9,8 +9,9 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 MONEY = r'(?:\d{1,3}(?:[. \u00a0]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)'
-AMOUNT = re.compile(r'(?:[-–—=:]\s*|по\s+таблице\s+|^итого\s*:?[ ]*)('+MONEY+r')(?![\d.,])(?:\s*(?:₽|руб\.?|р\.?))?(?=\s*(?:$|\())',re.I)
-START = re.compile(r'^(?:сделка\s*№?\s*\d|доп\s*работ|монтаж|демонтаж|перекладка|материал|итого|зп\b|страховка|минус|аванс|премия|по таблице)',re.I)
+TOTAL = r'(?:итого|общий\s+итог|итог\b|всего\b)'
+AMOUNT = re.compile(r'(?:[-–—=:]\s*|по\s+таблице\s+|^'+TOTAL+r'\s*:?[ ]*)('+MONEY+r')(?![\d.,])(?:\s*(?:₽|руб\.?|р\.?))?(?=\s*(?:$|\())',re.I)
+START = re.compile(r'^(?:сделка\s*№?\s*\d|доп\s*работ|монтаж|демонтаж|перекладка|материал|итого|общий\s+итог|всего\b|зп\b|страховка|минус|аванс|премия|по таблице)',re.I)
 WORK_START = re.compile(r'^(?:монтаж|демонтаж|переклад|передел|такелаж|работ|доп\b|ремонт|замен|запуск|диагност|достав|штроб|отверст|кабел|труб|воздуховод|фасон|теплоизоляц)',re.I)
 DEAL = re.compile(r'^сделка\s*№?\s*(\d+)\b',re.I)
 
@@ -57,7 +58,8 @@ def parse_rows(text):
         explicit=DEAL.match(source)
         if explicit:current='Сделка №'+explicit[1]
         obj=current
-        if lower.startswith('итого'):
+        # 28.11: «Общий итог:331.300» was read as a work of 331 300 — the report total came out ×2.
+        if re.match(r'^'+TOTAL,lower):
             kind='Итог из PDF';sign=0;obj='Контроль отчёта';totals.append(len(rows))
         elif re.match(r'^(?:зп\b|зарплата|страховка|минус|удержан|аванс|получено)',lower):
             kind='Аванс' if re.match(r'^(?:аванс|получено)',lower) else 'Удержание'
